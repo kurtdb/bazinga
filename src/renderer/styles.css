@@ -14,6 +14,7 @@
   --accent-bg: #29406b;      /* selected rows, primary buttons */
   --accent-line: #35507f;    /* agent buttons */
   --danger-line: #6b3a3a;    /* revert buttons */
+  --err-bg: #3a2422; --warn-bg: #392f1c; --ok-bg: #1d3328; --info-bg: #22304a;   /* filled severity badges (flags, review findings) */
   --g0: #4f8cff; --g1: #54c28a; --g2: #e5b54a; --g3: #c678dd; --g4: #f2615c; --g5: #56b6c2;   /* commit graph lanes */
   --overlay: rgba(0, 0, 0, .45);
   --shadow: rgba(0, 0, 0, .5);
@@ -39,6 +40,7 @@
   --accent-bg: #d7e6fb;
   --accent-line: #9dbdee;
   --danger-line: #e3a9a9;
+  --err-bg: #fbe3e2; --warn-bg: #f8ecd2; --ok-bg: #dff1e3; --info-bg: #dce8fb;
   --g0: #0b5cc7; --g1: #1a7433; --g2: #8a5a00; --g3: #8250df; --g4: #c4262e; --g5: #1b7c83;
   --overlay: rgba(31, 35, 40, .35);
   --shadow: rgba(31, 35, 40, .25);
@@ -122,7 +124,7 @@ label.check { display: inline-flex; align-items: center; gap: 4px; color: var(--
 
 .p-head { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 10px; background: var(--bg-2); border-bottom: 1px solid var(--line); }
 .chip { padding: 1px 8px; border-radius: 10px; border: 1px solid var(--line); font-size: 12px; }
-.chip.passed { color: var(--ok); } .chip.findings, .chip.failed { color: var(--err); } .chip.skipped { color: var(--muted); } .chip.running { color: var(--accent); }
+.chip.passed { color: var(--ok); border-color: var(--ok); background: var(--ok-bg); } .chip.findings, .chip.failed { color: var(--err); border-color: var(--err); background: var(--err-bg); } .chip.skipped { color: var(--muted); } .chip.running { color: var(--accent); border-color: var(--accent); background: var(--accent-bg); }
 .p-file { padding: 6px 10px 2px; color: var(--muted); font-weight: 600; }
 .finding { display: flex; gap: 8px; padding: 2px 10px 2px 18px; cursor: pointer; align-items: baseline; }
 .finding:hover { background: var(--bg-3); }
@@ -203,8 +205,10 @@ button.toggle.on { background: var(--accent-bg); border-color: var(--accent); }
 .row.reviewed .name { text-decoration: line-through; text-decoration-color: var(--muted); opacity: .7; }
 .row input.rev { margin: 0 4px 0 0; flex: none; }
 .flag { font-size: 10px; padding: 0 5px; border-radius: 8px; border: 1px solid var(--line); margin-left: 4px; flex: none; }
-.flag.warn { color: var(--warn); border-color: var(--warn); }
-.flag.info { color: var(--info); border-color: var(--info); }
+.flag.warn { color: var(--warn); border-color: var(--warn); background: var(--warn-bg); }
+.flag.info { color: var(--info); border-color: var(--info); background: var(--info-bg); }
+.flag.err { color: var(--err); border-color: var(--err); background: var(--err-bg); }
+.flag.ok { color: var(--ok); border-color: var(--ok); background: var(--ok-bg); }
 #side-changes .row .name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
 /* v4: agent runs */
@@ -217,8 +221,8 @@ button.toggle.on { background: var(--accent-bg); border-color: var(--accent); }
 .run-task { font-size: 12px; color: var(--muted); line-height: 1.35; }
 .run-acts { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 2px; }
 .chip { font-size: 10px; padding: 0 6px; border-radius: 8px; border: 1px solid var(--line); color: var(--muted); flex: none; }
-.chip.live { color: var(--ok); border-color: var(--ok); }
-.chip.on { color: var(--accent); border-color: var(--accent); }
+.chip.live { color: var(--ok); border-color: var(--ok); background: var(--ok-bg); }
+.chip.on { color: var(--accent); border-color: var(--accent); background: var(--accent-bg); }
 .hint.bad { color: var(--warn); }
 .dialog select { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; font: inherit; }
 .dialog textarea { width: 100%; box-sizing: border-box; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; font: inherit; resize: vertical; outline: none; }
@@ -270,7 +274,7 @@ button.danger:hover { border-color: var(--err); color: var(--err); }
 /* ---- fix loop, merge guard, pull request ---- */
 .i.spin svg { animation: bazinga-spin 1.2s linear infinite; }
 @keyframes bazinga-spin { to { transform: rotate(360deg); } }
-.chip.warnchip { color: var(--warn); border-color: var(--warn); }
+.chip.warnchip { color: var(--warn); border-color: var(--warn); background: var(--warn-bg); }
 .guard { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 10px; }
 .guard-head { font-weight: 600; }
 .guard-row { display: flex; gap: 8px; align-items: flex-start; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg-2); }
