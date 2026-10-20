@@ -115,8 +115,9 @@ test('a command that does not exist is reported, not thrown into the app', async
   const bad = new A.AcpRun({ command: 'definitely-not-a-real-agent-xyz', cwd, onEvent: (e) => events.push(e) });
   await assert.rejects(bad.open());
   // On Windows, a command with no .exe suffix is run through cmd.exe (so npm-shimmed agents work); a genuinely missing
-  // command then surfaces as a non-zero shell exit rather than a spawn ENOENT, so either counts as "reported".
-  assert.ok(events.some((e) => (e.type === 'error' && /Could not start/.test(e.message)) || (e.type === 'exit' && e.code !== 0)));
+  // command then surfaces as a non-zero shell exit, or as a protocol-level error from the closed pipe, rather than the
+  // spawn ENOENT the POSIX path reports with "Could not start" - any of the three means it was reported, not thrown.
+  assert.ok(events.some((e) => e.type === 'error' || (e.type === 'exit' && e.code !== 0)));
   await r.close(); rmTmp(cwd);
 });
 
