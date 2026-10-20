@@ -35,6 +35,16 @@ function parseStream(output) {
 const plainOf = (parsed, raw) => (parsed.structured || parsed.notes.length ? [parsed.final, ...parsed.notes, ...parsed.calls.map((c) => c.result && c.result.text)].filter(Boolean).join('\n') : String(raw || ''));
 function textOf(c) { return typeof c === 'string' ? c : Array.isArray(c) ? c.map((x) => (x && x.text) || '').join('') : ''; }
 const short = (t, n = 160) => { const x = String(t || '').replace(/\s+/g, ' ').trim(); return x.length > n ? `${x.slice(0, n)}…` : x; };
+// A long temp-dir prefix (macOS's /private/var/folders/.../T/ is much longer than Linux's /tmp) can otherwise land the
+// cut mid-filename (".../output.t…" instead of ".../output.txt"); keep the basename intact and trim the middle instead.
+const shortPath = (t, n = 90) => {
+  const x = String(t || '').replace(/\s+/g, ' ').trim();
+  if (x.length <= n) return x;
+  const slash = Math.max(x.lastIndexOf('/'), x.lastIndexOf('\\'));
+  const base = slash > -1 ? x.slice(slash) : '';
+  if (base && base.length <= n - 4) return `${x.slice(0, n - base.length - 1)}…${base}`;
+  return `${x.slice(0, n)}…`;
+};
 
 /** When the time ran out: what the model was doing (from the partial messages). */
 const span = (ms) => (ms >= 60000 ? `${Math.round(ms / 60000)} minutes` : `${Math.max(1, Math.round(ms / 1000))} seconds`);
@@ -71,7 +81,7 @@ function traceLines(parsed) {
   return parsed.calls.map((c) => {
     const target = c.input.file_path || c.input.path || c.input.command || c.input.pattern || '';
     const res = c.result ? (c.result.isError ? `FAILED: ${short(c.result.text)}` : 'ok') : 'no result';
-    return `${c.name}(${short(target, 90)}) → ${res}`;
+    return `${c.name}(${shortPath(target, 90)}) → ${res}`;
   });
 }
 

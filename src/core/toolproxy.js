@@ -17,6 +17,16 @@ const adapter = require('./openaiadapter');
 const MAX_BODY = 256 * 1024 * 1024;
 const nk = (k) => String(k).toLowerCase().replace(/[_\-\s]/g, '');
 const short = (t, n = 120) => { const x = String(t == null ? '' : t).replace(/\s+/g, ' ').trim(); return x.length > n ? `${x.slice(0, n)}…` : x; };
+// A long temp-dir prefix (macOS's /private/var/folders/.../T/ is much longer than Linux's /tmp) can otherwise land the
+// cut mid-filename (".../output.t…" instead of ".../output.txt"); keep the basename intact and trim the middle instead.
+const shortPath = (t, n = 90) => {
+  const x = String(t == null ? '' : t).replace(/\s+/g, ' ').trim();
+  if (x.length <= n) return x;
+  const slash = Math.max(x.lastIndexOf('/'), x.lastIndexOf('\\'));
+  const base = slash > -1 ? x.slice(slash) : '';
+  if (base && base.length <= n - 4) return `${x.slice(0, n - base.length - 1)}…${base}`;
+  return `${x.slice(0, n)}…`;
+};
 const num = (n) => Number(n || 0).toLocaleString('en');
 
 // ---------------------------------------------------------------------------------------------------- tools and arguments
@@ -237,7 +247,7 @@ function classify(prefix) {
 const callLabel = (name, input) => {
   const i = input || {};
   const target = i.file_path || i.command || i.pattern || i.path || '';
-  return `${name}(${short(target, 90)})`;
+  return `${name}(${shortPath(target, 90)})`;
 };
 const callId = () => `toolu_bz${crypto.randomBytes(8).toString('hex')}`;
 
