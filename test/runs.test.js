@@ -15,10 +15,14 @@ function repo(files = { 'a.txt': 'one\n' }) {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'bazinga-r-'));
   const root = path.join(parent, 'proj');
   fs.mkdirSync(root);
-  sh(root, 'init', '-q', '-b', 'main'); sh(root, 'config', 'user.email', 't@t'); sh(root, 'config', 'user.name', 't');
+  // Windows' git defaults to core.autocrlf=true, which rewrites LF to CRLF on checkout/restore and breaks exact-content
+  // assertions; pin it off so this throw-away repo behaves the same on every platform.
+  sh(root, 'init', '-q', '-b', 'main'); sh(root, 'config', 'user.email', 't@t'); sh(root, 'config', 'user.name', 't'); sh(root, 'config', 'core.autocrlf', 'false');
   for (const [k, v] of Object.entries(files)) write(root, k, v);
   sh(root, 'add', '.'); sh(root, 'commit', '-q', '-m', 'init');
-  return fs.realpathSync(root);
+  // the plain JS realpathSync does not always resolve a Windows 8.3 short name (RUNNER~1) to its long form, but git's
+  // own path resolution does; use the native implementation so this matches what createRun/listRuns report.
+  return fs.realpathSync.native(root);
 }
 
 test('createRun makes a worktree on agent/<slug> outside the repo, copies .ide, lists it', async () => {
