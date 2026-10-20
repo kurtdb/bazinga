@@ -90,7 +90,23 @@ class PtyManager {
       this.send('pty:exit', id, exitCode);
     });
     this.sessions.set(id, session);
-    if (initialInput) setTimeout(() => { try { if (session.idle) session.idle.input(); if (session.prompt) session.prompt.input(); proc.write(initialInput); } catch { /* exited */ } }, 250);
+    if (initialInput) {
+      // A login shell's startup files (oh-my-zsh, nvm, conda, powerlevel10k...) can still be sourcing well past a fixed
+      // delay; typing before the shell starts reading the tty can be swallowed or left sitting unsubmitted at the prompt.
+      // Wait for the shell's first output (its prompt) and settle briefly, with a fallback for a shell that prints
+      // nothing before reading stdin.
+      let sent = false;
+      let dataDisp = null;
+      const fire = () => {
+        if (sent) return;
+        sent = true;
+        if (dataDisp) { dataDisp.dispose(); dataDisp = null; }
+        clearTimeout(fallback);
+        try { if (session.idle) session.idle.input(); if (session.prompt) session.prompt.input(); proc.write(initialInput); } catch { /* exited */ }
+      };
+      dataDisp = proc.onData(() => { if (dataDisp) { dataDisp.dispose(); dataDisp = null; } setTimeout(fire, 100); });
+      const fallback = setTimeout(fire, 4000);
+    }
     return { id, shell };
   }
 
