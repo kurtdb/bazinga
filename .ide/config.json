@@ -1,0 +1,10 @@
+{
+  "folders": {
+    "source": [
+      "src"
+    ],
+    "tests": [
+      "test"
+    ]
+  }
+}

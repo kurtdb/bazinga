@@ -94,3 +94,12 @@ pass.
   another test framework.
 - Add a test alongside any new `src/core/*.js` module (`test/<name>.test.js`),
   mirroring the existing one-module-one-test-file pattern.
+
+<!-- bazinga:folders:start (generated, do not edit between the markers) -->
+## Project layout
+
+Project layout (folders the user marked in Bazinga, relative to the project root):
+- Source code: src
+- Tests: test
+Production code belongs in the source folders and tests belong in the test folders. Mirror the path of the code under test (same package or folder structure), and never put a test in a source folder or production code in a test folder.
+<!-- bazinga:folders:end -->
