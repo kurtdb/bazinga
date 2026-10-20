@@ -1,0 +1,23 @@
+# First copy the guard into the repo once:  node scripts/export-guard.js <repo>/tools/bazinga
+# GitHub Actions: the same guard on pull requests. Make the job a required status check on the target branch.
+name: bazinga-guard
+on:
+  pull_request:
+    branches: [main, develop]
+permissions:
+  contents: read
+  pull-requests: write   # only for --comment
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      # the pull request title and branch names go through environment variables, never straight into the script text (script injection)
+      - run: node tools/bazinga/bin/ide-guard.js --base "origin/$BASE_REF" --task "$PR_TITLE" --format github --comment
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

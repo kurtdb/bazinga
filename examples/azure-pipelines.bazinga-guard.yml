@@ -1,0 +1,24 @@
+# Azure DevOps: block pull requests that break the Bazinga guard policy (.ide/policy.json on the target branch).
+# First copy the guard into the repo once:  node scripts/export-guard.js <repo>/tools/bazinga   (about 15 files, no npm install needed)
+# Add this as a build validation on your target branch (Branch policies -> Build validation) so it is required.
+trigger: none
+pr:
+  branches:
+    include: [main, develop]
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    fetchDepth: 0            # the guard compares HEAD with the target branch, so it needs history
+  - task: NodeTool@0
+    inputs: { versionSpec: '20.x' }
+  - script: |
+      git fetch origin "${SYSTEM_PULLREQUEST_TARGETBRANCH#refs/heads/}" --quiet || true
+      # the target branch and the source branch name come from the pipeline's own variables (see bin/ide-guard.js)
+      # --comment also puts the result on the pull request (one comment, updated on every run)
+      node tools/bazinga/bin/ide-guard.js --task "$(System.PullRequest.Title)" --format azure --comment
+    displayName: Bazinga guard
+    env:
+      SYSTEM_ACCESSTOKEN: $(System.AccessToken)   # needed for --comment; give the build service "Contribute to pull requests"

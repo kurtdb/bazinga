@@ -1,0 +1,29 @@
+# Changelog
+
+## Unreleased
+- **Start-up safety net:** if the window cannot start (a script error, a crash, or no sign of life within 25 seconds) you get one clear message with “Reload”, “Copy details” and “Open log folder” instead of an empty window.
+- **Plain error messages:** low-level failures (program not found, permission denied, disk full, port in use, nothing listening, not a git repository, git lock, login rejected, broken JSON file …) are explained in one sentence with the raw text in brackets.
+- **Open in VS Code / IntelliJ** (right-click in the editor, or the command palette): opens the file at the cursor. `externalEditor` (`auto`, `vscode`, `idea`); `auto` prefers IntelliJ for Maven/Gradle projects.
+- **Debug a test:** a *Debug* lens next to *Run test* for pytest (stops in pdb in the terminal), JUnit (waits for IntelliJ on port 5005) and node:test (port 9229). Vitest and Jest have none: nothing reliable to offer.
+- **While you were away:** after 15+ minutes away (and at start-up) a summary of your agent runs: need you, ready to review, merged, thrown away. Also in the command palette.
+- **Undo a merged run:** adds a revert commit (history is never rewritten); refuses on uncommitted changes and leaves everything as it was if later changes clash.
+- **Unattended workflow steps run in the Docker container** when it is set up (`containerWhenUnattended`: `auto` or `off`); otherwise a one-time tip.
+- **What’s new:** the changelog opens once after an update (not on a first start), and from the command palette.
+- Tests: a click-through step in the real-app smoke run presses the Copilot, Run test, insights, coverage, What’s new and editor buttons.
+- **Usage & insights** (command palette, nothing is shown that could not be read): Claude plan limits (5 h / 7 d percent and reset time, opt-in: a status-line command in the Claude Code sessions Bazinga starts, which replaces your own status line there), tokens and cost today / 7 / 30 days from the scorecard, working time per kind of task, local model health (warns when an Ollama model does not fit on the GPU), and on request: npm audit and Dependabot alerts, SonarCloud quality gate for the current branch, a running Spring app's Actuator health and metrics. *Coverage: show marks in the editor* paints covered / missed lines from a lcov, JaCoCo or Cobertura file left by a test run (refreshed after every Run test).
+- Optional GitHub Copilot usage shortcut (off by default, so people without a licence never see it): Setup & health → *GitHub Copilot usage* → “I use Copilot”. Then the same row, a command-palette entry and a button open the GitHub page with your monthly use and reset date. Bazinga does not read the numbers itself (that needs a billing-access token, which I could not verify), so nothing is sent anywhere.
+- Run tests from the editor and see the verdict: every test file gets a “Run all tests in this file” lens and every test a “Run test” lens. They run inside the app and show ✓ Passed / ✗ Failed next to the test (click for the output). “No test ran” (a name filter that matched nothing) and “runner missing” are reported as such, never as a pass. “Open in terminal” is still one click away. Works for JUnit (Maven/Gradle), node:test, Vitest, Jest, pytest.
+- Fixed: `npm run dist:mac` failed at the very end (`Cannot read properties of null (reading 'channel')`) when the folder had no `.git` (a downloaded zip). Builds now go through `scripts/dist.js`, which only configures the GitHub update feed when a repository can be found. README: Rosetta is needed for the Windows installer on Apple Silicon.
+- Fixed: `npm run dist:win` (and every other build) ran out of memory (“heap out of memory” while “searching for node modules”). The `tree-sitter-wasms` package lists itself as its own dependency and electron-builder’s module scan looped on that. The nine grammars Bazinga uses are now vendored in `vendor/tree-sitter-wasms/` (35 MB less in the app too). Tests: no package may depend on itself; every supported language has its grammar. Verified by packaging the Linux build here and running the smoke test against it.
+- Security: Monaco shipped its own copy of DOMPurify with two known XSS issues; it now uses the patched top-level copy (`overrides` in package.json, with a test). `npm audit --omit=dev` is clean.
+- Setup & health screen (replaces the environment check): plain-language status and one fix button per capability, a status-bar marker when something you use is broken, the Jev key stored encrypted instead of in an environment variable, one-click git hook install, first-run walkthrough, “?” help on the main settings, plainer notices for Claude Code updates.
+- `bazinga` command line: `check`, `guard` (with `--comment` for Azure DevOps / GitHub pull requests), `hook install|uninstall` (git pre-push / pre-merge-commit), `proxy` (the local-model helper on its own), `version`.
+- Scorecard: cost per merged run (local models free, unknown cloud cost shown as "?").
+- Containers: one-click "Check Docker / build the image" in Settings, per-run "Run in a Docker container" checkbox; the image files now ship with the app.
+- Claude Code version watch: version recorded, "Claude Code compatibility" command, notices for newer versions and unknown hook fields.
+- Optional Jev (TypeSafe AI) integration: the kind of a task for the scorecard comes from the decision model instead of keyword rules (off by default, falls back to the rules).
+- `bazinga proxy --capture <dir>`; cost aggregation moved into a tested module.
+- Fixed: the GitHub Actions example put the pull request title straight into a shell command (script injection); it now uses environment variables.
+
+## Earlier
+- ACP agents, OpenAI-style model servers, scorecard and hand-over to a stronger agent, capture of real traffic, MCP server, OpenTelemetry receiver, ajv config check, ripgrep, mermaid, tree-sitter, electron-updater.

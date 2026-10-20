@@ -1,0 +1,104 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    # Linux is the reference. Windows/macOS failures are reported but do not stop the installers from being built.
+    continue-on-error: ${{ matrix.os != 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install system packages (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+          sudo apt-get install -y libasound2t64 || sudo apt-get install -y libasound2 || true
+      - run: npm ci
+      - run: npm test
+      - name: Smoke test (starts the real app against a throw-away repo)
+        run: npm run smoke
+        continue-on-error: true
+
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: bazinga-windows
+          - os: macos-latest
+            artifact: bazinga-macos
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Build Windows installer + portable exe
+        if: runner.os == 'Windows'
+        run: npx electron-builder --win --x64 --publish never
+
+      - name: Build macOS dmg + zip (arm64 and x64)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          # Optional: add these repository secrets for a properly signed build (see README). Without them the app is ad-hoc signed.
+          CSC_LINK: ${{ secrets.MAC_CERT_P12 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+        run: |
+          chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper
+          EXTRA=""
+          if [ -z "$CSC_LINK" ]; then EXTRA="-c.mac.identity=- -c.mac.hardenedRuntime=false"; fi
+          npx electron-builder --mac --publish never $EXTRA
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            dist/*.exe
+            dist/*.dmg
+            dist/*.zip
+            dist/latest*.yml
+            dist/*.blockmap
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true

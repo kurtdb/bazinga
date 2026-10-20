@@ -1,0 +1,5 @@
+#!/bin/sh
+# Runs the agent command Bazinga passed in BAZINGA_AGENT_CMD (it may refer to "$BAZINGA_TASK"), then leaves you in a shell.
+git config --global --add safe.directory /work 2>/dev/null
+if [ -n "$BAZINGA_AGENT_CMD" ]; then eval "$BAZINGA_AGENT_CMD"; fi
+exec "${SHELL:-/bin/bash}"

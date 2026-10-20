@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Bazinga</title>
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; worker-src 'self' blob: data:; connect-src 'self'">
+  <link rel="stylesheet" href="../../node_modules/@fontsource/roboto/latin-400.css">
+  <link rel="stylesheet" href="../../node_modules/@fontsource/roboto/latin-500.css">
+  <link rel="stylesheet" href="../../node_modules/@fontsource/roboto/latin-700.css">
+  <link rel="stylesheet" href="../../node_modules/@fontsource/roboto-mono/latin-400.css">
+  <link rel="stylesheet" href="../../node_modules/@fontsource/roboto-mono/latin-700.css">
+  <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css">
+  <link rel="stylesheet" data-name="vs/editor/editor.main" href="../../node_modules/monaco-editor/min/vs/editor/editor.main.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <header id="topbar">
+      <button id="btn-open" title="Open a project folder"><span data-icon="folder-open"></span><span id="project-name">Open folder&hellip;</span></button>
+      <span id="branch" class="muted"></span>
+      <span class="spacer"></span>
+      <span id="agents"></span>
+      <button id="btn-term" data-icon="square-terminal" title="New terminal (Ctrl+`)">Terminal</button>
+      <span class="sep"></span>
+      <button id="btn-fast" data-icon="play" title="Run the fast quality gates on changed files">Fast checks</button>
+      <button id="btn-all" data-icon="fast-forward" title="Run all quality gates (compile, tests, deep analysis) on changed files">All checks</button>
+      <button id="btn-review" data-icon="sparkles" title="Send the diff and the gate findings to your review command (default: claude -p) for a second opinion">AI review</button>
+      <label class="check" title="Run fast checks automatically when files change on disk"><input type="checkbox" id="auto"> Auto</label>
+      <label class="check" id="fixloop-label" data-icon="repeat" title="Fix loop: when an agent goes quiet, run the gates and send the findings back to it (up to the configured number of rounds)"><input type="checkbox" id="fixloop"> Fix loop</label>
+      <button id="btn-theme" class="icon" title="Switch between light and dark mode"></button>
+      <button id="btn-settings" class="icon" data-icon="settings" title="Settings"></button>
+    </header>
+
+    <div id="main">
+      <aside id="sidebar">
+        <nav class="tabs" id="side-tabs">
+          <button data-tab="files" data-icon="files" class="active" title="Files">Files</button>
+          <button data-tab="search" data-icon="search" title="Search in project (Ctrl+Shift+F)">Search</button>
+          <button data-tab="agents" data-icon="bot" title="Agent runs: parallel agents in their own git worktrees">Agents <span id="agents-count" class="badge"></span></button>
+          <button data-tab="changes" data-icon="git-compare" title="Changes: what the agent changed, with review flags">Changes <span id="changes-count" class="badge"></span></button>
+          <button data-tab="history" data-icon="history" title="History: commit graph, stashes, blame">History</button>
+          <button data-tab="scripts" data-icon="scroll-text" title="Scripts">Scripts</button>
+          <button id="btn-refresh" class="icon" data-icon="refresh-cw" title="Refresh"></button>
+        </nav>
+        <div id="side-files" class="side-pane active"></div>
+        <div id="side-search" class="side-pane">
+          <div class="searchbox">
+            <input id="q" type="text" placeholder="Search in project (Ctrl+Shift+F)" spellcheck="false">
+            <button id="q-case" class="toggle" title="Match case">Aa</button>
+            <button id="q-re" class="toggle" title="Regular expression">.*</button>
+          </div>
+          <div id="search-meta" class="muted"></div>
+          <div id="search-results"></div>
+        </div>
+        <div id="side-agents" class="side-pane"></div>
+        <div id="side-changes" class="side-pane"></div>
+        <div id="side-history" class="side-pane"></div>
+        <div id="side-scripts" class="side-pane"></div>
+      </aside>
+      <div class="splitter v" id="split-side"></div>
+
+      <section id="center">
+        <div id="editor-area">
+          <div id="tabbar"></div>
+          <div id="editor-host">
+            <button id="md-toggle" class="hidden" data-icon="eye" title="Show the rendered Markdown (Ctrl/Cmd+Shift+V)">Preview</button>
+            <div id="md-preview" class="hidden"></div>
+            <div id="diffbar" class="hidden">
+              <button id="d-prev" class="icon" data-icon="chevron-left" title="Previous change"></button>
+              <button id="d-next" class="icon" data-icon="chevron-right" title="Next change"></button>
+              <span id="d-info" class="muted"></span>
+              <span class="spacer"></span>
+              <button id="d-revert-hunk" data-icon="undo-2" title="Undo the change under the cursor (right side); save afterwards with Ctrl+S">Revert this change</button>
+              <button id="d-comment" data-icon="message-square-plus" title="Comment on the line under the cursor (right side). You can also click the gutter. Comments are sent to the agent together.">Comment</button>
+              <button id="d-send-comments" data-icon="send" class="hidden" title="Send all review comments to the agent terminal">Send comments</button>
+              <button id="d-reviewed" data-icon="check" title="Mark this file as reviewed">Mark reviewed</button>
+              <button id="d-stage-hunk" data-icon="plus" title="Stage only the change under the cursor (right side), like git add -p">Stage change</button>
+              <button id="d-unstage-hunk" data-icon="minus" title="Take the change under the cursor out of the index again">Unstage change</button>
+              <button id="d-stage" data-icon="plus" title="Stage / unstage this file">Stage file</button>
+              <button id="d-revert-file" data-icon="trash-2" title="Throw away all changes to this file">Revert file</button>
+            </div>
+            <div id="editor" class="hidden"></div>
+            <div id="diff" class="hidden"></div>
+            <div id="welcome">
+              <h2><span data-icon="sparkles"></span>Bazinga</h2>
+              <p class="muted">Pick a file on the left (or press <b>Ctrl+P</b>), or review what your agent changed under <b>Changes</b>.</p>
+              <p class="muted">Start Claude or Copilot from the top bar, then run <b>Fast checks</b> to validate the result.</p>
+            </div>
+          </div>
+        </div>
+        <div class="splitter h" id="split-bottom"></div>
+        <div id="bottom">
+          <div id="bottom-tabs"></div>
+          <div id="bottom-body">
+            <div id="problems"></div>
+            <div id="review"></div>
+            <div id="debug"></div>
+            <div id="terms"></div>
+            <div id="term-find" class="hidden"><input id="tf-q" type="text" placeholder="Find in scrollback" spellcheck="false"><span id="tf-count" class="muted"></span><button id="tf-prev" class="icon" data-icon="chevron-left" title="Previous (Shift+Enter)"></button><button id="tf-next" class="icon" data-icon="chevron-right" title="Next (Enter)"></button><button id="tf-case" class="icon" title="Match case">Aa</button><button id="tf-close" class="icon" data-icon="x" title="Close (Esc)"></button></div>
+          </div>
+        </div>
+      </section>
+    </div>
+    <footer id="status"><span id="status-left"></span><span class="spacer"></span><span id="status-health" class="warn"></span><span id="status-watch" class="muted"></span><span id="status-oversight" class="muted"></span><span id="status-lsp" class="muted"></span><span id="status-mem" class="muted" title="Memory used by Bazinga (all its processes)"></span><span id="status-right"></span></footer>
+  </div>
+
+  <div id="quickopen" class="overlay hidden">
+    <div class="palette">
+      <input id="qo-input" type="text" placeholder="Go to file&hellip;" spellcheck="false">
+      <div id="qo-list"></div>
+    </div>
+  </div>
+  <div id="modal" class="overlay hidden"><div class="dialog" id="dialog"></div></div>
+
+  <!-- xterm must load before the AMD loader, otherwise its UMD wrapper registers as an AMD module instead of a global -->
+  <div id="board" class="hidden" role="dialog" aria-label="Board"></div>
+  <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script src="../../node_modules/@xterm/addon-search/lib/addon-search.js"></script>
+  <script src="../../node_modules/marked/marked.min.js"></script>
+  <script src="../../node_modules/dompurify/dist/purify.min.js"></script>
+  <script src="../../node_modules/monaco-editor/min/vs/loader.js"></script>
+  <script src="../core/bestof.js"></script>
+  <script src="../core/board.js"></script>
+  <script src="icons.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

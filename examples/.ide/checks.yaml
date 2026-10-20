@@ -1,0 +1,71 @@
+# Optional. Without this file the built-in gates are used (see README). Tools that are not installed are skipped.
+useDefaults: true            # keep the built-ins; entries below add to them or replace one with the same name
+disable: []                  # e.g. [Semgrep, Pyright] to switch built-ins off
+
+checks:
+  # Replace the built-in Maven compile with a faster module-scoped one
+  - name: Maven compile
+    tier: slow
+    scope: project           # runs once when any changed file matches
+    match: ["*.java", "pom.xml"]
+    requiresFile: [pom.xml]
+    run: "mvn -q -B {modules} compile"      # only the changed modules (+ what they depend on)
+    parser: maven
+    timeoutSec: 600
+
+  # Java static analysis read from the XML reports (needs the Maven plugins configured in the POM)
+  - name: Checkstyle
+    tier: slow
+    scope: project
+    match: ["*.java"]
+    requiresFile: [pom.xml]
+    run: "mvn -q -B {modules} checkstyle:checkstyle"
+    reports: ["**/target/checkstyle-result.xml"]
+    reportFormat: checkstyle
+  - name: PMD
+    tier: slow
+    scope: project
+    match: ["*.java"]
+    requiresFile: [pom.xml]
+    run: "mvn -q -B {modules} pmd:pmd"
+    reports: ["**/target/pmd.xml"]
+    reportFormat: pmd
+  - name: SpotBugs
+    tier: slow
+    scope: project
+    match: ["*.java"]
+    requiresFile: [pom.xml]
+    run: "mvn -q -B {modules} compile spotbugs:spotbugs"
+    reports: ["**/target/spotbugsXml.xml"]
+    reportFormat: spotbugs
+
+  # Secret scanning over the working tree
+  - name: Gitleaks
+    tier: fast
+    scope: project
+    match: ["*"]
+    requiresBin: gitleaks
+    run: "gitleaks detect --no-git --no-banner --redact --report-format sarif --report-path -"
+    parser: sarif
+
+  # Any tool with a "file:line:col: severity: message" style output can use the regex parser
+  - name: My linter
+    match: ["*.sql"]
+    requiresBin: sqlfluff
+    run: "sqlfluff lint --format github-annotation-native {files}"
+    parser: regex
+    pattern: '^::(?<severity>\w+) file=(?<file>[^,]+),line=(?<line>\d+),col=(?<column>\d+)::(?<message>.*)$'
+
+  # Duplicate code is on by default (see README). Examples of tuning it:
+  # - name: Duplicate code            # same name replaces the built-in
+  #   tier: slow
+  #   scope: project
+  #   match: ["*.ts", "*.tsx", "*.java"]
+  #   requiresBin: jscpd
+  #   onlyChangedFiles: true
+  #   severity: warning               # report, but don't make the hook fail
+  #   run: 'jscpd . --silent --ignore-literals --similarity --min-lines 6 --min-tokens 50 --reporters json --output {tmpdir}'
+  #   tmpReport: jscpd-report.json
+  #   reportFormat: jscpd
+  # - name: Duplicate components
+  #   severity: warning

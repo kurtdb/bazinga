@@ -1,0 +1,12 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          { "type": "command", "command": "node C:/tools/bazinga/bin/ide-check.js --hook" }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "autoCheck": false,
+  "autoCheckpoint": true,
+  "agents": [
+    { "name": "Claude", "command": "claude" },
+    { "name": "Copilot", "command": "copilot" }
+  ],
+  "reviewCommand": "claude -p \"Review the code change described on stdin. Answer in plain text.\""
+}

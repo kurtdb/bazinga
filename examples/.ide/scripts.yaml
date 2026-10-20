@@ -1,0 +1,13 @@
+# Shown under the "Scripts" tab. Each script runs in its own terminal tab (which stays open afterwards).
+scripts:
+  - name: Import dry run
+    command: python scripts/import.py --dry-run
+    description: Safe preview, writes nothing
+
+  - name: Run unit tests
+    command: python -m pytest -q
+    cwd: backend            # relative to the project root
+
+  - name: Spring Boot dev
+    command: mvn -q spring-boot:run
+    description: Starts the API on :8080

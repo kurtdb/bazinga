@@ -1,0 +1,137 @@
+{
+  "name": "bazinga",
+  "version": "0.1.0",
+  "description": "A lightweight agent-first IDE: Claude Code / Copilot CLI terminals, diff review, script runner and a quality-gate panel.",
+  "main": "src/main/main.js",
+  "private": true,
+  "license": "UNLICENSED",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test \"test/**/*.test.js\"",
+    "bazinga": "node bin/bazinga.js",
+    "check": "node bin/ide-check.js",
+    "guard": "node bin/ide-guard.js",
+    "doctor": "node bin/doctor.js",
+    "smoke": "node scripts/smoke.js",
+    "pack": "electron-builder --dir",
+    "dist": "node scripts/dist.js --win --mac",
+    "dist:win": "node scripts/dist.js --win --x64",
+    "dist:mac": "node scripts/dist.js --mac",
+    "setup:local": "bash scripts/setup-local-models.sh",
+    "screenshots": "node scripts/screenshots.js"
+  },
+  "bin": {
+    "bazinga": "bin/bazinga.js",
+    "ide-check": "bin/ide-check.js",
+    "ide-guard": "bin/ide-guard.js"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^1.9.0",
+    "@fontsource/roboto": "^5.3.0",
+    "@fontsource/roboto-mono": "^5.3.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@vscode/ripgrep": "^1.18.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-search": "^0.16.0",
+    "@xterm/xterm": "^6.0.0",
+    "ajv": "^8.20.0",
+    "dompurify": "^3.4.16",
+    "electron-updater": "^6.8.9",
+    "marked": "^14.1.4",
+    "mermaid": "^12.2.0",
+    "monaco-editor": "^0.57.0",
+    "node-pty": "^1.1.0",
+    "web-tree-sitter": "^0.25.10",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "electron": "^44.7.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "dev.bazinga.app",
+    "productName": "Bazinga",
+    "publish": [
+      {
+        "provider": "github"
+      }
+    ],
+    "asar": false,
+    "npmRebuild": false,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**",
+      "bin/**",
+      "CHANGELOG.md",
+      "docker/**",
+      "vendor/**",
+      "build/icon.png",
+      "package.json",
+      "node_modules/**/*",
+      "!node_modules/monaco-editor/{dev,esm,min-maps}/**",
+      "!node_modules/electron/**",
+      "!node_modules/electron-builder/**",
+      "!**/*.map"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "${productName}-Setup-${version}-${arch}.${ext}"
+    },
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.icns"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable-${arch}.${ext}"
+    },
+    "linux": {
+      "icon": "build/icon-512.png"
+    }
+  },
+  "author": {
+    "name": "Kurt Du Bois"
+  },
+  "overrides": {
+    "monaco-editor": {
+      "dompurify": "$dompurify"
+    }
+  }
+}
