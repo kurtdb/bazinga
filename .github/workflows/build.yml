@@ -71,7 +71,10 @@ jobs:
         run: |
           chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper
           EXTRA=""
-          if [ -z "$CSC_LINK" ]; then EXTRA="-c.mac.identity=- -c.mac.hardenedRuntime=false"; fi
+          # A repository secret that is not set still arrives here as CSC_LINK="" (empty, not unset): electron-builder
+          # treats that as "load a cert from this path", resolves "" to the project folder and fails with "not a file".
+          # Unset it so the subprocess sees no CSC_LINK at all, matching the no-cert / ad-hoc-signing path below.
+          if [ -z "$CSC_LINK" ]; then unset CSC_LINK CSC_KEY_PASSWORD; EXTRA="-c.mac.identity=- -c.mac.hardenedRuntime=false"; fi
           npx electron-builder --mac --publish never $EXTRA
 
       - uses: actions/upload-artifact@v4
