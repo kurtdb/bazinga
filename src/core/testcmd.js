@@ -78,7 +78,9 @@ function testCommand(root, rel, test, { shellKind = 'posix', content = '' } = {}
     const sel = test.kind === 'suite' ? test.name : `${test.suite}#${test.name}`;
     if (maven && (!gradle || maven.dir.length >= gradle.dir.length)) return { cwd: maven.dir, label: `mvn test ${sel}`, command: `mvn -B test -Dtest=${q(sel)} -DfailIfNoTests=false -Dsurefire.failIfNoSpecifiedTests=false` };
     if (gradle) {
-      const wrapper = fs.existsSync(path.join(root, gradle.dir, process.platform === 'win32' ? 'gradlew.bat' : 'gradlew'));
+      // A standard Gradle wrapper setup ships both scripts together; check for either rather than picking by the
+      // host's own platform, which does not have to match shellKind (the platform the command is generated for).
+      const wrapper = fs.existsSync(path.join(root, gradle.dir, 'gradlew')) || fs.existsSync(path.join(root, gradle.dir, 'gradlew.bat'));
       const bin = wrapper ? (shellKind === 'posix' ? './gradlew' : '.\\gradlew') : 'gradle';
       return { cwd: gradle.dir, label: `gradle test ${sel}`, command: `${bin} test --tests ${q(`*${sel.replace('#', '.')}`)}` };
     }
