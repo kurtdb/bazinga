@@ -10,7 +10,9 @@ const write = (root, rel, text) => { fs.mkdirSync(path.dirname(path.join(root, r
 function tmpdir(prefix = 'bazinga-t-') { return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix))); }
 function repo(files = { 'a.txt': 'one\n' }, { commit = true } = {}) {
   const root = tmpdir('bazinga-repo-');
-  sh(root, 'init', '-q', '-b', 'main'); sh(root, 'config', 'user.email', 't@t'); sh(root, 'config', 'user.name', 't');
+  // Windows' git defaults to core.autocrlf=true, which rewrites LF to CRLF on checkout/restore and breaks exact-content
+  // assertions; pin it off so this throw-away repo behaves the same on every platform.
+  sh(root, 'init', '-q', '-b', 'main'); sh(root, 'config', 'user.email', 't@t'); sh(root, 'config', 'user.name', 't'); sh(root, 'config', 'core.autocrlf', 'false');
   for (const [k, v] of Object.entries(files)) write(root, k, v);
   if (commit) { sh(root, 'add', '.'); sh(root, 'commit', '-q', '-m', 'init'); }
   return root;

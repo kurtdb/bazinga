@@ -23,6 +23,9 @@ function repo(files = {}) {
   sh(root, 'init', '-q');
   sh(root, 'config', 'user.email', 't@t');
   sh(root, 'config', 'user.name', 't');
+  // Windows' git defaults to core.autocrlf=true, which rewrites LF to CRLF on checkout/restore and breaks exact-content
+  // assertions; pin it off so this throw-away repo behaves the same on every platform.
+  sh(root, 'config', 'core.autocrlf', 'false');
   for (const [rel, text] of Object.entries(files)) write(root, rel, text);
   if (Object.keys(files).length) { sh(root, 'add', '.'); sh(root, 'commit', '-q', '-m', 'init'); }
   return root;

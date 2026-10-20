@@ -10,7 +10,9 @@ const H = require('../src/core/history');
 const sh = (cwd, ...a) => execFileSync('git', a, { cwd, encoding: 'utf8' }).trim();
 function repo() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bazinga-hist-'));
-  sh(dir, 'init', '-q', '-b', 'main'); sh(dir, 'config', 'user.email', 'kurt@example.com'); sh(dir, 'config', 'user.name', 'Kurt');
+  // Windows' git defaults to core.autocrlf=true, which rewrites LF to CRLF on checkout/restore and breaks exact-content
+  // assertions; pin it off so this throw-away repo behaves the same on every platform.
+  sh(dir, 'init', '-q', '-b', 'main'); sh(dir, 'config', 'user.email', 'kurt@example.com'); sh(dir, 'config', 'user.name', 'Kurt'); sh(dir, 'config', 'core.autocrlf', 'false');
   const w = (f, t) => { fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true }); fs.writeFileSync(path.join(dir, f), t); };
   const commit = (m) => { sh(dir, 'add', '-A'); sh(dir, 'commit', '-q', '-m', m); return sh(dir, 'rev-parse', 'HEAD'); };
   return { dir, w, commit };
