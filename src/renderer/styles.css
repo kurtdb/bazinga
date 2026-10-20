@@ -442,8 +442,8 @@ button.toggle.on { border-color: var(--accent); color: var(--accent); }
 .ctx-sep { height: 1px; background: var(--line); margin: 4px 2px; }
 .row .role { font-size: 10px; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; border-radius: 3px; padding: 0 5px; margin-left: 6px; }
 .row .role:empty { display: none; }
-.row .role-source { color: var(--ok); border: 1px solid var(--ok); }
-.row .role-tests { color: var(--warn); border: 1px solid var(--warn); }
+.row .role-source { color: var(--ok); border: 1px solid var(--ok); background: var(--ok-bg); }
+.row .role-tests { color: var(--warn); border: 1px solid var(--warn); background: var(--warn-bg); }
 
 input.invalid, textarea.invalid { border-color: var(--err); }
 
