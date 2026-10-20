@@ -65,7 +65,7 @@ test('a full turn with an ACP agent: text, tool calls, a permission question tha
   const kinds = events.map((e) => e.type);
   assert.ok(kinds.includes('text') && kinds.includes('tool') && kinds.includes('tool_update'));
   assert.ok(events.some((e) => e.type === 'text' && /successfully updated/.test(e.text)), 'the agent saw the approval');
-  r.close(); rmTmp(cwd);
+  await r.close(); rmTmp(cwd);
 });
 
 test('policy allow answers by itself, policy reject too (the agent sees the refusal)', async () => {
@@ -77,7 +77,7 @@ test('policy allow answers by itself, policy reject too (the agent sees the refu
     assert.ok(!events.some((e) => e.type === 'permission'), `${policy}: the user is not asked`);
     if (policy === 'allow') assert.ok(events.some((e) => e.type === 'text' && expected.test(e.text)));
     else assert.ok(!events.some((e) => e.type === 'text' && /successfully updated/.test(e.text)), 'a refused change is not reported as done');
-    r.close(); rmTmp(cwd);
+    await r.close(); rmTmp(cwd);
   }
 });
 
@@ -89,7 +89,7 @@ test('cancel ends the turn with the stop reason cancelled and cancels an open qu
   assert.strictEqual(await r.cancel(), true);
   const stop = await until(events, 'stop');
   assert.ok(['cancelled', 'end_turn'].includes(stop.reason), stop.reason);
-  r.close(); rmTmp(cwd);
+  await r.close(); rmTmp(cwd);
 });
 
 test('files: the agent may read and write inside the run\'s folder, nothing outside it, nothing in .git', async () => {
@@ -106,7 +106,7 @@ test('files: the agent may read and write inside the run\'s folder, nothing outs
   for (const k of ['escapeWrite', 'gitWrite', 'escapeRead']) assert.match(res[k], /refused/, k);
   assert.ok(!fs.existsSync(path.join(cwd, '..', 'escape.txt')));
   await until(events, 'stop');
-  r.close(); rmTmp(cwd);
+  await r.close(); rmTmp(cwd);
 });
 
 test('a command that does not exist is reported, not thrown into the app', async () => {
@@ -115,7 +115,7 @@ test('a command that does not exist is reported, not thrown into the app', async
   const bad = new A.AcpRun({ command: 'definitely-not-a-real-agent-xyz', cwd, onEvent: (e) => events.push(e) });
   await assert.rejects(bad.open());
   assert.ok(events.some((e) => e.type === 'error' && /Could not start/.test(e.message)));
-  r.close(); rmTmp(cwd);
+  await r.close(); rmTmp(cwd);
 });
 
 test('an agent that exits at once is reported as an exit, and sending to a closed run is refused', async () => {
@@ -135,7 +135,7 @@ test('wire format: a bare JSON-RPC agent (no SDK) can ask for permission and the
     await r.open(); r.send('go');
     await until(events, 'stop');
     assert.ok(events.some((e) => e.type === 'text' && e.text === expect), `${policy}: ${JSON.stringify(events.filter((e) => e.type === 'text'))}`);
-    r.close(); rmTmp(cwd);
+    await r.close(); rmTmp(cwd);
   }
   const cwd = tmp();
   const { r, events } = run(path.join(__dirname, 'fixtures', 'acp-raw-agent.js'), { cwd, policy: 'ask' });
@@ -144,5 +144,5 @@ test('wire format: a bare JSON-RPC agent (no SDK) can ask for permission and the
   r.answer(q.id, 'n');
   await until(events, 'stop');
   assert.ok(events.some((e) => e.type === 'text' && e.text === 'chosen n'));
-  r.close(); rmTmp(cwd);
+  await r.close(); rmTmp(cwd);
 });

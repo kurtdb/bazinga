@@ -193,11 +193,24 @@ class AcpRun {
     if (this.wake) { const w = this.wake; this.wake = null; w(); }
   }
 
+  /**
+   * @returns {Promise<void>} resolves once the child has actually exited (or at once if there is none / it already
+   * has). kill() only asks the OS to terminate the process; while it is still exiting, cwd is still its working
+   * directory, and on Windows that alone makes rmdir fail with EBUSY no matter how long the caller retries.
+   */
   close() {
     this.closed = true;
     for (const [id, f] of this.pending) { this.pending.delete(id); f(null); }
     if (this.wake) { const w = this.wake; this.wake = null; w(); }
-    try { this.child && this.child.kill(); } catch { /* gone */ }
+    const child = this.child;
+    if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = () => { if (done) return; done = true; resolve(); };
+      child.once('exit', finish);
+      setTimeout(finish, 3000); // don't hang a caller forever if the child never reports its exit
+      try { child.kill(); } catch { /* gone */ }
+    });
   }
 }
 
