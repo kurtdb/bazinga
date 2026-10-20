@@ -114,7 +114,9 @@ test('a command that does not exist is reported, not thrown into the app', async
   const { r, events } = run(FS_AGENT, { cwd });
   const bad = new A.AcpRun({ command: 'definitely-not-a-real-agent-xyz', cwd, onEvent: (e) => events.push(e) });
   await assert.rejects(bad.open());
-  assert.ok(events.some((e) => e.type === 'error' && /Could not start/.test(e.message)));
+  // On Windows, a command with no .exe suffix is run through cmd.exe (so npm-shimmed agents work); a genuinely missing
+  // command then surfaces as a non-zero shell exit rather than a spawn ENOENT, so either counts as "reported".
+  assert.ok(events.some((e) => (e.type === 'error' && /Could not start/.test(e.message)) || (e.type === 'exit' && e.code !== 0)));
   await r.close(); rmTmp(cwd);
 });
 
