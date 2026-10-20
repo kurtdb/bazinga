@@ -1,0 +1,4 @@
+# Keep line endings LF everywhere regardless of the platform's own git config (core.autocrlf). Without this, Windows'
+# git default (autocrlf=true) checks out text files with CRLF, which breaks any code that matches or compares against
+# the raw file content expecting "\n" (e.g. test/container.test.js reading src/renderer/app.js as text).
+* text=auto eol=lf
