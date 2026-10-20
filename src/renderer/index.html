@@ -33,16 +33,16 @@
     </header>
 
     <div id="main">
+      <nav class="rail" id="side-tabs">
+        <button data-tab="files" data-icon="files" class="active" title="Files">Files</button>
+        <button data-tab="search" data-icon="search" title="Search in project (Ctrl+Shift+F)">Search</button>
+        <button data-tab="agents" data-icon="bot" title="Agent runs: parallel agents in their own git worktrees">Agents <span id="agents-count" class="badge"></span></button>
+        <button data-tab="changes" data-icon="git-compare" title="Changes: what the agent changed, with review flags">Changes <span id="changes-count" class="badge"></span></button>
+        <button data-tab="history" data-icon="history" title="History: commit graph, stashes, blame">History</button>
+        <button data-tab="scripts" data-icon="scroll-text" title="Scripts">Scripts</button>
+        <button id="btn-refresh" class="icon" data-icon="refresh-cw" title="Refresh"></button>
+      </nav>
       <aside id="sidebar">
-        <nav class="tabs" id="side-tabs">
-          <button data-tab="files" data-icon="files" class="active" title="Files">Files</button>
-          <button data-tab="search" data-icon="search" title="Search in project (Ctrl+Shift+F)">Search</button>
-          <button data-tab="agents" data-icon="bot" title="Agent runs: parallel agents in their own git worktrees">Agents <span id="agents-count" class="badge"></span></button>
-          <button data-tab="changes" data-icon="git-compare" title="Changes: what the agent changed, with review flags">Changes <span id="changes-count" class="badge"></span></button>
-          <button data-tab="history" data-icon="history" title="History: commit graph, stashes, blame">History</button>
-          <button data-tab="scripts" data-icon="scroll-text" title="Scripts">Scripts</button>
-          <button id="btn-refresh" class="icon" data-icon="refresh-cw" title="Refresh"></button>
-        </nav>
         <div id="side-files" class="side-pane active"></div>
         <div id="side-search" class="side-pane">
           <div class="searchbox">

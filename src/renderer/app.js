@@ -2020,8 +2020,9 @@
     } else {
       const visible = visibleFindings();
       const c = countOf(visible);
-      head.append(el('b', { text: `${plural(c.error, 'error')} · ${plural(c.warning, 'warning')} · ${c.info} info` }),
-        el('span', { class: 'muted', text: `${r.files.length} changed file(s) · ${(r.durationMs / 1000).toFixed(1)}s${r.cancelled ? ' · cancelled' : ''}` }),
+      head.append(el('span', { class: 'p-summary' },
+        `ran ${(r.durationMs / 1000).toFixed(1)}s${r.cancelled ? ' · cancelled' : ''} · ${plural(c.error, 'error')}, ${plural(c.warning, 'warning')}, ${c.info} info`),
+        el('span', { class: 'muted', text: `${r.files.length} changed file(s)` }),
         ...r.runs.map(chip));
       const legacy = hiddenLegacy();
       const only = el('input', { type: 'checkbox' });
@@ -4798,7 +4799,10 @@
       window.addEventListener('mouseup', up);
     });
   }
-  drag($('#split-side'), (e) => document.documentElement.style.setProperty('--side-w', `${Math.min(Math.max(e.clientX, 160), 640)}px`));
+  drag($('#split-side'), (e) => {
+    const railW = $('#side-tabs').getBoundingClientRect().width;
+    document.documentElement.style.setProperty('--side-w', `${Math.min(Math.max(e.clientX - railW, 160), 640)}px`);
+  });
   drag($('#split-bottom'), (e) => {
     const rect = $('#center').getBoundingClientRect();
     document.documentElement.style.setProperty('--bottom-h', `${Math.min(Math.max(rect.bottom - e.clientY, 80), rect.height - 160)}px`);
