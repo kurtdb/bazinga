@@ -1,8 +1,7 @@
 {
   "permissions": {
     "additionalDirectories": [
-      "/Users/kurtdb/Downloads/bazinga",
-      "/Users/kurtdb/Downloads/bazinga.worktrees"
+      "../bazinga.worktrees"
     ]
   }
 }
