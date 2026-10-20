@@ -57,7 +57,10 @@ async function runRelatedTests({ root, files, readFile, timeoutSec = 120, run = 
     if (signal && signal.aborted) break;
     let content = '';
     try { content = readFile(rel) || ''; } catch { /* ignore */ }
-    const cmd = fileTestCommand(root, rel, { content });
+    // fileTestCommand defaults to posix quoting; run() below always executes through spawn's shell:true,
+    // which is cmd.exe on Windows (not whatever shell the user configured for terminals) - single-quoted
+    // arguments pass through to node literally there, so e.g. --test-name-pattern='fine' never matches.
+    const cmd = fileTestCommand(root, rel, { content, shellKind: process.platform === 'win32' ? 'cmd' : 'posix' });
     if (!cmd) { skipped.push({ file: rel, reason: 'no test command known' }); continue; }
     const r = await run(cmd.command, { cwd: path.join(root, cmd.cwd || ''), timeoutMs: timeoutSec * 1000, signal });
     if (r.cancelled) break;
