@@ -35,7 +35,7 @@
     for (const b of document.querySelectorAll('#welcome b')) b.textContent = swap(b.textContent);
   }
 
-  // ---------------------------------------------------------------- theme (system / light / dark) and fonts
+  // ---------------------------------------------------------------- theme (system / light / dark / high-contrast / night / nerd) and fonts
   const MONO = "'Roboto Mono', 'Cascadia Code', Consolas, Menlo, monospace";
   const TERM_THEMES = {
     dark: { background: '#14161a', foreground: '#d7dae0', cursor: '#d7dae0', selectionBackground: '#33466b' },
@@ -44,10 +44,34 @@
       black: '#24292f', red: '#cf222e', green: '#1a7f37', yellow: '#7d4e00', blue: '#0969da', magenta: '#8250df', cyan: '#1b7c83', white: '#6e7781',
       brightBlack: '#57606a', brightRed: '#a40e26', brightGreen: '#116329', brightYellow: '#633c01', brightBlue: '#0550ae', brightMagenta: '#6639ba', brightCyan: '#3192aa', brightWhite: '#8c959f',
     },
+    'high-contrast': {
+      background: '#000000', foreground: '#ffffff', cursor: '#ffffff', cursorAccent: '#000000', selectionBackground: '#003a5c',
+      black: '#000000', red: '#ff6b6b', green: '#5ee079', yellow: '#ffd43b', blue: '#5ec2ff', magenta: '#ff8cff', cyan: '#4dffe8', white: '#ffffff',
+      brightBlack: '#6e6e6e', brightRed: '#ff9b9b', brightGreen: '#9bffb0', brightYellow: '#ffe48c', brightBlue: '#9bdaff', brightMagenta: '#ffc2ff', brightCyan: '#9bfff2', brightWhite: '#ffffff',
+    },
+    night: {
+      background: '#1a130d', foreground: '#ecd9bb', cursor: '#ecd9bb', cursorAccent: '#1a130d', selectionBackground: '#4a331a',
+      black: '#1a130d', red: '#e8714f', green: '#b7b24a', yellow: '#dcb04a', blue: '#e8a259', magenta: '#c98a6e', cyan: '#a68a4a', white: '#ecd9bb',
+      brightBlack: '#8a7256', brightRed: '#f0987a', brightGreen: '#cfca7a', brightYellow: '#e8c57a', brightBlue: '#edb97e', brightMagenta: '#d8a68f', brightCyan: '#c2a96f', brightWhite: '#f5ead6',
+    },
+    nerd: {
+      background: '#000000', foreground: '#39ff6a', cursor: '#39ff6a', cursorAccent: '#000000', selectionBackground: '#0a3d35',
+      black: '#000000', red: '#ff4d4d', green: '#39ff6a', yellow: '#f0ff4d', blue: '#39d4ff', magenta: '#a0ff39', cyan: '#39ffe0', white: '#9be8ad',
+      brightBlack: '#1f7a3a', brightRed: '#ff8c8c', brightGreen: '#9bffb5', brightYellow: '#f7ff9b', brightBlue: '#9be8ff', brightMagenta: '#c9ff9b', brightCyan: '#9bfff2', brightWhite: '#e2ffe8',
+    },
+  };
+  const MONACO_THEMES = { light: 'vs', dark: 'vs-dark', 'high-contrast': 'bazinga-hc', night: 'bazinga-night', nerd: 'bazinga-nerd' };
+  const THEME_META = {
+    system: { label: 'System', icon: 'settings' },
+    light: { label: 'Light', icon: 'sun' },
+    dark: { label: 'Dark', icon: 'moon' },
+    'high-contrast': { label: 'High contrast (low vision)', icon: 'eye' },
+    night: { label: 'Night (late work, low blue light)', icon: 'moon' },
+    nerd: { label: 'Nerd (phosphor terminal)', icon: 'terminal' },
   };
   let themeSetting = 'system';
   const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
-  const resolvedTheme = () => (themeSetting === 'light' ? 'light' : themeSetting === 'dark' ? 'dark' : (darkQuery.matches ? 'dark' : 'light'));
+  const resolvedTheme = () => (themeSetting === 'system' ? (darkQuery.matches ? 'dark' : 'light') : themeSetting);
 
   // ---------------------------------------------------------------- icons (inline SVG, see icons.js)
   const ic = (name, cls) => window.icon(name, cls);
@@ -98,10 +122,10 @@
   function applyTheme() {
     const t = resolvedTheme();
     document.documentElement.dataset.theme = t;
-    if (window.monaco) window.monaco.editor.setTheme(t === 'light' ? 'vs' : 'vs-dark');
+    if (window.monaco) window.monaco.editor.setTheme(MONACO_THEMES[t]);
     for (const entry of state.terms.values()) entry.term.options.theme = TERM_THEMES[t];
     const b = document.getElementById('btn-theme');
-    if (b) { b.replaceChildren(ic(t === 'light' ? 'moon' : 'sun')); b.title = t === 'light' ? 'Switch to dark mode' : 'Switch to light mode'; }
+    if (b) { b.replaceChildren(ic(THEME_META[themeSetting].icon)); b.title = `Theme: ${THEME_META[themeSetting].label} — click to change`; }
   }
   darkQuery.addEventListener('change', () => { if (themeSetting === 'system') applyTheme(); });
 
@@ -155,8 +179,23 @@
       ts.typescriptDefaults.setDiagnosticsOptions({ noSemanticValidation: true });
       ts.javascriptDefaults.setDiagnosticsOptions({ noSemanticValidation: true });
     } catch { /* optional */ }
+    monaco.editor.defineTheme('bazinga-hc', { base: 'hc-black', inherit: true, rules: [], colors: {
+      'editor.background': '#000000', 'editor.foreground': '#ffffff',
+      'editorCursor.foreground': '#ffffff', 'editor.selectionBackground': '#003a5c',
+      'editorLineNumber.foreground': '#a3a3a3', 'editorLineNumber.activeForeground': '#ffffff',
+    } });
+    monaco.editor.defineTheme('bazinga-night', { base: 'vs-dark', inherit: true, rules: [], colors: {
+      'editor.background': '#1a130d', 'editor.foreground': '#ecd9bb', 'editor.lineHighlightBackground': '#2e2114',
+      'editorCursor.foreground': '#ecd9bb', 'editor.selectionBackground': '#4a331a',
+      'editorLineNumber.foreground': '#8a7256', 'editorLineNumber.activeForeground': '#ecd9bb',
+    } });
+    monaco.editor.defineTheme('bazinga-nerd', { base: 'vs-dark', inherit: true, rules: [], colors: {
+      'editor.background': '#000000', 'editor.foreground': '#39ff6a', 'editor.lineHighlightBackground': '#0f1f0f',
+      'editorCursor.foreground': '#39ff6a', 'editor.selectionBackground': '#0a3d35',
+      'editorLineNumber.foreground': '#2fae52', 'editorLineNumber.activeForeground': '#39ff6a',
+    } });
     const common = {
-      theme: resolvedTheme() === 'light' ? 'vs' : 'vs-dark', automaticLayout: true, minimap: { enabled: false }, fontSize: 13,
+      theme: MONACO_THEMES[resolvedTheme()], automaticLayout: true, minimap: { enabled: false }, fontSize: 13,
       fontFamily: MONO, scrollBeyondLastLine: false,
       renderWhitespace: 'none', glyphMargin: true,
     };
@@ -555,7 +594,7 @@
       const sel = el('select', null, ...cands.map((t, i) => el('option', { value: String(i), text: t.title })));
       const done = (v) => { $('#modal').classList.add('hidden'); resolve(v); };
       $('#dialog').replaceChildren(el('h3', { text: 'Send comments to which agent?' }), el('div', { class: 'field' }, sel),
-        el('div', { class: 'actions' }, el('button', { text: 'Cancel', onclick: () => done(null) }), el('button', { class: 'primary', text: 'Send', onclick: () => done(cands[Number(sel.value)]) })));
+        el('div', { class: 'actions' }, el('button', { onclick: () => done(null) }, ic('x'), 'Cancel'), el('button', { class: 'primary', onclick: () => done(cands[Number(sel.value)]) }, ic('send'), 'Send')));
       $('#modal').classList.remove('hidden');
     });
   }
@@ -818,9 +857,9 @@
       el('p', { class: 'muted', text: `${res.headline}  ·  ${(res.durationMs / 1000).toFixed(1)}s` }),
       el('pre', { class: 'test-output', text: res.output || '(the runner printed nothing)' }),
       el('div', { class: 'actions' },
-        el('button', { text: 'Open in terminal', onclick: () => { close(); runTestInTerminal(rel, test, all); } }),
-        el('button', { text: 'Run again', onclick: () => { close(); runTestFor(rel, test, all); } }),
-        el('button', { class: 'primary', text: 'Close', onclick: close })));
+        el('button', { onclick: () => { close(); runTestInTerminal(rel, test, all); } }, ic('terminal'), 'Open in terminal'),
+        el('button', { onclick: () => { close(); runTestFor(rel, test, all); } }, ic('refresh-cw'), 'Run again'),
+        el('button', { class: 'primary', onclick: close }, ic('check'), 'Close')));
     $('#modal').classList.remove('hidden');
   }
   /** Run in the app and say plainly whether it passed. Failures (and "nothing ran") open the output; a pass is just a green status. */
@@ -860,9 +899,9 @@
           const ln = l.range.start.line + 1;
           const src = ((texts.get(l.rel) || [])[ln - 1] || '').trim();
           return el('div', { class: 'lh-row', onclick: () => { close(); openFile(l.rel, ln, l.range.start.character + 1); } },
-            el('span', { class: 'lh-label' }, el('b', { text: `${l.rel}:${ln}` }), el('span', { class: 'muted', text: `  ${src.slice(0, 120)}` })));
+            ic('file-code'), el('span', { class: 'lh-label' }, el('b', { text: `${l.rel}:${ln}` }), el('span', { class: 'muted', text: `  ${src.slice(0, 120)}` })));
         }) : [el('div', { class: 'empty', text: 'No usages.' })])),
-        el('div', { class: 'actions' }, el('button', { class: 'primary', text: 'Close', onclick: close })));
+        el('div', { class: 'actions' }, el('button', { class: 'primary', onclick: close }, ic('check'), 'Close')));
       $('#modal').classList.remove('hidden');
     });
     monaco.editor.registerCommand('bazinga.copyText', (_accessor, text) => { api.copy(text); setStatus(`Copied ${text}`); });
@@ -870,8 +909,8 @@
       if (list.length === 1) { openFile(list[0].file, list[0].line); return; }
       const close = () => $('#modal').classList.add('hidden');
       $('#dialog').replaceChildren(el('h3', { text: `Implementations of ${name}` }),
-        el('div', { class: 'lh-list' }, ...list.map((t) => el('div', { class: 'lh-row' }, el('span', { class: 'lh-label' }, el('b', { text: t.name }), el('span', { class: 'muted', text: `  ${t.kind} · ${t.file}:${t.line}` })), el('span', { class: 'lh-acts' }, el('button', { text: 'Open', onclick: () => { close(); openFile(t.file, t.line); } }))))),
-        el('div', { class: 'actions' }, el('button', { class: 'primary', text: 'Close', onclick: close })));
+        el('div', { class: 'lh-list' }, ...list.map((t) => el('div', { class: 'lh-row' }, ic('file-code'), el('span', { class: 'lh-label' }, el('b', { text: t.name }), el('span', { class: 'muted', text: `  ${t.kind} · ${t.file}:${t.line}` })), el('span', { class: 'lh-acts' }, el('button', { onclick: () => { close(); openFile(t.file, t.line); } }, ic('eye'), 'Open'))))),
+        el('div', { class: 'actions' }, el('button', { class: 'primary', onclick: close }, ic('check'), 'Close')));
       $('#modal').classList.remove('hidden');
     });
     monaco.editor.registerCommand('bazinga.symbolCommit', async (_accessor, sha) => { setSideTab('history'); await toggleCommit(sha); });
@@ -1046,7 +1085,7 @@
             el('span', { class: `tag st-${f.status === 'R' ? 'M' : f.status}`, text: f.status }), el('span', { class: 'name', text: f.path })))));
       }
     });
-    if (d.commits.length >= state.history.limit) nodes.push(el('div', { class: 'line pad' }, el('button', { text: 'Load more…', onclick: () => { state.history.limit *= 2; refreshHistory(); } })));
+    if (d.commits.length >= state.history.limit) nodes.push(el('div', { class: 'line pad' }, el('button', { onclick: () => { state.history.limit *= 2; refreshHistory(); } }, ic('arrow-down'), 'Load more…')));
     const top = host.scrollTop;
     fill(host, ...nodes);
     host.scrollTop = top;
@@ -1094,16 +1133,16 @@
       el('span', { class: 'lh-when', title: new Date(e.time).toLocaleString(), text: ago(e.time / 1000) }),
       el('span', { class: 'lh-label muted', text: `${e.label || 'version'} · ${fmtSize(e.size)}${i === 0 ? ' · newest' : ''}` }),
       el('span', { class: 'lh-acts' },
-        el('button', { title: 'Compare this version with the file as it is now', onclick: async () => { close(); await openLocalDiff(rel, e); } }, 'Compare'),
+        el('button', { title: 'Compare this version with the file as it is now', onclick: async () => { close(); await openLocalDiff(rel, e); } }, ic('git-compare'), 'Compare'),
         el('button', { title: 'Put this version back (the current content is kept in the history first)', onclick: async () => {
           const r = await api.localHistory.restore(rel, e.id);
           if (r.error) { setStatus(r.error); return; }
           close(); await reloadFromDisk(); await refreshChanges(); setStatus(`Restored ${rel} to the version from ${ago(e.time / 1000)}.`);
-        } }, 'Restore'))));
+        } }, ic('undo-2'), 'Restore'))));
     $('#dialog').replaceChildren(el('h3', { text: `Local history: ${rel}` }),
       entries.length ? el('div', { class: 'lh-list' }, ...rows) : el('div', { class: 'empty', text: 'No versions yet. A version is kept every time the file is saved here or changes on disk (also when an agent changes it).' }),
       el('div', { class: 'hint', text: 'Kept outside the project, for 30 days or 60 versions per file. Restore never loses the current content: it becomes the newest version first.' }),
-      el('div', { class: 'actions' }, el('button', { class: 'primary', text: 'Close', onclick: close })));
+      el('div', { class: 'actions' }, el('button', { class: 'primary', onclick: close }, ic('check'), 'Close')));
     $('#modal').classList.remove('hidden');
   }
 
@@ -1141,7 +1180,12 @@
   // ---------------------------------------------------------------- sidebar: tree
   function setSideTab(name) {
     state.sideTab = name;
-    for (const b of document.querySelectorAll('#side-tabs button[data-tab]')) b.classList.toggle('active', b.dataset.tab === name);
+    for (const b of document.querySelectorAll('#side-tabs button[data-tab]')) {
+      const on = b.dataset.tab === name;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-selected', String(on));
+      b.tabIndex = on ? 0 : -1;
+    }
     for (const p of document.querySelectorAll('.side-pane')) p.classList.toggle('active', p.id === `side-${name}`);
     if (name === 'history') refreshHistory();
     scheduleSessionSave();
@@ -1286,16 +1330,16 @@
       el('div', { class: 'c-task' },
         el('div', { class: 'line' }, allow),
         el('div', { class: 'line' },
-          el('button', { id: 't-start', text: 'Start task', title: 'Remember what is already changed (so it is not blamed on the agent) and save a checkpoint', onclick: startTask }),
-          el('button', { text: 'Clear', title: 'Forget the task: all changes count again', onclick: clearTask }),
-          el('button', { text: 'Copy summary prompt', title: 'Copies an instruction that makes the agent end with a list of the files it changed', onclick: async () => { await api.copy(state.summaryPrompt || 'When you are done, end with a section "Files changed" listing every file you created, edited or deleted (full relative paths), one per line with a short reason.'); setStatus('Summary prompt copied. Paste it into the agent.'); } })),
+          el('button', { id: 't-start', title: 'Remember what is already changed (so it is not blamed on the agent) and save a checkpoint', onclick: startTask }, ic('play'), 'Start task'),
+          el('button', { title: 'Forget the task: all changes count again', onclick: clearTask }, ic('x'), 'Clear'),
+          el('button', { title: 'Copies an instruction that makes the agent end with a list of the files it changed', onclick: async () => { await api.copy(state.summaryPrompt || 'When you are done, end with a section "Files changed" listing every file you created, edited or deleted (full relative paths), one per line with a short reason.'); setStatus('Summary prompt copied. Paste it into the agent.'); } }, ic('clipboard-copy'), 'Copy summary prompt')),
         summary,
         el('div', { id: 't-sum', class: 'muted' })),
       el('div', { class: 'c-head' },
         el('div', { class: 'line' },
-          el('button', { text: 'Stage all', onclick: async () => { const r = await api.git.stageAll(); if (r.error) setStatus(r.error); refreshChanges(); } }),
-          el('button', { text: 'Checkpoint', title: 'Save a snapshot of the whole working tree (including new files) that you can restore later', onclick: () => makeCheckpoint('manual') })),
-        el('div', { class: 'line' }, msg, el('button', { class: 'primary', text: 'Commit', onclick: doCommit }))),
+          el('button', { onclick: async () => { const r = await api.git.stageAll(); if (r.error) setStatus(r.error); refreshChanges(); } }, ic('plus'), 'Stage all'),
+          el('button', { title: 'Save a snapshot of the whole working tree (including new files) that you can restore later', onclick: () => makeCheckpoint('manual') }, ic('archive'), 'Checkpoint')),
+        el('div', { class: 'line' }, msg, el('button', { class: 'primary', onclick: doCommit }, ic('git-commit-horizontal'), 'Commit'))),
       el('div', { id: 'c-files' }),
       el('div', { class: 'c-title', text: 'Checkpoints' }),
       el('div', { id: 'c-cps' }));
@@ -1392,8 +1436,8 @@
       cps.replaceChildren(...state.checkpoints.map((cp) => el('div', { class: 'cp-row', title: new Date(cp.time * 1000).toLocaleString() },
         el('span', { class: 'lbl', text: cp.label }),
         el('span', { class: 'when', text: ago(cp.time) }),
-        el('button', { text: 'Restore', onclick: () => restoreCheckpoint(cp) }),
-        el('button', { text: '×', title: 'Delete checkpoint', onclick: async () => { await api.checkpoint.remove(cp.id); refreshCheckpoints(); } }))));
+        el('button', { onclick: () => restoreCheckpoint(cp) }, ic('undo-2'), 'Restore'),
+        el('button', { class: 'icon danger', title: 'Delete checkpoint', 'aria-label': 'Delete checkpoint', onclick: async () => { await api.checkpoint.remove(cp.id); refreshCheckpoints(); } }, ic('trash-2')))));
     }
     decorateTree();
     updateStatus();
@@ -1498,8 +1542,8 @@
           el('span', { class: 'acts' }, el('button', { class: 'icon danger', title: 'Delete this configuration', onclick: async (ev) => { ev.stopPropagation(); await api.runConfigs.remove(c.name); renderScripts(); } }, ic('trash-2')))));
       }
     }
-    if (mod.spring) kids.push(el('div', { class: 'spring-tasks' }, el('button', { class: 'chip-btn', title: 'All HTTP endpoints, @Bean methods and stereotype classes of the project', onclick: openSpringOverview }, 'endpoints & beans…')));
-    kids.push(el('div', { class: 'spring-tasks' }, ...mod.tasks.map((t) => el('button', { class: 'chip-btn', title: `Run “${t}”`, onclick: () => runBuild(mod, { task: t }) }, t))));
+    if (mod.spring) kids.push(el('div', { class: 'spring-tasks' }, el('button', { class: 'chip-btn', title: 'All HTTP endpoints, @Bean methods and stereotype classes of the project', onclick: openSpringOverview }, ic('layout-dashboard'), 'endpoints & beans…')));
+    kids.push(el('div', { class: 'spring-tasks' }, ...mod.tasks.map((t) => el('button', { class: 'chip-btn', title: `Run “${t}”`, onclick: () => runBuild(mod, { task: t }) }, ic('play'), t))));
     return el('div', { class: 'spring-mod' }, ...kids);
   }
 
@@ -1679,7 +1723,7 @@
       ['Git: checkpoint now', 'tag', () => makeCheckpoint('manual')],
       ['Test: run the test at the cursor', 'flask-conical', runTestAtCursor],
       ['Test: run all tests in this file', 'flask-conical', () => { if (tab && tab.kind === 'file') runTestFor(tab.rel, null, true); else setStatus('Open a test file first.'); }],
-      ['Switch light / dark theme', resolvedTheme() === 'light' ? 'moon' : 'sun', () => setThemeSetting(resolvedTheme() === 'light' ? 'dark' : 'light')],
+      [`Switch theme (now: ${THEME_META[themeSetting].label})`, THEME_META[themeSetting].icon, () => { const names = Object.keys(THEME_META); setThemeSetting(names[(names.indexOf(themeSetting) + 1) % names.length]); }],
       ['Font size: larger', 'plus', () => changeFontSize(1)],
       ['Font size: smaller', 'minus', () => changeFontSize(-1)],
       ['Font size: reset', 'refresh-cw', () => changeFontSize(0)],
@@ -1757,9 +1801,9 @@
     if (!body) {
       const filters = el('div', { class: 'dbg-filters' }, ...DEBUG_FILTERS.map(([k, label]) => el('button', { class: `dbg-f${state.debug.filter === k ? ' active' : ''}`, 'data-k': k, text: label, onclick: () => { state.debug.filter = k; host.querySelectorAll('.dbg-f').forEach((b) => b.classList.toggle('active', b.dataset.k === k)); renderDebug(); } })));
       const bar = el('div', { class: 'dbg-bar' }, filters,
-        el('button', { id: 'dbg-copy', text: 'Copy', title: 'Copy what is shown to the clipboard', onclick: () => { api.copy(debugText()); setStatus('Debug log copied.'); } }),
-        el('button', { id: 'dbg-save', text: 'Save…', title: 'Save the whole log to a file', onclick: async () => { const f = await api.debug.save(); if (f) setStatus(`Debug log saved to ${f}`); } }),
-        el('button', { id: 'dbg-clear', text: 'Clear', onclick: async () => { await api.debug.clear(); state.debug.items = []; renderDebug(); } }));
+        el('button', { id: 'dbg-copy', title: 'Copy what is shown to the clipboard', onclick: () => { api.copy(debugText()); setStatus('Debug log copied.'); } }, ic('clipboard-copy'), 'Copy'),
+        el('button', { id: 'dbg-save', title: 'Save the whole log to a file', onclick: async () => { const f = await api.debug.save(); if (f) setStatus(`Debug log saved to ${f}`); } }, ic('download'), 'Save…'),
+        el('button', { id: 'dbg-clear', onclick: async () => { await api.debug.clear(); state.debug.items = []; renderDebug(); } }, ic('trash-2'), 'Clear'));
       body = el('div', { class: 'dbg-body', onscroll: () => { state.debug.follow = body.scrollTop + body.clientHeight >= body.scrollHeight - 8; } });
       host.replaceChildren(bar, body);
     }
@@ -2081,14 +2125,14 @@
     const host = $('#review');
     const rv = state.review;
     const head = el('div', { class: 'p-head' });
-    if (rv.running) head.append(el('b', { text: 'Reviewing… (sending the diff to your review command)' }), el('button', { text: 'Cancel', onclick: () => api.review.cancel() }));
+    if (rv.running) head.append(el('b', { text: 'Reviewing… (sending the diff to your review command)' }), el('button', { onclick: () => api.review.cancel() }, ic('x'), 'Cancel'));
     else {
       head.append(el('b', { text: rv.error ? 'Review failed' : 'AI review' }));
       if (rv.output) head.append(el('span', { class: 'spacer' }),
-        el('button', { text: 'Copy', onclick: () => api.copy(rv.output) }),
-        el('button', { text: 'Send to terminal', title: 'Paste the review into the focused terminal so the agent can act on it', onclick: () => pasteIntoTerminal(`Please address this code review:\n${rv.output}\n`) }),
-        el('button', { text: 'Run again', onclick: runReview }));
-      else head.append(el('span', { class: 'spacer' }), el('button', { text: 'Run again', onclick: runReview }));
+        el('button', { onclick: () => api.copy(rv.output) }, ic('clipboard-copy'), 'Copy'),
+        el('button', { title: 'Paste the review into the focused terminal so the agent can act on it', onclick: () => pasteIntoTerminal(`Please address this code review:\n${rv.output}\n`) }, ic('send'), 'Send to terminal'),
+        el('button', { onclick: runReview }, ic('refresh-cw'), 'Run again'));
+      else head.append(el('span', { class: 'spacer' }), el('button', { onclick: runReview }, ic('refresh-cw'), 'Run again'));
     }
     const pre = el('pre', { class: 'review-out' });
     if (rv.error) pre.append(rv.error);
@@ -2128,7 +2172,7 @@
     const shell = el('input', { type: 'text', placeholder: api.platform === 'win32' ? 'default: powershell.exe  (or cmd.exe, a Git Bash path...)' : 'default: $SHELL', value: settings.shell || '' });
     const shellArgs = el('input', { type: 'text', placeholder: 'optional arguments, space separated', value: (settings.shellArgs || []).join(' ') });
     const review = el('input', { type: 'text', value: settings.reviewCommand || '', placeholder: defaults.reviewCommand });
-    const themeSel = el('select', null, el('option', { value: 'system', text: 'Follow the system' }), el('option', { value: 'light', text: 'Light' }), el('option', { value: 'dark', text: 'Dark' }));
+    const themeSel = el('select', null, ...Object.entries(THEME_META).map(([value, m]) => el('option', { value, text: value === 'system' ? 'Follow the system' : m.label })));
     themeSel.value = settings.theme || defaults.theme || 'system';
     const auto = el('input', { type: 'checkbox' }); auto.checked = settings.autoCheck !== undefined ? !!settings.autoCheck : !!defaults.autoCheck;
     const cp = el('input', { type: 'checkbox' }); cp.checked = settings.autoCheckpoint !== undefined ? !!settings.autoCheckpoint : !!defaults.autoCheckpoint;
@@ -2217,7 +2261,7 @@
       const h = el('textarea', { rows: '2', class: 'agent-hint', placeholder: 'Standing instructions for this agent (optional, Claude Code only). Given with every session; add project rules in .ide/agent-hint.md', spellcheck: 'false' });
       h.value = a.hint || '';
       h.addEventListener('input', () => { if (h.value.trim()) a.hint = h.value; else delete a.hint; });
-      return el('div', { class: 'agent-block' }, el('div', { class: 'agent-row' }, n, c, e, isLocalAgent(a) && /^\s*(?:[^\s]*[\\/])?claude/i.test(a.command || '') ? el('button', { text: 'Test', title: 'Check that this model can be sent a file, read one and write one to disk', onclick: () => testAgentModel(a) }) : '', el('button', { text: '×', title: 'Remove', onclick: () => { agents.splice(i, 1); drawAgents(); } })), h);
+      return el('div', { class: 'agent-block' }, el('div', { class: 'agent-row' }, n, c, e, isLocalAgent(a) && /^\s*(?:[^\s]*[\\/])?claude/i.test(a.command || '') ? el('button', { title: 'Check that this model can be sent a file, read one and write one to disk', onclick: () => testAgentModel(a) }, ic('flask-conical'), 'Test') : '', el('button', { class: 'icon danger', title: 'Remove', 'aria-label': 'Remove agent', onclick: () => { agents.splice(i, 1); drawAgents(); } }, ic('trash-2'))), h);
     }));
     drawAgents();
     const close = () => $('#modal').classList.add('hidden');
@@ -2326,7 +2370,7 @@
         urlNote,
         el('div', { class: 'line' },
           presetSel,
-          el('button', { text: '+ Add agent', onclick: () => { agents.push({ name: '', command: '' }); drawAgents(); } })),
+          el('button', { onclick: () => { agents.push({ name: '', command: '' }); drawAgents(); } }, ic('plus'), 'Add agent')),
         el('label', { class: 'check', title: 'Loads a local model when you start its agent and pings it every 3 minutes while its terminal is open, so Ollama does not unload it after 5 idle minutes' }, warmOn, ' Keep local models loaded while their terminal is open, for ', warmFor),
         el('label', { class: 'check', title: 'A laptop cannot hold two models: other models loaded in Ollama (on this machine only, and not those of terminals still open) are unloaded before yours is loaded' }, unloadOn, ' Unload other models from this machine\'s Ollama before loading yours'),
         el('label', { class: 'check', title: 'qwen3 models think at length before every answer, which on a laptop can take minutes. /no_think, added to the standing instructions, tells them not to.' }, noThinkOn, ' Turn off qwen3 thinking (adds /no_think to the instructions)'),
@@ -2339,7 +2383,7 @@
         el('div', { class: 'hint', text: 'Claude Code on a local model also gets settings that make it behave (no calls to Anthropic, all model aliases on your model, the real context size, long timeouts). Local-model buttons are checked before they start: Ollama running, model installed, context at least 32k. Standing instructions per agent are written to a file and passed with --append-system-prompt-file.' })),
       el('div', { class: 'field' }, el('label', { text: 'Review command (the review prompt is piped to its stdin)' }), review,
         el('label', { text: 'Review rules (all projects). A REVIEW.md in the project root is added after these.' }), rulesIn,
-        el('div', null, el('button', { text: 'Use a local model (ollama run)', title: 'Free and private, but a small local model reviews less well than Claude', onclick: () => { review.value = 'ollama run qwen3.5'; } }))),
+        el('div', null, el('button', { title: 'Free and private, but a small local model reviews less well than Claude', onclick: () => { review.value = 'ollama run qwen3.5'; } }, ic('cpu'), 'Use a local model (ollama run)'))),
       el('div', { class: 'field' }, el('label', { class: 'check' }, auto, ' Run fast checks automatically when files change')),
       el('div', { class: 'field' }, headWithHelp('Human in the loop', 'How much the agent may do on its own. Lower levels make it ask or explain more before and after it works. Pick one and the detailed settings below follow it.'), lvlSel, lvlHint),
       el('div', { class: 'field' }, headWithHelp('Fix loop', 'When the agent goes quiet, Bazinga runs your checks (lint, tests). If something fails it sends the problems back to the agent so it fixes them, a few rounds at most.'),
@@ -2358,7 +2402,7 @@
         el('label', { class: 'check' }, scrubOn, ' Start agent terminals without credentials from your environment (tokens, secrets, passwords, cloud keys)'),
         scrubAllow,
         el('label', { class: 'check' }, ccOn, ' Run agent runs in a Docker container (sees only the run’s folder and the repository’s git data)'),
-        el('div', { class: 'line wrap' }, el('button', { id: 'cc-setup', text: 'Check Docker / build the image…', title: 'Looks for Docker and the image, and builds it from the files shipped with Bazinga', onclick: async (ev) => {
+        el('div', { class: 'line wrap' }, el('button', { id: 'cc-setup', title: 'Looks for Docker and the image, and builds it from the files shipped with Bazinga', onclick: async (ev) => {
           const btn = ev.currentTarget; const st = $('#cc-status'); btn.disabled = true;
           try {
             let r = await api.container.setup({ image: ccImage.value.trim() || undefined });
@@ -2370,7 +2414,7 @@
             }
             if (!r.error && r.ok) ccOn.checked = true;
           } finally { btn.disabled = false; }
-        } }), el('span', { id: 'cc-status', class: 'hint' })),
+        } }, ic('package'), 'Check Docker / build the image…'), el('span', { id: 'cc-status', class: 'hint' })),
         el('div', { class: 'line wrap' }, 'Image ', ccImage, ' · ', ccNet, ' · memory ', ccMem, ' · cpus ', ccCpu),
         el('div', { class: 'line wrap' }, 'Pass these variables in: ', ccEnv),
         el('div', { class: 'hint', text: 'The button above builds the image (or by hand: docker build -t bazinga-agent:latest docker/agent). Log in to the agent inside the container once (kept in a Docker volume), or pass an API key variable. Applies to “New agent run”; the toolbar agent buttons still run on your machine. A container does not protect the repository’s git data or what the agent sends over the network.' }),
@@ -2389,15 +2433,15 @@
       el('div', { class: 'field' }, el('label', { text: 'Terminal scrollback (lines kept per terminal; each one costs memory)' }), scrollback),
       el('div', { class: 'field' }, el('label', { class: 'check' }, cp, ' Save a checkpoint before an agent terminal starts')),
       el('div', { class: 'hint', text: 'These are your personal defaults. A project’s .ide/config.json overrides them.' }),
-      el('div', { class: 'actions' }, el('button', { text: 'Cancel', onclick: close }), el('button', { class: 'primary', text: 'Save', onclick: save }))];
+      el('div', { class: 'actions' }, el('button', { onclick: close }, ic('x'), 'Cancel'), el('button', { class: 'primary', onclick: save }, ic('check'), 'Save'))];
     // ---- tabs: related settings together; every control stays in the DOM, so Save reads all of them whichever tab is open
     const TABS = [
-      ['general', 'General', [1, 15, 16, 14, 2, 3]],
-      ['agents', 'Agents', [4, 10, 17]],
-      ['review', 'Review & checks', [5, 6]],
-      ['oversight', 'Oversight', [7, 8, 9]],
-      ['safety', 'Safety', [11]],
-      ['editor', 'Editor', [12, 13]],
+      ['general', 'General', [1, 15, 16, 14, 2, 3], 'settings'],
+      ['agents', 'Agents', [4, 10, 17], 'bot'],
+      ['review', 'Review & checks', [5, 6], 'shield-check'],
+      ['oversight', 'Oversight', [7, 8, 9], 'eye'],
+      ['safety', 'Safety', [11], 'lock'],
+      ['editor', 'Editor', [12, 13], 'file-code'],
     ];
     const used = new Set(TABS.flatMap((t) => t[2]).concat([0, 18, 19]));
     if (f.some((_, i) => !used.has(i))) throw new Error('A settings field is not assigned to a tab.');
@@ -2411,7 +2455,7 @@
       for (const [k, panel] of panels) panel.classList.toggle('hidden', k !== id);
       try { localStorage.setItem('bazinga.settingsTab', id); } catch { /* ignore */ }
     };
-    for (const [id, label] of TABS) tabBtns.set(id, el('button', { class: 'set-tab', role: 'tab', id: `set-tab-${id}`, text: label, onclick: () => showTab(id) }));
+    for (const [id, label, , icon] of TABS) tabBtns.set(id, el('button', { class: 'set-tab', role: 'tab', id: `set-tab-${id}`, onclick: () => showTab(id) }, ic(icon), label));
     const tabBar = el('div', { class: 'set-tabs', role: 'tablist' }, ...tabBtns.values());
     tabBar.addEventListener('keydown', (e) => {
       if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
@@ -2594,7 +2638,7 @@
   function overlayPanel(title, body, { onClose } = {}) {
     const back = el('div', { class: 'overlay-panel' });
     const close = () => { back.remove(); if (onClose) onClose(); };
-    const button = el('button', { class: 'primary', text: 'Close', onclick: close });
+    const button = el('button', { class: 'primary', onclick: close }, ic('check'), 'Close');
     back.append(el('div', { class: 'overlay-box' }, el('h3', { text: title }), body, el('div', { class: 'actions' }, button)));
     document.body.append(back);
     return { close, root: back, button };
@@ -2878,10 +2922,10 @@
     fleetUi.view = v;
     checkBestOf(); if (boardUi.open) renderBoard();
     const sm = v.summary;
-    const stat = (n, label, cls, filter) => el('button', { class: `fl-stat ${cls}${fleetUi.filter === filter ? ' on' : ''}`, title: `Show only: ${label}`, onclick: () => { fleetUi.filter = fleetUi.filter === filter ? 'all' : filter; renderFleet(); } }, el('b', { text: String(n) }), ` ${label}`);
+    const stat = (n, label, cls, filter, icon) => el('button', { class: `fl-stat ${cls}${fleetUi.filter === filter ? ' on' : ''}`, title: `Show only: ${label}`, onclick: () => { fleetUi.filter = fleetUi.filter === filter ? 'all' : filter; renderFleet(); } }, ic(icon), el('b', { text: String(n) }), ` ${label}`);
     const money = (c) => (c === null ? '' : ` · ~$${c < 0.01 ? c.toFixed(4) : c.toFixed(2)}`);
     const head = el('div', { class: 'fl-head' },
-      el('div', { class: 'fl-stats' }, stat(sm.running, 'running', 'ok', 'running'), stat(sm.waiting, 'waiting', 'warn', 'waiting'), stat(sm.stale, 'stale', 'warn', 'stale'), stat(sm.blowouts, 'context full', 'err', 'blowouts')),
+      el('div', { class: 'fl-stats' }, stat(sm.running, 'running', 'ok', 'running', 'play'), stat(sm.waiting, 'waiting', 'warn', 'waiting', 'timer'), stat(sm.stale, 'stale', 'warn', 'stale', 'history'), stat(sm.blowouts, 'context full', 'err', 'blowouts', 'database')),
       el('div', { class: 'fl-tot muted', title: 'Model tokens used by the agents in this window. The cost is an estimate from the prices in .ide/config.json (fleet.prices); local models cost nothing.', text: `${sm.tokensText}${money(sm.cost)}` }),
       el('div', { class: 'fl-tools' },
         el('input', { class: 'fl-q', type: 'search', placeholder: 'Filter…', value: fleetUi.text, 'aria-label': 'Filter agents', oninput: (e) => { fleetUi.text = e.target.value; scheduleFleet(); } }),
@@ -2953,7 +2997,7 @@
       el('div', { class: 'field' }, el('label', { text: 'Name' }), name),
       el('div', { class: 'field' }, el('label', { text: 'Scope' }), allow),
       el('div', { class: 'hint', text: 'Every run gets its own git worktree and branch. Afterwards the results are ranked (gates first, then the smallest change); you read the diff and keep one. Local models share one GPU: two or three runs is plenty.' }),
-      el('div', { class: 'actions' }, el('button', { text: 'Cancel', onclick: close }), el('button', { class: 'primary', id: 'bo-start', text: 'Start all', onclick: start })));
+      el('div', { class: 'actions' }, el('button', { onclick: close }, ic('x'), 'Cancel'), el('button', { class: 'primary', id: 'bo-start', onclick: start }, ic('play'), 'Start all')));
     $('#modal').classList.remove('hidden');
     task.focus();
   }
@@ -3009,7 +3053,7 @@
             el('div', { class: 'run-title' }, el('b', { text: `${r.place}. ${r.name}` }), r.best ? el('span', { class: 'chip live', text: 'suggested' }) : null, el('span', { class: 'muted', text: r.agent })),
             el('div', { class: r.errors ? 'danger' : 'muted', text: r.text }),
             el('div', { class: 'run-acts' },
-              el('button', { text: 'Review', onclick: () => { close(); if (run) reviewRun(run); } }),
+              el('button', { onclick: () => { close(); if (run) reviewRun(run); } }, ic('eye'), 'Review'),
               el('button', { class: 'bo-keep', title: 'Merge this one and discard the other runs of the group', onclick: () => keepOne(run, ids) }, ic('git-merge'), 'Keep this one…')));
         }),
         el('div', { class: 'hint', text: ranked.note }));
@@ -3033,7 +3077,7 @@
     $('#dialog').replaceChildren(el('h3', { text: `Results: ${group.name}` }),
       el('label', { class: 'check' }, gates, ' Run the gates on every result (slower, much better ranking)'),
       out,
-      el('div', { class: 'actions' }, el('button', { text: 'Close', onclick: close }), el('button', { class: 'primary', id: 'bo-rerank', text: 'Rank', onclick: go })));
+      el('div', { class: 'actions' }, el('button', { onclick: close }, ic('x'), 'Close'), el('button', { class: 'primary', id: 'bo-rerank', onclick: go }, ic('list-ordered'), 'Rank')));
     $('#modal').classList.remove('hidden');
     go();
   }
@@ -3098,7 +3142,7 @@
       el('div', { class: 'run-acts' }, el('button', { class: 'primary', onclick: () => startFromItem(w) }, ic('play'), 'Start run…'))));
     host.replaceChildren(
       el('div', { class: 'bd-top' }, el('h3', { text: 'Board' }), el('div', { class: 'bd-tools' }, provSel,
-        el('button', { id: 'bd-load', onclick: loadBacklog, text: boardUi.loading ? 'Loading…' : boardUi.loaded ? 'Reload backlog' : 'Load backlog' }),
+        el('button', { id: 'bd-load', onclick: loadBacklog }, ic('refresh-cw'), boardUi.loading ? 'Loading…' : boardUi.loaded ? 'Reload backlog' : 'Load backlog'),
         el('button', { class: 'icon', title: 'Close the board', 'aria-label': 'Close', onclick: closeBoard }, ic('x')))),
       boardUi.error ? el('div', { class: 'hint danger', text: boardUi.error }) : null,
       el('div', { class: 'bd-cols' },
@@ -3121,10 +3165,10 @@
     const act = el('div', { class: 'actions' });
     const draw = () => {
       msg.textContent = updateUi.text || 'Press “Check now”. Nothing is downloaded or installed without your OK.';
-      const buttons = [el('button', { text: 'Close', onclick: close })];
-      if (updateUi.status === 'available') buttons.push(el('button', { class: 'primary', id: 'upd-download', text: 'Download', onclick: async () => { const r = await api.updates.download(); if (r.error) { msg.textContent = r.error; msg.classList.add('danger'); } } }));
-      else if (updateUi.status === 'downloaded') buttons.push(el('button', { class: 'primary', id: 'upd-install', text: 'Restart and install', onclick: () => api.updates.install() }));
-      else buttons.push(el('button', { class: 'primary', id: 'upd-check', text: 'Check now', disabled: updateUi.status === 'checking' || updateUi.status === 'progress', onclick: check }));
+      const buttons = [el('button', { onclick: close }, ic('x'), 'Close')];
+      if (updateUi.status === 'available') buttons.push(el('button', { class: 'primary', id: 'upd-download', onclick: async () => { const r = await api.updates.download(); if (r.error) { msg.textContent = r.error; msg.classList.add('danger'); } } }, ic('download'), 'Download'));
+      else if (updateUi.status === 'downloaded') buttons.push(el('button', { class: 'primary', id: 'upd-install', onclick: () => api.updates.install() }, ic('refresh-cw'), 'Restart and install'));
+      else buttons.push(el('button', { class: 'primary', id: 'upd-check', disabled: updateUi.status === 'checking' || updateUi.status === 'progress', onclick: check }, ic('refresh-cw'), 'Check now'));
       act.replaceChildren(...buttons);
     };
     const check = async () => {
@@ -3181,8 +3225,8 @@
     $('#terms').append(container);
     const log = el('div', { class: 'acp-log', tabindex: '0' });
     const input = el('textarea', { class: 'acp-input', rows: '2', placeholder: 'Message to the agent (Ctrl+Enter sends)…', spellcheck: 'false', 'aria-label': 'Message to the agent' });
-    const sendBtn = el('button', { class: 'primary acp-send', text: 'Send' });
-    const stopBtn = el('button', { class: 'acp-stop', text: 'Stop turn', title: 'Ask the agent to stop what it is doing' });
+    const sendBtn = el('button', { class: 'primary acp-send' }, ic('send'), 'Send');
+    const stopBtn = el('button', { class: 'acp-stop', title: 'Ask the agent to stop what it is doing' }, ic('square'), 'Stop turn');
     container.append(log, el('div', { class: 'acp-bar' }, input, el('div', { class: 'acp-btns' }, sendBtn, stopBtn)));
     const noop = () => {};
     const term = new Proxy({ options: {}, cols: 80, rows: 24, buffer: { active: { length: 0, getLine: () => null } }, hasSelection: () => false, getSelection: () => '', focus: () => { try { input.focus(); } catch { /* hidden */ } } }, { get: (t, k) => (k in t ? t[k] : noop) });
@@ -3261,7 +3305,7 @@
           row.replaceChildren(el('span', { class: 'muted', text: label ? `You chose: ${label}` : 'Cancelled' }));
           entry.prompt = null; await api.acp.answer(id, e.id, optionId); renderBottomTabs(); renderAgentsPane();
         };
-        for (const o of e.options) row.append(el('button', { class: o.kind.startsWith('allow') ? 'primary' : o.kind.startsWith('reject') ? 'danger' : '', text: o.name, onclick: () => answer(o.optionId, o.name) }));
+        for (const o of e.options) row.append(el('button', { class: o.kind.startsWith('allow') ? 'primary' : o.kind.startsWith('reject') ? 'danger' : '', onclick: () => answer(o.optionId, o.name) }, o.kind.startsWith('allow') ? ic('check') : o.kind.startsWith('reject') ? ic('x') : null, o.name));
         card.append(row); log.append(card); log.scrollTop = log.scrollHeight;
         renderBottomTabs(); renderAgentsPane();
         break;
@@ -3333,7 +3377,7 @@
 
   function initAgentsPane() {
     $('#side-agents').replaceChildren(
-      el('div', { class: 'c-head' }, el('div', { class: 'line' },
+      el('div', { class: 'c-head' }, el('div', { class: 'line wrap' },
         el('button', { class: 'primary', id: 'a-new', onclick: openRunDialog }, ic('plus'), 'New agent run…'),
         el('button', { id: 'a-workflow', title: 'Chain agent steps with gates and approvals', onclick: openWorkflows }, ic('workflow'), 'Workflow…'),
         el('button', { id: 'a-debug', class: 'icon', title: 'Debug log: what the workflow and the agents are doing', 'aria-label': 'Debug log', onclick: () => showDebug() }, ic('bug')),
@@ -3393,7 +3437,7 @@
     const firstLocal = agents.findIndex(isLocalAgent);
     const firstFrontier = agents.findIndex((a) => !isLocalAgent(a));
     const localVsFrontier = firstLocal >= 0 && firstFrontier >= 0
-      ? el('button', { text: `Compare ${agentLabel(agents[firstLocal])} with ${agentLabel(agents[firstFrontier])}`, title: 'Same task for both, each in its own worktree; compare the results afterwards', onclick: () => { agentSel.value = String(firstLocal); second.value = String(firstFrontier); } })
+      ? el('button', { title: 'Same task for both, each in its own worktree; compare the results afterwards', onclick: () => { agentSel.value = String(firstLocal); second.value = String(firstFrontier); } }, ic('git-compare'), `Compare ${agentLabel(agents[firstLocal])} with ${agentLabel(agents[firstFrontier])}`)
       : null;
     const templates = (state.project && state.project.taskTemplates) || [];
     const tplSel = el('select', null, el('option', { value: '', text: 'No template' }), ...templates.map((t, i) => el('option', { value: String(i), text: `${t.name}${t.source === 'built-in' ? '' : ` (${t.source})`}` })));
@@ -3446,14 +3490,14 @@
     $('#dialog').replaceChildren(
       el('h3', { text: 'New agent run' }),
       templates.length ? el('div', { class: 'field' }, el('label', { text: 'Template' }), tplSel) : '',
-      el('div', { class: 'field' }, el('label', { text: 'Task' }), task, el('div', { class: 'line' }, el('button', { id: 'run-pull', text: 'Pull in a work item…', title: 'Azure Boards or Jira: fill the task from a story or bug', onclick: () => openWorkItems((text, item) => openRunDialog({ task: text, name: `${item.ref || `AB#${item.id}`} ${item.title}`.slice(0, 60) }), () => openRunDialog({ task: task.value }))  }))),
+      el('div', { class: 'field' }, el('label', { text: 'Task' }), task, el('div', { class: 'line' }, el('button', { id: 'run-pull', title: 'Azure Boards or Jira: fill the task from a story or bug', onclick: () => openWorkItems((text, item) => openRunDialog({ task: text, name: `${item.ref || `AB#${item.id}`} ${item.title}`.slice(0, 60) }), () => openRunDialog({ task: task.value }))  }, ic('external-link'), 'Pull in a work item…'))),
       el('div', { class: 'field' }, el('label', { text: 'Agent' }), agentSel, advice),
-      el('div', { class: 'field' }, el('label', null, 'Second agent, same task (to compare)', helpQ('Starts a second run with the same task for another agent, each in its own copy. Afterwards “Compare…” shows both results side by side so you keep the better one.')), second, localVsFrontier ? el('div', { class: 'line' }, localVsFrontier) : '', el('div', { class: 'line' }, el('button', { id: 'run-bestof', text: 'Best of several agents…', title: 'The same task for up to six agents, each in its own worktree, then a ranking of the results', onclick: () => openBestOf({ task: task.value, name: name.value }) }))),
+      el('div', { class: 'field' }, el('label', null, 'Second agent, same task (to compare)', helpQ('Starts a second run with the same task for another agent, each in its own copy. Afterwards “Compare…” shows both results side by side so you keep the better one.')), second, localVsFrontier ? el('div', { class: 'line' }, localVsFrontier) : '', el('div', { class: 'line' }, el('button', { id: 'run-bestof', title: 'The same task for up to six agents, each in its own worktree, then a ranking of the results', onclick: () => openBestOf({ task: task.value, name: name.value }) }, ic('list-ordered'), 'Best of several agents…'))),
       el('div', { class: 'field' }, el('label', { text: 'Name' }), name),
       el('div', { class: 'field' }, el('label', null, 'Scope', helpQ('Files the agent should stay within, for example src/** . Changes outside it are flagged when you review. Leave empty for no limit.')), allow),
       el('div', { class: 'field' }, el('label', { class: 'check' }, boxOn, ' Run in a Docker container (the agent sees only this run’s folder; credentials from your environment stay out)'), boxNote),
       el('div', { class: 'hint', text: 'A new git worktree and branch (agent/<name>) are created from the current commit, next to the repository. Your own working tree is not touched.' }),
-      el('div', { class: 'actions' }, el('button', { text: 'Cancel', onclick: close }), el('button', { class: 'primary', text: 'Start', onclick: start })));
+      el('div', { class: 'actions' }, el('button', { onclick: close }, ic('x'), 'Cancel'), el('button', { class: 'primary', onclick: start }, ic('play'), 'Start')));
     $('#modal').classList.remove('hidden');
     task.focus();
   }
@@ -3494,8 +3538,8 @@
     };
     scope.addEventListener('change', load); filter.addEventListener('input', draw); providerSel.addEventListener('change', load);
     $('#dialog').replaceChildren(el('h3', { text: 'Pull in a work item' }),
-      el('div', { class: 'line wrap' }, providerSel, scope, filter, el('button', { id: 'wi-jira-setup', text: 'Set up Jira…', title: 'Base URL, email and API token for Jira Cloud or Server', onclick: () => openJiraSetup(prov.jiraSettings || {}, prov.secure !== false, () => openWorkItems(onPick, back)) })), status, listHost, note,
-      el('div', { class: 'actions' }, el('button', { text: back ? 'Back' : 'Close', onclick: back || close })));
+      el('div', { class: 'line wrap' }, providerSel, scope, filter, el('button', { id: 'wi-jira-setup', title: 'Base URL, email and API token for Jira Cloud or Server', onclick: () => openJiraSetup(prov.jiraSettings || {}, prov.secure !== false, () => openWorkItems(onPick, back)) }, ic('settings'), 'Set up Jira…')), status, listHost, note,
+      el('div', { class: 'actions' }, el('button', { onclick: back || close }, back ? ic('chevron-left') : ic('x'), back ? 'Back' : 'Close')));
     $('#modal').classList.remove('hidden');
     await load();
   }
@@ -3513,13 +3557,13 @@
     const syncFlavor = () => { emailField.classList.toggle('hidden', flavor.value === 'server'); };
     flavor.addEventListener('change', syncFlavor); syncFlavor();
     const msg = el('div', { class: 'hint', id: 'jira-msg' });
-    const save = el('button', { class: 'primary', id: 'jira-save', text: 'Save and check', onclick: async () => {
+    const save = el('button', { class: 'primary', id: 'jira-save', onclick: async () => {
       msg.classList.remove('danger'); msg.textContent = 'Checking the connection…';
       const r = await api.workitems.jiraSave({ flavor: flavor.value, baseUrl: url.value, email: email.value, project: project.value, token: token.value });
       if (r.error) { msg.classList.add('danger'); msg.textContent = r.error; return; }
       msg.textContent = `Connected as ${r.name}.`;
       setTimeout(done, 600);
-    } });
+    } }, ic('check'), 'Save and check');
     $('#dialog').replaceChildren(el('h3', { text: 'Connect Jira' }),
       el('div', { class: 'field' }, el('label', { text: 'Which Jira' }), flavor),
       el('div', { class: 'field' }, el('label', { text: 'Base URL' }), url),
@@ -3529,7 +3573,7 @@
       secure ? null : el('div', { class: 'hint danger', text: 'This computer has no secure key store available (Keychain, Windows credential store, libsecret), so a token cannot be saved safely and will be refused.' }),
       msg,
       el('div', { class: 'hint', text: 'Read-only: Bazinga only reads issues. The token is stored encrypted with your operating system’s key store.' }),
-      el('div', { class: 'actions' }, el('button', { text: 'Cancel', onclick: done }), cur.hasToken ? el('button', { class: 'danger', text: 'Forget token', onclick: async () => { await api.workitems.jiraForget(); done(); } }) : null, save));
+      el('div', { class: 'actions' }, el('button', { onclick: done }, ic('x'), 'Cancel'), cur.hasToken ? el('button', { class: 'danger', onclick: async () => { await api.workitems.jiraForget(); done(); } }, ic('trash-2'), 'Forget token') : null, save));
     $('#modal').classList.remove('hidden');
     return { close };
   }
@@ -3545,11 +3589,11 @@
     const row = (level, s) => el('div', { class: 'skill-row' },
       el('div', { class: 'skill-main' }, el('b', { text: s.name }), s.description ? el('span', { class: 'muted', text: ` ${s.description}` }) : null,
         el('div', { class: 'muted', text: s.source ? `from ${s.source}${s.provenance && s.provenance.commit ? ` @ ${s.provenance.commit.slice(0, 7)}` : ''}` : 'added by hand' })),
-      s.provenance && s.provenance.url ? el('button', { text: 'Update', title: 'Fetch the source again and replace this skill when it changed', onclick: async () => {
+      s.provenance && s.provenance.url ? el('button', { title: 'Fetch the source again and replace this skill when it changed', onclick: async () => {
         setStatus(`Updating ${s.name}…`);
         const r = await api.skills.update({ level, name: s.name });
         setStatus(r.error ? r.error : r.unchanged ? `${s.name} is up to date.` : `${s.name} updated.`); await draw();
-      } }) : null,
+      } }, ic('refresh-cw'), 'Update') : null,
       el('button', { class: 'icon danger', title: 'Remove this skill', 'aria-label': `Remove ${s.name}`, onclick: async () => {
         if (!window.confirm(`Remove the skill “${s.name}” (${level === 'ide' ? 'IDE level' : 'this project'})?`)) return;
         const r = await api.skills.remove({ level, name: s.name }); if (r.error) setStatus(r.error); await draw();
@@ -3576,8 +3620,8 @@
           k.hasScripts ? el('div', { class: 'hint danger', text: 'Contains files other than text (scripts?). An agent may run them. Read them before you install.' }) : null,
           el('details', null, el('summary', { text: `Preview SKILL.md · ${k.fileCount} file${k.fileCount === 1 ? '' : 's'}` }), el('pre', { class: 'detail', text: `${k.files.join('\n')}\n\n${k.preview}` })))),
         el('div', { class: 'actions' },
-          el('button', { text: 'Cancel', onclick: () => { dropPending(); fill(fetchHost); } }),
-          el('button', { class: 'primary', text: 'Install selected', onclick: async () => {
+          el('button', { onclick: () => { dropPending(); fill(fetchHost); } }, ic('x'), 'Cancel'),
+          el('button', { class: 'primary', onclick: async () => {
             const names = checks.filter((c) => c.checked).map((c) => c.dataset.name);
             if (!names.length) return;
             const level = levelSel.value;
@@ -3585,7 +3629,7 @@
             const r = await api.skills.install({ token: res.token, names, level, replace: true });
             pending = null; fill(fetchHost);
             setStatus(r.error ? r.error : `Installed ${r.installed.join(', ')}.`); await draw();
-          } })));
+          } }, ic('download'), 'Install selected')));
     };
     const doFetch = async (want = '') => {
       dropPending();
@@ -3608,7 +3652,7 @@
       if (!r.results.length) { fill(found, el('div', { class: 'muted', text: 'Nothing found.' })); return; }
       fill(found, ...r.results.slice(0, 12).map((s) => el('div', { class: 'skill-hit' },
         el('div', { class: 'skill-main' }, el('b', { text: s.name }), el('span', { class: 'muted', text: `  ${s.source} · ${s.installs.toLocaleString()} installs` })),
-        s.installable ? el('button', { title: 'Download the repository, show what is in it and ask before installing', text: 'Preview…', onclick: () => { src.value = s.source; doFetch(s.slug); } }) : el('span', { class: 'muted', title: 'Only GitHub repositories (owner/repo) can be installed here', text: 'not from GitHub' }))),
+        s.installable ? el('button', { title: 'Download the repository, show what is in it and ask before installing', onclick: () => { src.value = s.source; doFetch(s.slug); } }, ic('eye'), 'Preview…') : el('span', { class: 'muted', title: 'Only GitHub repositories (owner/repo) can be installed here', text: 'not from GitHub' }))),
       el('div', { class: 'hint', text: 'Anybody can publish a skill. A skill is instructions (sometimes scripts) your agent follows: read the preview before you install.' }));
     };
     q.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 350); });
@@ -3618,15 +3662,15 @@
       el('div', { class: 'agent-head', text: 'Find skills on the internet (skills.sh)' }),
       el('div', { class: 'line' }, q), found,
       el('div', { class: 'agent-head', text: 'Or add from a git repository (skills.sh style)' }),
-      el('div', { class: 'line' }, src, levelSel, el('button', { text: 'Fetch', onclick: doFetch })),
+      el('div', { class: 'line' }, src, levelSel, el('button', { onclick: doFetch }, ic('download'), 'Fetch')),
       fetchHost,
       el('div', { class: 'hint', text: 'Skills are plain folders with a SKILL.md, installed next to your agent’s own skills (setting “skillsDir”, default .claude/skills). Nothing is executed by the IDE.' }),
       el('div', { class: 'actions' },
-        el('button', { id: 'sk-sync', text: 'Sync to other agents', title: 'Copy skills installed earlier to the other agents’ folders and refresh the AGENTS.md list', onclick: async () => {
+        el('button', { id: 'sk-sync', title: 'Copy skills installed earlier to the other agents’ folders and refresh the AGENTS.md list', onclick: async () => {
           const r = await api.skills.sync();
           setStatus(r.error ? r.error : r.copied.length ? `Copied ${r.copied.length} skill folder${r.copied.length === 1 ? '' : 's'}.` : 'Everything was already in sync.'); await draw();
-        } }),
-        el('button', { class: 'primary', text: 'Close', onclick: () => { dropPending(); close(); } })));
+        } }, ic('refresh-cw'), 'Sync to other agents'),
+        el('button', { class: 'primary', onclick: () => { dropPending(); close(); } }, ic('check'), 'Close')));
     $('#modal').classList.remove('hidden');
     await draw();
   }
@@ -3838,11 +3882,11 @@
           info.quietAt && ['awaiting-gate', 'awaiting-approval', 'passed', 'failed'].includes(status) ? el('span', { class: 'muted', title: 'When Bazinga saw the agent go quiet and checked this step', text: `quiet ${new Date(info.quietAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` }) : null,
           info.why ? el('span', { class: 'muted', title: info.why, text: info.why.slice(0, 50) }) : null,
           status === 'running' && wfEntry(st, step.id) && wfEntry(st, step.id).prompt ? el('span', { class: 'chip warnchip', title: wfEntry(st, step.id).prompt.text, text: 'looks like a question' }) : null,
-          status === 'running' && wfEntry(st, step.id) ? el('button', { class: 'wf-done', title: 'The agent is finished: check this step’s gate now and go on. Use it when the agent stopped but the workflow did not notice.', text: 'Done', onclick: () => wfAction(st, step.id, 'done') }) : null,
-          status === 'awaiting-approval' ? el('button', { class: 'primary', text: 'Approve', onclick: () => wfAction(st, step.id, 'approve') }) : null,
-          status === 'failed' ? el('button', { title: 'Start this step’s agent again', text: 'Retry', onclick: () => wfAction(st, step.id, 'retry') }) : null,
-          ['running', 'awaiting-gate'].includes(status) && !wfLive(st, step.id) ? el('button', { class: 'wf-resume', title: 'The agent of this step is gone (the IDE was restarted or the terminal closed). Start it again in the same worktree; it is told to look at what is already done and finish the step.', text: 'Resume', onclick: () => wfAction(st, step.id, 'resume') }) : null,
-          ['failed', 'awaiting-approval', 'waiting', 'running'].includes(status) ? el('button', { text: 'Skip', onclick: () => wfAction(st, step.id, 'skip') }) : null,
+          status === 'running' && wfEntry(st, step.id) ? el('button', { class: 'wf-done', title: 'The agent is finished: check this step’s gate now and go on. Use it when the agent stopped but the workflow did not notice.', onclick: () => wfAction(st, step.id, 'done') }, ic('check'), 'Done') : null,
+          status === 'awaiting-approval' ? el('button', { class: 'primary', onclick: () => wfAction(st, step.id, 'approve') }, ic('check-check'), 'Approve') : null,
+          status === 'failed' ? el('button', { title: 'Start this step’s agent again', onclick: () => wfAction(st, step.id, 'retry') }, ic('refresh-cw'), 'Retry') : null,
+          ['running', 'awaiting-gate'].includes(status) && !wfLive(st, step.id) ? el('button', { class: 'wf-resume', title: 'The agent of this step is gone (the IDE was restarted or the terminal closed). Start it again in the same worktree; it is told to look at what is already done and finish the step.', onclick: () => wfAction(st, step.id, 'resume') }, ic('play'), 'Resume') : null,
+          ['failed', 'awaiting-approval', 'waiting', 'running'].includes(status) ? el('button', { onclick: () => wfAction(st, step.id, 'skip') }, ic('fast-forward'), 'Skip') : null,
           info.runId ? el('button', { class: 'icon', title: 'Review this step’s run', 'aria-label': 'Review', onclick: async () => { const r = await wfRunFor(info.runId); if (r) reviewRun(r); } }, ic('eye')) : null);
       }))));
   }
@@ -3910,16 +3954,16 @@
       el('div', { class: 'field' }, el('label', { text: 'How the steps run' }), modeSel, el('label', { text: 'When all steps passed' }), finishSel),
       stepsHost,
       editorGraph,
-      el('div', { class: 'line' }, el('button', { text: '+ Add step', onclick: () => { wf.steps.push({ id: nextId(), task: '', agent: '', gate: 'none', needs: wf.steps.length ? [wf.steps[wf.steps.length - 1].id] : [], approval: null, retries: 1, allow: '' }); draw(); validate(); } })),
+      el('div', { class: 'line' }, el('button', { onclick: () => { wf.steps.push({ id: nextId(), task: '', agent: '', gate: 'none', needs: wf.steps.length ? [wf.steps[wf.steps.length - 1].id] : [], approval: null, retries: 1, allow: '' }); draw(); validate(); } }, ic('plus'), 'Add step')),
       errBox,
       el('div', { class: 'field' }, el('label', { text: 'Save for' }), scopeSel),
       el('div', { class: 'hint', text: 'Saved as a small text file you can also edit by hand or review in a pull request. “Starts after” steps run in the same worktree when there is exactly one; steps without it run in parallel.' }),
-      el('div', { class: 'actions' }, el('button', { text: 'Cancel', onclick: () => openWorkflows() }), el('button', { class: 'primary', text: 'Save', onclick: async () => {
+      el('div', { class: 'actions' }, el('button', { onclick: () => openWorkflows() }, ic('x'), 'Cancel'), el('button', { class: 'primary', onclick: async () => {
         const r = await api.workflow.saveFile({ scope: scopeSel.value, file: scopeSel.value === source ? file : null, workflow: collect() });
         if (r.error) { errBox.textContent = r.error; return; }
         setStatus(`Workflow saved (${r.source}).`);
         openWorkflows();
-      } })));
+      } }, ic('check'), 'Save')));
     $('#modal').classList.remove('hidden');
   }
 
@@ -3971,9 +4015,9 @@
       body.replaceChildren(...v.items.map((i) => el('div', { class: `wfs-item wfs-${i.state}` }, el('span', { class: 'wfs-mark', text: ICON[i.state] }), el('span', { text: i.label }), i.detail ? el('span', { class: 'muted', text: ` · ${i.detail}` }) : null)));
       adviceBox.replaceChildren(...v.advice.map((t) => el('div', { text: t })));
       adviceBox.classList.toggle('danger', v.done && !v.ok);
-      if (v.done) { stop(); cleanBtn.disabled = false; startBtn.disabled = false; startBtn.textContent = 'Run again'; }
+      if (v.done) { stop(); cleanBtn.disabled = false; startBtn.disabled = false; startBtn.replaceChildren(ic('refresh-cw'), 'Run again'); }
     };
-    const startBtn = el('button', { class: 'primary', id: 'wfs-start', text: 'Run the self-check', onclick: async () => {
+    const startBtn = el('button', { class: 'primary', id: 'wfs-start', onclick: async () => {
       startBtn.disabled = true; cleanBtn.disabled = true;
       rememberAgent(pick.value);
       const def = await api.workflow.selfcheck();
@@ -3982,19 +4026,19 @@
       st = [...state.workflows.values()].filter((x) => x.name === def.workflow.name).pop();
       stop(); timer = setInterval(() => { if (!document.body.contains(body)) { stop(); return; } draw().catch(() => {}); }, 1000);
       await draw();
-    } });
-    const cleanBtn = el('button', { id: 'wfs-clean', text: 'Clean up', title: 'Forget the self-check workflow and discard its throw-away run', disabled: '', onclick: async () => {
+    } }, ic('play'), 'Run the self-check');
+    const cleanBtn = el('button', { id: 'wfs-clean', title: 'Forget the self-check workflow and discard its throw-away run', disabled: '', onclick: async () => {
       if (!st) return;
       const ids = [...new Set(Object.values(st.steps).map((x) => x.runId).filter(Boolean))];
       for (const t of state.terms.values()) if (t.wf && t.wf.wfId === st.id && t.id !== null && !t.exited) api.pty.kill(t.id);
       for (const id of ids) { try { await api.runs.discard(id, 'skip'); } catch { /* already gone */ } }
       state.workflows.delete(st.id); await api.workflow.remove(st.id); st = null; renderWorkflows(); await refreshRuns();
       body.replaceChildren(el('div', { class: 'muted', text: 'Cleaned up.' })); adviceBox.replaceChildren(); cleanBtn.disabled = true;
-    } });
+    } }, ic('trash-2'), 'Clean up');
     $('#dialog').replaceChildren(el('h3', { text: 'Workflow self-check' }),
       el('div', { class: 'hint', text: 'Runs a throw-away workflow with one agent: step 1 writes a small file, step 2 reads it. It shows whether Bazinga is told that an agent finished, whether the check runs, and whether step 2 starts by itself. Takes about a minute on a local model.' }),
       el('div', { class: 'field' }, el('label', { text: 'Agent / model' }), pick), body, adviceBox,
-      el('div', { class: 'actions' }, el('button', { text: 'Close', onclick: () => { stop(); close(); } }), cleanBtn, startBtn));
+      el('div', { class: 'actions' }, el('button', { onclick: () => { stop(); close(); } }, ic('x'), 'Close'), cleanBtn, startBtn));
     $('#modal').classList.remove('hidden');
   }
 
@@ -4053,21 +4097,21 @@
         preset.workItem ? el('label', { class: 'check', title: 'When the workflow has finished, a comment with the result is added to the work item. Nothing else on the item is changed.' }, postBack, ` Post the result as a comment on ${preset.workItem.ref || preset.workItem.id}`) : null,
         el('label', { class: 'check', title: 'After the last step passed, every run of the workflow is merged into your branch, but only while the merge guard has no blockers and no warnings. Otherwise nothing is merged and you are told why.' }, finishMerge, ' Merge the result when all steps passed and the merge guard is clean')) : null,
       el('div', { class: 'field' }, el('label', { text: 'Input' }), input, needHint,
-        el('div', { class: 'line' }, el('button', { id: 'wf-pull', text: 'Pull in a work item…', title: 'Azure Boards or Jira: fill the input from a story or bug', onclick: () => { const w = valid[Number(sel.value)]; openWorkItems((text, item) => openWorkflows({ input: text, workItem: { provider: item.provider, id: item.id, ref: item.ref }, workflow: w ? `${w.source}:${w.name}` : '' }), () => openWorkflows({ input: input.value, workItem: preset.workItem, workflow: w ? `${w.source}:${w.name}` : '' })); } }))),
+        el('div', { class: 'line' }, el('button', { id: 'wf-pull', title: 'Azure Boards or Jira: fill the input from a story or bug', onclick: () => { const w = valid[Number(sel.value)]; openWorkItems((text, item) => openWorkflows({ input: text, workItem: { provider: item.provider, id: item.id, ref: item.ref }, workflow: w ? `${w.source}:${w.name}` : '' }), () => openWorkflows({ input: input.value, workItem: preset.workItem, workflow: w ? `${w.source}:${w.name}` : '' })); } }, ic('external-link'), 'Pull in a work item…'))),
       ...bad.map((w) => el('div', { class: 'hint danger', text: w.errors.join(' ') })),
       el('div', { class: 'hint', text: 'Each step is an agent run in its own worktree; a step that depends on exactly one other continues in that worktree. A step starts when the steps it needs have passed their gates (and your approval, if asked). Use “New workflow…” to build your own with a form.' }),
       el('div', { class: 'line wrap' },
-        el('button', { text: 'New workflow…', onclick: () => openWorkflowEditor(null) }),
-        el('button', { id: 'wf-selfcheck', text: 'Self-check…', title: 'Run a throw-away two-step workflow and see whether the chaining works with your agent', onclick: openWorkflowSelfCheck }),
-        valid.length ? el('button', { text: 'Edit / copy…', title: 'Built-in workflows open as a copy', onclick: () => { const w = valid[Number(sel.value)]; if (!w) return; openWorkflowEditor(w.source === 'built-in' ? { ...w.workflow, name: `${w.workflow.name} (copy)` } : w.workflow, w.source === 'built-in' ? {} : { file: w.file, source: w.source }); } }) : null,
-        valid.length ? el('button', { class: 'danger', text: 'Delete', onclick: async () => { const w = valid[Number(sel.value)]; if (!w || w.source === 'built-in') { setStatus('Built-in workflows cannot be deleted.'); return; } if (!window.confirm(`Delete the workflow “${w.name}”?`)) return; await api.workflow.deleteFile({ source: w.source, file: w.file }); openWorkflows(); } }) : null),
-      el('div', { class: 'actions' }, el('button', { text: 'Cancel', onclick: close }), el('button', { class: 'primary', text: 'Start', onclick: async () => {
+        el('button', { onclick: () => openWorkflowEditor(null) }, ic('plus'), 'New workflow…'),
+        el('button', { id: 'wf-selfcheck', title: 'Run a throw-away two-step workflow and see whether the chaining works with your agent', onclick: openWorkflowSelfCheck }, ic('flask-conical'), 'Self-check…'),
+        valid.length ? el('button', { title: 'Built-in workflows open as a copy', onclick: () => { const w = valid[Number(sel.value)]; if (!w) return; openWorkflowEditor(w.source === 'built-in' ? { ...w.workflow, name: `${w.workflow.name} (copy)` } : w.workflow, w.source === 'built-in' ? {} : { file: w.file, source: w.source }); } }, ic('copy'), 'Edit / copy…') : null,
+        valid.length ? el('button', { class: 'danger', onclick: async () => { const w = valid[Number(sel.value)]; if (!w || w.source === 'built-in') { setStatus('Built-in workflows cannot be deleted.'); return; } if (!window.confirm(`Delete the workflow “${w.name}”?`)) return; await api.workflow.deleteFile({ source: w.source, file: w.file }); openWorkflows(); } }, ic('trash-2'), 'Delete') : null),
+      el('div', { class: 'actions' }, el('button', { onclick: close }, ic('x'), 'Cancel'), el('button', { class: 'primary', onclick: async () => {
         const w = valid[Number(sel.value)]; if (!w) return;
         if (workflowNeedsInput(w.workflow, input.value)) { input.focus(); input.classList.add('invalid'); needHint.textContent = 'This workflow needs an input: its steps use it as the text of the task (for example the bug, or what to refactor).'; return; }
         close();
         rememberAgent(defaultAgent.value);
         await wfStartNew({ name: w.name, source: w.source, workflow: w.workflow }, input.value, { default: defaultAgent.value, steps: { ...stepAgents } }, { mode: unattended.checked ? 'unattended' : 'interactive', finish: finishMerge.checked ? 'merge' : 'none', workItem: preset.workItem && postBack.checked ? preset.workItem : null });
-      } })));
+      } }, ic('play'), 'Start')));
     $('#modal').classList.remove('hidden');
   }
 
@@ -4078,7 +4122,7 @@
     $('#dialog').replaceChildren(el('h3', { text: `Journal · ${run.name}` }),
       el('pre', { class: 'journal', text: body }),
       el('div', { class: 'hint', text: 'Kept inside the repository’s .git folder, so it survives merging or discarding the run.' }),
-      el('div', { class: 'actions' }, el('button', { text: 'Copy', onclick: () => api.copy(body) }), el('button', { class: 'primary', text: 'Close', onclick: close })));
+      el('div', { class: 'actions' }, el('button', { text: 'Copy', onclick: () => api.copy(body) }), el('button', { class: 'primary', onclick: close }, ic('check'), 'Close')));
     $('#modal').classList.remove('hidden');
   }
 
@@ -4102,7 +4146,7 @@
       el('div', { class: 'line wrap' }, selA, ' vs ', selB),
       el('label', { class: 'check' }, gates, ' Also run the gates on both (slower)'),
       out,
-      el('div', { class: 'actions' }, el('button', { text: 'Close', onclick: close }), el('button', { class: 'primary', text: 'Compare', onclick: go })));
+      el('div', { class: 'actions' }, el('button', { onclick: close }, ic('x'), 'Close'), el('button', { class: 'primary', onclick: go }, ic('git-compare'), 'Compare')));
     $('#modal').classList.remove('hidden');
     go();
   }
@@ -4130,7 +4174,7 @@
     $('#dialog').replaceChildren(el('h3', { text: 'Spring: endpoints and beans' }), el('div', { class: 'muted', text: 'Scanning…' }));
     $('#modal').classList.remove('hidden');
     const res = await api.springMap.overview();
-    if (res.error) { $('#dialog').replaceChildren(el('h3', { text: 'Spring' }), el('div', { class: 'hint danger', text: res.error }), el('div', { class: 'actions' }, el('button', { text: 'Close', onclick: close }))); return; }
+    if (res.error) { $('#dialog').replaceChildren(el('h3', { text: 'Spring' }), el('div', { class: 'hint danger', text: res.error }), el('div', { class: 'actions' }, el('button', { onclick: close }, ic('x'), 'Close'))); return; }
     const filter = el('input', { type: 'text', placeholder: 'Filter (path, method, class, file)…', spellcheck: 'false' });
     const list = el('div', { class: 'lh-list spring-ov' });
     const rows = [
@@ -4147,7 +4191,7 @@
     filter.addEventListener('input', render);
     $('#dialog').replaceChildren(el('h3', { text: 'Spring: endpoints and beans' }), filter, list,
       el('div', { class: 'hint', text: `${res.endpoints.length} endpoints · ${res.beans.length} @Bean methods · ${res.components.length} stereotype classes. Found by pattern from the annotations, not from a running application.` }),
-      el('div', { class: 'actions' }, el('button', { class: 'primary', text: 'Close', onclick: close })));
+      el('div', { class: 'actions' }, el('button', { class: 'primary', onclick: close }, ic('check'), 'Close')));
     render();
     filter.focus();
   }
@@ -4188,14 +4232,14 @@
     if (auto && !$('#modal').classList.contains('hidden')) return; // another dialog is open: do not take it over
     const when = (t) => new Date(t).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
     const group = (title, items, cls, act) => (items.length ? el('div', { class: 'ins-sec' }, el('b', { text: `${title} (${items.length})` }),
-      ...items.map((i) => el('div', { class: `ins-line ${cls}` }, `${i.name}  ·  ${when(i.at)}${i.why ? `  ·  ${i.why}` : ''}${i.files ? `  ·  ${i.files} file${i.files === 1 ? '' : 's'}` : ''}  `, act && i.live ? el('button', { text: act.label, onclick: async () => { await close(); const r = ((state.runs && state.runs.runs) || []).find((x) => x.id === i.id); if (r) act.run(r); } }) : ''))) : '');
+      ...items.map((i) => el('div', { class: `ins-line ${cls}` }, `${i.name}  ·  ${when(i.at)}${i.why ? `  ·  ${i.why}` : ''}${i.files ? `  ·  ${i.files} file${i.files === 1 ? '' : 's'}` : ''}  `, act && i.live ? el('button', { onclick: async () => { await close(); const r = ((state.runs && state.runs.runs) || []).find((x) => x.id === i.id); if (r) act.run(r); } }, ic('eye'), act.label) : ''))) : '');
     $('#dialog').replaceChildren(el('h3', { text: 'While you were away' }), el('div', { class: 'hint', id: 'away-headline', text: s.headline }),
       el('div', { class: 'ins-list' },
         group('Need you', s.groups.needsYou, 'danger', { label: 'Review', run: reviewRun }),
         group('Ready to review', s.groups.ready, '', { label: 'Review', run: reviewRun }),
         group('Merged', s.groups.merged, 'muted', null),
         group('Thrown away', s.groups.discarded, 'muted', null)),
-      el('div', { class: 'actions' }, el('button', { text: 'Undo a merged run…', onclick: async () => { await close(); openUndo(); } }), el('button', { class: 'primary', text: 'Close', onclick: close })));
+      el('div', { class: 'actions' }, el('button', { onclick: async () => { await close(); openUndo(); } }, ic('undo-2'), 'Undo a merged run…'), el('button', { class: 'primary', onclick: close }, ic('check'), 'Close')));
     $('#modal').classList.remove('hidden');
   }
 
@@ -4204,16 +4248,16 @@
     const r = await api.away.merged();
     if (r.error) { setStatus(r.error); return; }
     const rows = r.merged.map((m) => el('div', { class: 'ins-line' }, `${m.name}  ·  merged ${new Date(m.at).toLocaleString()} into ${m.into}  `,
-      el('button', { class: 'danger', text: 'Undo', onclick: async (ev) => {
+      el('button', { class: 'danger', onclick: async (ev) => {
         if (!window.confirm(`Undo “${m.name}”?\n\nBazinga adds a new commit that reverses it. Nothing is deleted and you can reverse the undo again with git.`)) return;
         ev.currentTarget.disabled = true;
         const res = await api.away.undo(m.commit);
         if (res.error) { window.alert(res.error); ev.currentTarget.disabled = false; return; }
         setStatus(`Undone: ${res.undone}.`); close(); await refreshRuns();
-      } })));
+      } }, ic('undo-2'), 'Undo')));
     $('#dialog').replaceChildren(el('h3', { text: 'Undo a merged run' }),
       r.merged.length ? el('div', { class: 'ins-list' }, ...rows) : el('div', { class: 'hint', text: 'No merged runs to undo. Only merges made with Bazinga are listed, and only while they are still part of this branch.' }),
-      el('div', { class: 'actions' }, el('button', { class: 'primary', text: 'Close', onclick: close })));
+      el('div', { class: 'actions' }, el('button', { class: 'primary', onclick: close }, ic('check'), 'Close')));
     $('#modal').classList.remove('hidden');
   }
 
@@ -4226,7 +4270,7 @@
     const body = markdownToNode(first, 'CHANGELOG.md');
     body.classList.add('whatsnew');
     $('#dialog').replaceChildren(el('h3', { text: `What’s new in Bazinga${c.version ? ` ${c.version}` : ''}` }), body,
-      el('div', { class: 'actions' }, el('button', { class: 'primary', text: 'Close', onclick: async () => { await api.changelog.seen(c.hash); close(); } })));
+      el('div', { class: 'actions' }, el('button', { class: 'primary', onclick: async () => { await api.changelog.seen(c.hash); close(); } }, ic('check'), 'Close')));
     $('#modal').classList.remove('hidden');
     await api.changelog.seen(c.hash);
   }
@@ -4237,16 +4281,16 @@
     $('#dialog').replaceChildren(el('h3', { text: 'Usage & insights' }), el('div', { class: 'muted', text: 'Looking…' }));
     $('#modal').classList.remove('hidden');
     const d = await api.insights.get();
-    if (d.error) { $('#dialog').replaceChildren(el('h3', { text: 'Usage & insights' }), el('div', { class: 'hint danger', text: d.error }), el('div', { class: 'actions' }, el('button', { class: 'primary', text: 'Close', onclick: close }))); return; }
+    if (d.error) { $('#dialog').replaceChildren(el('h3', { text: 'Usage & insights' }), el('div', { class: 'hint danger', text: d.error }), el('div', { class: 'actions' }, el('button', { class: 'primary', onclick: close }, ic('check'), 'Close'))); return; }
     const cur = (state.project && state.project.config && state.project.config.insights) || {};
     const sec = (title, ...kids) => el('div', { class: 'ins-sec', 'data-ins': title }, el('b', { text: title }), ...kids);
     const line = (text, cls = '') => el('div', { class: `ins-line ${cls}`, text });
     const money = (v) => (v > 0 ? `$${v.toFixed(2)}` : '$0');
     const out = [];
     // Claude plan limits
-    if (!d.limitsOn) out.push(sec('Claude plan limits', line('Off. Turning it on lets Claude Code sessions that Bazinga starts report how much of your 5-hour and 7-day allowance is used. Note: it replaces your own Claude Code status line in those sessions.', 'muted'), el('button', { text: 'Turn on', onclick: async () => { await saveSetting({ insights: { ...cur, claudeLimits: true } }); openInsights(); } })));
-    else if (!d.limits) out.push(sec('Claude plan limits', line('Waiting for the first answer of a Claude Code session started from Bazinga after this was switched on. If nothing appears after a few messages, your plan or version does not report limits (API-key use never does).', 'muted'), el('button', { text: 'Turn off', onclick: async () => { await saveSetting({ insights: { ...cur, claudeLimits: false } }); openInsights(); } })));
-    else out.push(sec('Claude plan limits', ...d.limits.lines.map((t) => line(t, d.limits.warn ? 'warn' : '')), d.limits.stale ? line('These numbers are old (no Claude Code session reported for a while).', 'muted') : '', el('button', { text: 'Turn off', onclick: async () => { await saveSetting({ insights: { ...cur, claudeLimits: false } }); openInsights(); } })));
+    if (!d.limitsOn) out.push(sec('Claude plan limits', line('Off. Turning it on lets Claude Code sessions that Bazinga starts report how much of your 5-hour and 7-day allowance is used. Note: it replaces your own Claude Code status line in those sessions.', 'muted'), el('button', { onclick: async () => { await saveSetting({ insights: { ...cur, claudeLimits: true } }); openInsights(); } }, ic('check'), 'Turn on')));
+    else if (!d.limits) out.push(sec('Claude plan limits', line('Waiting for the first answer of a Claude Code session started from Bazinga after this was switched on. If nothing appears after a few messages, your plan or version does not report limits (API-key use never does).', 'muted'), el('button', { onclick: async () => { await saveSetting({ insights: { ...cur, claudeLimits: false } }); openInsights(); } }, ic('x'), 'Turn off')));
+    else out.push(sec('Claude plan limits', ...d.limits.lines.map((t) => line(t, d.limits.warn ? 'warn' : '')), d.limits.stale ? line('These numbers are old (no Claude Code session reported for a while).', 'muted') : '', el('button', { onclick: async () => { await saveSetting({ insights: { ...cur, claudeLimits: false } }); openInsights(); } }, ic('x'), 'Turn off')));
     // totals
     const t = d.totals;
     if (t.month.runs) out.push(sec('Agent runs: tokens and cost', ...[['Today', t.today], ['Last 7 days', t.week], ['Last 30 days', t.month]].map(([n, x]) => line(`${n}: ${x.runs} run${x.runs === 1 ? '' : 's'}, ${(x.tokens / 1000).toFixed(0)}k tokens, ${money(x.costUsd)}${x.localRuns ? ` (${x.localRuns} local, free)` : ''}${x.unknownCost ? ` · ${x.unknownCost} with unknown cost` : ''}`)), line('Counted from finished runs (merged or discarded), the same numbers as the scorecard.', 'muted')));
@@ -4256,7 +4300,7 @@
     // on demand
     const slot = (name, label, run, extra = []) => {
       const box = el('div', { class: 'ins-out' });
-      return sec(name, ...extra, el('button', { text: label, onclick: async (ev) => { ev.currentTarget.disabled = true; box.replaceChildren(line('Checking…', 'muted')); const r = await run(); box.replaceChildren(...r); ev.currentTarget.disabled = false; } }), box);
+      return sec(name, ...extra, el('button', { onclick: async (ev) => { ev.currentTarget.disabled = true; box.replaceChildren(line('Checking…', 'muted')); const r = await run(); box.replaceChildren(...r); ev.currentTarget.disabled = false; } }, ic('refresh-cw'), label), box);
     };
     const sonarKey = el('input', { type: 'text', value: d.sonarProject, placeholder: 'SonarCloud project key (org_project)', style: 'width:100%' });
     out.push(slot('Dependency problems', 'Check now', async () => {
@@ -4277,8 +4321,8 @@
       if (r.down) return [line(r.down, 'warn')];
       return [line(r.health.text, r.health.up === false ? 'danger' : ''), ...r.metrics.map((m) => line(`${m.label}: ${m.value}`))];
     }, [line(`Address: ${d.actuatorUrl} (change with insights.actuatorUrl in .ide/config.json)`, 'muted')]));
-    out.push(sec('Test coverage in the editor', line('Shows green and red marks in the gutter, read from the coverage file your last test run left in the project (lcov.info, jacoco.xml, coverage.xml).', 'muted'), el('button', { text: coverage.on ? 'Hide marks' : 'Show marks', onclick: () => { close(); toggleCoverage(); } })));
-    $('#dialog').replaceChildren(el('h3', { text: 'Usage & insights' }), el('div', { class: 'ins-list' }, ...out), el('div', { class: 'actions' }, el('button', { class: 'primary', text: 'Close', onclick: close })));
+    out.push(sec('Test coverage in the editor', line('Shows green and red marks in the gutter, read from the coverage file your last test run left in the project (lcov.info, jacoco.xml, coverage.xml).', 'muted'), el('button', { onclick: () => { close(); toggleCoverage(); } }, ic('eye'), coverage.on ? 'Hide marks' : 'Show marks')));
+    $('#dialog').replaceChildren(el('h3', { text: 'Usage & insights' }), el('div', { class: 'ins-list' }, ...out), el('div', { class: 'actions' }, el('button', { class: 'primary', onclick: close }, ic('check'), 'Close')));
   }
 
   // ---------------------------------------------------------------- Setup & health: what works, what does not, one button per problem
@@ -4325,14 +4369,14 @@
       el('div', { class: 'field' }, el('label', { text: 'API key' }), key, el('div', { class: 'hint', text: 'Stored encrypted by your operating system, never in a settings file.' })),
       msg,
       el('div', { class: 'actions' },
-        st.enabled || st.hasKey ? el('button', { class: 'danger', text: 'Turn off and forget the key', onclick: async () => { await api.jev.forget(); await openDoctor(); } }) : '',
-        el('button', { text: 'Back', onclick: openDoctor }),
-        el('button', { class: 'primary', text: 'Save and turn on', onclick: async () => {
+        st.enabled || st.hasKey ? el('button', { class: 'danger', onclick: async () => { await api.jev.forget(); await openDoctor(); } }, ic('trash-2'), 'Turn off and forget the key') : '',
+        el('button', { onclick: openDoctor }, ic('chevron-left'), 'Back'),
+        el('button', { class: 'primary', onclick: async () => {
           if (!key.value.trim() && st.hasKey) { await api.jev.toggle(true); await openDoctor(); return; }
           const r = await api.jev.saveKey({ key: key.value, enable: true });
           if (r.error) { msg.textContent = r.error; msg.classList.add('danger'); return; }
           await openDoctor();
-        } })));
+        } }, ic('check'), 'Save and turn on')));
   }
 
   async function openDoctor() {
@@ -4357,7 +4401,7 @@
         ...main.map(rowEl),
         more.length ? el('details', null, el('summary', { text: 'More (version watch, git hook, recording)' }), ...more.map(rowEl)) : '',
         el('details', null, el('summary', { text: `Tools on this computer${rep.ok === false ? ` · missing: ${rep.missingRequired.join(', ')}` : ''}` }), ...tools)),
-      el('div', { class: 'actions' }, el('button', { id: 'health-again', text: 'Check again', onclick: openDoctor }), el('button', { text: 'Walkthrough…', onclick: () => openWalkthrough(0) }), el('button', { class: 'primary', text: 'Close', onclick: close })));
+      el('div', { class: 'actions' }, el('button', { id: 'health-again', onclick: openDoctor }, ic('refresh-cw'), 'Check again'), el('button', { onclick: () => openWalkthrough(0) }, ic('sparkles'), 'Walkthrough…'), el('button', { class: 'primary', onclick: close }, ic('check'), 'Close')));
     updateHealthDot(health);
   }
 
@@ -4387,18 +4431,18 @@
         box.addEventListener('click', () => { if (!st.ok) return; picked = a; for (const c of document.querySelectorAll('#dialog .walk-choice')) c.classList.remove('picked'); box.classList.add('picked'); next.disabled = false; });
         return box;
       });
-      const next = el('button', { class: 'primary', text: 'Next', disabled: 'true', onclick: () => { rememberAgent(picked.name); openWalkthrough(1); } });
+      const next = el('button', { class: 'primary', disabled: 'true', onclick: () => { rememberAgent(picked.name); openWalkthrough(1); } }, ic('chevron-right'), 'Next');
       $('#dialog').replaceChildren(el('h3', { text: 'Welcome to Bazinga' }), dots,
         el('div', { class: 'hint', text: 'Bazinga lets an AI agent work on your code in a separate copy, so your own files stay untouched until you decide. First, pick the agent you want to start with. You can change it any time.' }),
         choices.length ? el('div', null, ...choices) : el('div', { class: 'hint danger', text: 'No agent is set up yet. Open Settings → Agents and add Claude Code or a local model preset, then come back (command palette → Welcome walkthrough).' }),
-        el('div', { class: 'actions' }, el('button', { text: 'Not now', onclick: close }), el('button', { text: 'Check everything…', onclick: () => { walkSeen(true); openDoctor(); } }), next));
+        el('div', { class: 'actions' }, el('button', { onclick: close }, ic('x'), 'Not now'), el('button', { onclick: () => { walkSeen(true); openDoctor(); } }, ic('stethoscope'), 'Check everything…'), next));
       return;
     }
     $('#dialog').replaceChildren(el('h3', { text: 'Try a safe first run' }), dots,
       el('div', { class: 'hint', text: 'A first run that cannot change anything: the agent only reads the project and explains it. Bazinga makes a separate copy for it (a “run”). When it is done, open Changes to see the result; you can Merge it into your branch or Discard it, and the original is never touched until you merge.' }),
       el('div', { class: 'hint', text: 'Later, try something real: “Fix this bug: …” or “Write tests for …”. “Setup & health” in the command palette shows what works and fixes what does not.' }),
-      el('div', { class: 'actions' }, el('button', { text: 'Back', onclick: () => openWalkthrough(0) }), el('button', { text: 'Skip', onclick: close }),
-        el('button', { class: 'primary', id: 'walk-start', text: 'Start the first run', onclick: () => { walkSeen(true); openRunDialog({ task: FIRST_TASK, name: 'first look' }); } })));
+      el('div', { class: 'actions' }, el('button', { onclick: () => openWalkthrough(0) }, ic('chevron-left'), 'Back'), el('button', { onclick: close }, ic('fast-forward'), 'Skip'),
+        el('button', { class: 'primary', id: 'walk-start', onclick: () => { walkSeen(true); openRunDialog({ task: FIRST_TASK, name: 'first look' }); } }, ic('play'), 'Start the first run')));
   }
   // once, for someone who has never started a run
   setTimeout(() => { if (!api.smoke && !walkSeen() && state.project && !((state.runs && state.runs.runs) || []).length) openWalkthrough(0); }, 2500);
@@ -4531,7 +4575,7 @@
       el('div', { class: 'field' }, el('label', { text: 'Commit message' }), msg),
       el('div', { class: 'field' }, el('label', { class: 'check' }, squash, ' Squash into a single commit')),
       el('div', { class: 'hint', text: 'Requires a clean main working tree. On conflicts nothing is changed.' }),
-      el('div', { class: 'actions' }, el('button', { text: 'Cancel', onclick: close }), prBtn, mergeBtn));
+      el('div', { class: 'actions' }, el('button', { onclick: close }, ic('x'), 'Cancel'), prBtn, mergeBtn));
     $('#modal').classList.remove('hidden');
 
     const reviewed = viewing && state.scope ? state.scope.files.map((f) => f.path).filter(isReviewed) : [];
@@ -4578,7 +4622,7 @@
       el('div', { class: 'field' }, el('label', { text: 'Target branch' }), base),
       el('div', { class: 'field' }, el('label', { class: 'check' }, draft, ' Create as draft')),
       el('div', { class: 'hint', text: how }), out,
-      el('div', { class: 'actions' }, el('button', { text: 'Close', onclick: close }), go));
+      el('div', { class: 'actions' }, el('button', { onclick: close }, ic('x'), 'Close'), go));
     $('#modal').classList.remove('hidden');
   }
 
@@ -4640,8 +4684,8 @@
       el('div', { class: 'hint', text: `Counted from what you did with each run (${(sc && sc.total) || 0} so far). “Alone” = merged without a stronger agent taking over. “Lost” = another run of the same task was kept. “Cost per merge” counts failed attempts too; “?” means the agent reported no cost. Rows with fewer than ${(sc && sc.minRuns) || 3} runs are faded: too few to trust.` }),
       el('div', { class: 'sc-body' }, ...body),
       el('div', { class: 'actions' },
-        sc && sc.total ? el('button', { class: 'danger', text: 'Clear history…', onclick: async () => { if (window.confirm('Forget the whole scorecard? This cannot be undone.')) { await api.scorecard.clear(); openScorecard(); } } }) : '',
-        el('button', { class: 'primary', text: 'Close', onclick: close })));
+        sc && sc.total ? el('button', { class: 'danger', onclick: async () => { if (window.confirm('Forget the whole scorecard? This cannot be undone.')) { await api.scorecard.clear(); openScorecard(); } } }, ic('trash-2'), 'Clear history…') : '',
+        el('button', { class: 'primary', onclick: close }, ic('check'), 'Close')));
     $('#modal').classList.remove('hidden');
   }
 
@@ -4726,7 +4770,7 @@
     const menu = el('div', { id: 'project-menu', class: 'project-menu' }, [
       ...(recent.length ? [el('div', { class: 'pm-head', text: 'Recent projects' })] : []),
       ...recent.map((dir) => item(dir.split(/[\\/]/).filter(Boolean).pop() || dir, dir, () => switchProject(dir),
-        el('button', { class: 'pm-win', title: 'Open in a new window', text: '↗', onclick: (e) => { e.stopPropagation(); closeProjectMenu(); api.project.openWindow(dir); } }))),
+        el('button', { class: 'pm-win', title: 'Open in a new window', 'aria-label': 'Open in a new window', onclick: (e) => { e.stopPropagation(); closeProjectMenu(); api.project.openWindow(dir); } }, ic('external-link')))),
       ...(recent.length ? [el('div', { class: 'pm-sep' })] : []),
       item('Open folder…', 'Replace the project in this window', () => switchProject(null)),
       item('Open folder in new window…', 'Keep this window and its running terminals as they are', () => api.project.openWindow(null)),
@@ -4750,11 +4794,24 @@
     themeSetting = next;
     applyTheme();
   }
-  $('#btn-theme').addEventListener('click', () => setThemeSetting(resolvedTheme() === 'light' ? 'dark' : 'light'));
+  $('#btn-theme').addEventListener('click', (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    popupMenu(r.left, r.bottom + 4, Object.keys(THEME_META).map((name) => ({ label: THEME_META[name].label, checked: themeSetting === name, onclick: () => setThemeSetting(name) })));
+  });
   $('#btn-settings').addEventListener('click', openSettings);
   $('#auto').addEventListener('change', (e) => { state.autoCheck = e.target.checked; scheduleSessionSave(); });
   $('#btn-refresh').addEventListener('click', async () => { await renderTree(); await refreshChanges(); await refreshCheckpoints(); await reloadFromDisk(); });
   for (const b of document.querySelectorAll('#side-tabs button[data-tab]')) b.addEventListener('click', () => setSideTab(b.dataset.tab));
+  $('#side-tabs').addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    const tabs = [...document.querySelectorAll('#side-tabs button[data-tab]')];
+    const at = tabs.indexOf(document.activeElement);
+    if (at === -1) return;
+    e.preventDefault();
+    const next = tabs[(at + (e.key === 'ArrowDown' ? 1 : tabs.length - 1)) % tabs.length];
+    setSideTab(next.dataset.tab);
+    next.focus();
+  });
   $('#d-prev').addEventListener('click', () => gotoChange(-1));
   $('#d-next').addEventListener('click', () => gotoChange(1));
   $('#d-revert-hunk').addEventListener('click', revertHunk);
@@ -5891,10 +5948,60 @@
       return ok ? true : JSON.stringify({ fontsLoaded, usesRoboto, attrLight, bgLight, monacoLight, termLight, saved, bgDark, monacoDark });
     });
 
+    await step('extra themes (high-contrast, night, nerd) apply to the shell, Monaco and the terminal', async () => {
+      const hexToRgb = (hex) => `rgb(${[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(', ')})`;
+      const bad = [];
+      for (const [name, bg] of [['high-contrast', '#000000'], ['night', '#1a130d'], ['nerd', '#000000']]) {
+        await setThemeSetting(name);
+        await sleep(200);
+        const attrOk = document.documentElement.dataset.theme === name;
+        const bgOk = getComputedStyle(document.body).backgroundColor === hexToRgb(bg);
+        const monacoOk = !!document.querySelector(`.monaco-editor.${MONACO_THEMES[name]}`);
+        const terms = [...state.terms.values()];
+        const termOk = terms.length > 0 && terms.every((t) => t.term.options.theme.background === TERM_THEMES[name].background);
+        const saved = (await api.settings.get()).settings.theme === name;
+        if (!(attrOk && bgOk && monacoOk && termOk && saved)) bad.push({ name, attrOk, bgOk, monacoOk, termOk, saved });
+      }
+      await setThemeSetting('dark');
+      return bad.length ? JSON.stringify(bad) : true;
+    });
+
     await step('icons resolve', async () => {
       const hasIcons = document.querySelectorAll('#topbar .i').length >= 6 && document.querySelectorAll('#side-tabs .i').length >= 5;
       const theme = document.querySelector('#btn-theme .i');
       return hasIcons && !!theme && window.icon.missing.length === 0 ? true : JSON.stringify({ hasIcons, theme: !!theme, missing: window.icon.missing });
+    });
+
+    await step('sidebar rail: aria-selected follows the active tab, a double-digit badge does not overrun its button, the splitter drag accounts for the rail', async () => {
+      const rail = $('#side-tabs');
+      setSideTab('agents');
+      const agentsBtn = rail.querySelector('button[data-tab="agents"]');
+      const filesBtn = rail.querySelector('button[data-tab="files"]');
+      const ariaOk = agentsBtn.getAttribute('aria-selected') === 'true' && agentsBtn.tabIndex === 0 && filesBtn.getAttribute('aria-selected') === 'false' && filesBtn.tabIndex === -1;
+      const panel = document.getElementById(agentsBtn.getAttribute('aria-controls'));
+      const panelOk = !!panel && panel.classList.contains('active');
+      setSideTab('files');
+
+      const badge = $('#changes-count');
+      const savedBadgeText = badge.textContent;
+      badge.textContent = '(23)';
+      const btnBox = agentsBtn.getBoundingClientRect(); // any rail button has the same width
+      const badgeBox = $('#side-tabs button[data-tab="changes"] .badge').getBoundingClientRect();
+      const badgeFits = badgeBox.right <= btnBox.right + 0.5 && badgeBox.left >= btnBox.left - 0.5;
+      badge.textContent = savedBadgeText;
+
+      const splitter = $('#split-side');
+      const railW = rail.getBoundingClientRect().width;
+      const savedSideW = document.documentElement.style.getPropertyValue('--side-w');
+      splitter.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: railW + 260 }));
+      window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+      const newW = parseInt(document.documentElement.style.getPropertyValue('--side-w'), 10);
+      const dragOk = Math.abs(newW - 260) <= 1;
+      document.documentElement.style.setProperty('--side-w', savedSideW || '330px');
+
+      const ok = ariaOk && panelOk && badgeFits && dragOk;
+      return ok ? true : JSON.stringify({ ariaOk, panelOk, badgeFits, dragOk, newW });
     });
 
     await step('history graph + commit diff + blame', async () => {

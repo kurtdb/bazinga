@@ -47,9 +47,84 @@
   --overlay: rgba(31, 35, 40, .35);
   --shadow: rgba(31, 35, 40, .25);
 }
+/* high contrast: for low vision — pure black/white, saturated hues, thicker borders, and the whole UI scaled up 20% */
+:root[data-theme="high-contrast"] {
+  color-scheme: dark;
+  zoom: 1.2;
+  --bg: #000000;
+  --bg-2: #0d0d0d;
+  --bg-3: #1a1a1a;
+  --line: #ffffff;
+  --fg: #ffffff;
+  --muted: #c9c9c9;
+  --faint: #a3a3a3;
+  --accent: #5ec2ff;
+  --err: #ff6b6b;
+  --warn: #ffd43b;
+  --info: #5ec2ff;
+  --ok: #5ee079;
+  --accent-bg: #003a5c;
+  --accent-line: #5ec2ff;
+  --danger-line: #ff6b6b;
+  --err-bg: #4a0f0f; --warn-bg: #4a3a00; --ok-bg: #0f3a1d; --info-bg: #0f2e4a;
+  --g0: #5ec2ff; --g1: #5ee079; --g2: #ffd43b; --g3: #ff8cff; --g4: #ff6b6b; --g5: #4dffe8;
+  --overlay: rgba(0, 0, 0, .7);
+  --shadow: rgba(0, 0, 0, .8);
+}
+:root[data-theme="high-contrast"] button, :root[data-theme="high-contrast"] input, :root[data-theme="high-contrast"] select, :root[data-theme="high-contrast"] textarea { border-width: 2px; }
+:root[data-theme="high-contrast"] *:focus-visible { outline: 3px solid var(--accent); outline-offset: 1px; }
+/* night: for working late — warm, dim, no blue in the palette so it is easier on tired eyes */
+:root[data-theme="night"] {
+  color-scheme: dark;
+  --bg: #1a130d;
+  --bg-2: #241a10;
+  --bg-3: #2e2114;
+  --line: #3d2d1c;
+  --fg: #ecd9bb;
+  --muted: #b89d79;
+  --faint: #8a7256;
+  --accent: #e8a259;
+  --err: #e8714f;
+  --warn: #dcb04a;
+  --info: #e8a259;
+  --ok: #b7b24a;
+  --accent-bg: #4a331a;
+  --accent-line: #8a5f2e;
+  --danger-line: #6b3a26;
+  --err-bg: #3d2015; --warn-bg: #3a2e14; --ok-bg: #2e2c14; --info-bg: #3a2a14;
+  --g0: #e8a259; --g1: #b7b24a; --g2: #dcb04a; --g3: #c98a6e; --g4: #e8714f; --g5: #a68a4a;
+  --overlay: rgba(10, 6, 2, .5);
+  --shadow: rgba(10, 6, 2, .6);
+}
+/* nerd: green phosphor terminal, monospace everywhere, a faint CRT scanline texture behind empty panels */
+:root[data-theme="nerd"] {
+  color-scheme: dark;
+  --font-ui: 'Roboto Mono', 'Cascadia Code', Consolas, Menlo, monospace;
+  --bg: #000000;
+  --bg-2: #060f06;
+  --bg-3: #0f1f0f;
+  --line: #1e3d1e;
+  --fg: #39ff6a;
+  --muted: #2fae52;
+  --faint: #1f7a3a;
+  --accent: #39ffe0;
+  --err: #ff4d4d;
+  --warn: #f0ff4d;
+  --info: #39ffe0;
+  --ok: #39ff6a;
+  --accent-bg: #0a3d35;
+  --accent-line: #1f8a78;
+  --danger-line: #6b1f1f;
+  --err-bg: #3d1414; --warn-bg: #3d3d14; --ok-bg: #0f3d1a; --info-bg: #0f3d38;
+  --g0: #39ffe0; --g1: #39ff6a; --g2: #f0ff4d; --g3: #a0ff39; --g4: #ff4d4d; --g5: #39d4ff;
+  --overlay: rgba(0, 10, 0, .6);
+  --shadow: rgba(0, 20, 0, .7);
+  --scanline: rgba(57, 255, 106, .035);
+}
+:root[data-theme="nerd"] body { background-image: repeating-linear-gradient(0deg, var(--scanline) 0px, var(--scanline) 1px, transparent 1px, transparent 2px); }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font-family: var(--font-ui); overflow: hidden; }
-button { font: inherit; color: var(--fg); background: var(--bg-3); border: 1px solid var(--line); border-radius: 4px; padding: 3px 9px; cursor: pointer; }
+button { font: inherit; color: var(--fg); background: var(--bg-3); border: 1px solid var(--line); border-radius: 4px; padding: 3px 9px; cursor: pointer; white-space: nowrap; }
 button:hover { border-color: var(--accent); }
 button:disabled { opacity: .5; cursor: default; }
 button.icon { padding: 2px 7px; }
@@ -269,7 +344,7 @@ button.toggle { display: inline-block; }
 /* rail: icon + small label always visible, stacked vertically like an IDE activity bar */
 .rail button .lbl { font-size: 9.5px; line-height: 1.1; }
 .rail button.icon .lbl { display: none; }
-.rail button .badge { position: absolute; top: 3px; right: 7px; min-width: 14px; height: 14px; border-radius: 7px; background: var(--accent-bg); border: 1px solid var(--accent-line); color: var(--accent); font-size: 9px; font-weight: 700; display: flex; align-items: center; justify-content: center; padding: 0 3px; }
+.rail button .badge { position: absolute; top: 1px; right: 1px; min-width: 14px; height: 14px; border-radius: 7px; background: var(--accent-bg); border: 1px solid var(--accent-line); color: var(--accent); font-size: 9px; font-weight: 700; display: flex; align-items: center; justify-content: center; padding: 0 3px; }
 button.danger:hover { border-color: var(--err); color: var(--err); }
 .run-acts button.icon { margin-left: auto; }
 
@@ -408,6 +483,7 @@ button.toggle.on { border-color: var(--accent); color: var(--accent); }
 .pm-item:hover { background: var(--accent-bg); }
 .pm-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pm-win { background: none; border: 0; color: var(--muted); cursor: pointer; padding: 0 4px; }
+.pm-win .i { width: 12px; height: 12px; }
 .pm-win:hover { color: var(--fg); }
 .pm-sep { height: 1px; background: var(--line); margin: 4px 0; }
 
@@ -474,6 +550,7 @@ input.invalid, textarea.invalid { border-color: var(--err); }
 .fl-head { display: flex; flex-direction: column; gap: 4px; }
 .fl-stats { display: flex; gap: 6px; flex-wrap: wrap; }
 .fl-stat { border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 10px; padding: 1px 8px; font-size: 11px; cursor: pointer; }
+.fl-stat .i { width: 10px; height: 10px; }
 .fl-stat b { color: var(--fg); }
 .fl-stat.on { border-color: var(--accent); background: var(--accent-bg); }
 .fl-stat.ok b { color: var(--ok); } .fl-stat.warn b { color: var(--warn); } .fl-stat.err b { color: var(--err); }

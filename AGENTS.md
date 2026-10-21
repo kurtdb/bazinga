@@ -11,7 +11,8 @@ Bazinga is a small **Electron** desktop app (not a web app) for working with
 coding agents (Claude Code, GitHub Copilot CLI) from inside a lightweight IDE:
 terminals, a Monaco diff viewer, a quality-gate panel (lint/types/tests/
 security scans), a script runner, and parallel agent runs in separate git
-worktrees. See `README.md` for the full feature tour and screenshots.
+worktrees. See `README.md` for the TL;DR and screenshots, `docs/DOCUMENTATION.md`
+for the full feature tour.
 
 ## Tech stack
 
@@ -35,7 +36,7 @@ src/core/      Headless logic shared by the app and the CLI (git, checks,
 bin/           CLI entry points (bazinga, ide-check, ide-guard, doctor, statusline)
 scripts/       Build/dev scripts (dist, smoke test, screenshots, icons)
 test/          node:test files, mostly one per src/core/*.js module
-docs/          Screenshots used in README.md
+docs/          DOCUMENTATION.md (full feature docs) and screenshots used in README.md
 ```
 
 `src/core/*.js` modules are meant to be usable both from the Electron app and

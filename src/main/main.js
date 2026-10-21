@@ -108,8 +108,8 @@ function writeJson(name, data) {
 const readState = () => readJson('state.json', { lastRoot: null, trusted: [] });
 const writeState = (s) => writeJson('state.json', s);
 const readSettings = () => readJson('settings.json', {});
-/** 'light' / 'dark' force the window chrome (menus, scrollbars, prefers-color-scheme); anything else follows the OS. */
-function applyNativeTheme() { const t = readSettings().theme; nativeTheme.themeSource = t === 'light' || t === 'dark' ? t : 'system'; }
+/** 'light' / 'dark' force the window chrome (menus, scrollbars, prefers-color-scheme); 'system' follows the OS; the other themes are all dark-background, so they force dark chrome too. */
+function applyNativeTheme() { const t = readSettings().theme; nativeTheme.themeSource = t === 'light' ? 'light' : t === 'system' ? 'system' : 'dark'; }
 
 function pickInitialRoot() {
   const arg = process.argv.slice(app.isPackaged ? 1 : 2).find((a) => !a.startsWith('-'));

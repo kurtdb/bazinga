@@ -163,7 +163,7 @@ test('the local-model settings reach the terminal, and the agent\'s own env wins
 });
 
 test('the model self-test is reachable from the agent row (local Claude agents only) and from the main process', () => {
-  assert.match(src, /text: 'Test', title: 'Check that this model can be sent a file/);
+  assert.match(src, /title: 'Check that this model can be sent a file/);
   assert.match(src, /api\.agent\.test\(a\)/);
   assert.match(src, /api\.agent\.onTestProgress\(onProgress\)/, 'live progress');
   assert.match(src, /if \(modelTestPanel && modelTestPanel\.root\.isConnected\) return modelTestPanel/, 'one test at a time');

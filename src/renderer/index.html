@@ -28,23 +28,23 @@
       <button id="btn-review" data-icon="sparkles" title="Send the diff and the gate findings to your review command (default: claude -p) for a second opinion">AI review</button>
       <label class="check" title="Run fast checks automatically when files change on disk"><input type="checkbox" id="auto"> Auto</label>
       <label class="check" id="fixloop-label" data-icon="repeat" title="Fix loop: when an agent goes quiet, run the gates and send the findings back to it (up to the configured number of rounds)"><input type="checkbox" id="fixloop"> Fix loop</label>
-      <button id="btn-theme" class="icon" title="Switch between light and dark mode"></button>
+      <button id="btn-theme" class="icon" title="Theme"></button>
       <button id="btn-settings" class="icon" data-icon="settings" title="Settings"></button>
     </header>
 
     <div id="main">
-      <nav class="rail" id="side-tabs">
-        <button data-tab="files" data-icon="files" class="active" title="Files">Files</button>
-        <button data-tab="search" data-icon="search" title="Search in project (Ctrl+Shift+F)">Search</button>
-        <button data-tab="agents" data-icon="bot" title="Agent runs: parallel agents in their own git worktrees">Agents <span id="agents-count" class="badge"></span></button>
-        <button data-tab="changes" data-icon="git-compare" title="Changes: what the agent changed, with review flags">Changes <span id="changes-count" class="badge"></span></button>
-        <button data-tab="history" data-icon="history" title="History: commit graph, stashes, blame">History</button>
-        <button data-tab="scripts" data-icon="scroll-text" title="Scripts">Scripts</button>
+      <nav class="rail" id="side-tabs" role="tablist" aria-orientation="vertical" aria-label="Sidebar sections">
+        <button data-tab="files" data-icon="files" class="active" role="tab" id="tab-files" aria-selected="true" aria-controls="side-files" tabindex="0" title="Files">Files</button>
+        <button data-tab="search" data-icon="search" role="tab" id="tab-search" aria-selected="false" aria-controls="side-search" tabindex="-1" title="Search in project (Ctrl+Shift+F)">Search</button>
+        <button data-tab="agents" data-icon="bot" role="tab" id="tab-agents" aria-selected="false" aria-controls="side-agents" tabindex="-1" title="Agent runs: parallel agents in their own git worktrees">Agents <span id="agents-count" class="badge"></span></button>
+        <button data-tab="changes" data-icon="git-compare" role="tab" id="tab-changes" aria-selected="false" aria-controls="side-changes" tabindex="-1" title="Changes: what the agent changed, with review flags">Changes <span id="changes-count" class="badge"></span></button>
+        <button data-tab="history" data-icon="history" role="tab" id="tab-history" aria-selected="false" aria-controls="side-history" tabindex="-1" title="History: commit graph, stashes, blame">History</button>
+        <button data-tab="scripts" data-icon="scroll-text" role="tab" id="tab-scripts" aria-selected="false" aria-controls="side-scripts" tabindex="-1" title="Scripts">Scripts</button>
         <button id="btn-refresh" class="icon" data-icon="refresh-cw" title="Refresh"></button>
       </nav>
       <aside id="sidebar">
-        <div id="side-files" class="side-pane active"></div>
-        <div id="side-search" class="side-pane">
+        <div id="side-files" class="side-pane active" role="tabpanel" aria-labelledby="tab-files"></div>
+        <div id="side-search" class="side-pane" role="tabpanel" aria-labelledby="tab-search">
           <div class="searchbox">
             <input id="q" type="text" placeholder="Search in project (Ctrl+Shift+F)" spellcheck="false">
             <button id="q-case" class="toggle" title="Match case">Aa</button>
@@ -53,10 +53,10 @@
           <div id="search-meta" class="muted"></div>
           <div id="search-results"></div>
         </div>
-        <div id="side-agents" class="side-pane"></div>
-        <div id="side-changes" class="side-pane"></div>
-        <div id="side-history" class="side-pane"></div>
-        <div id="side-scripts" class="side-pane"></div>
+        <div id="side-agents" class="side-pane" role="tabpanel" aria-labelledby="tab-agents"></div>
+        <div id="side-changes" class="side-pane" role="tabpanel" aria-labelledby="tab-changes"></div>
+        <div id="side-history" class="side-pane" role="tabpanel" aria-labelledby="tab-history"></div>
+        <div id="side-scripts" class="side-pane" role="tabpanel" aria-labelledby="tab-scripts"></div>
       </aside>
       <div class="splitter v" id="split-side"></div>
 
