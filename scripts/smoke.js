@@ -74,6 +74,17 @@ for (const appName of ['bazinga', 'Bazinga']) {
 }
 const isolatedEnv = { HOME: fakeHome, USERPROFILE: fakeHome, XDG_CONFIG_HOME: path.join(fakeHome, '.config'), APPDATA: path.join(fakeHome, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(fakeHome, 'AppData', 'Local') };
 
+// Own the app's userData dir too (instead of letting main.js --smoke mint one of its own), so it can be cleaned up below.
+const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'bazinga-userdata-'));
+isolatedEnv.BAZINGA_USER_DATA = userData;
+
+// Seed scorecard history for the "auto-merge" smoke step: 3 prior wins (scorecard.js's MIN_RUNS) for agent "Smoke" on
+// a "docs" task, so that step's 4th run has a track record real enough for automerge.autoMergeEligible() to say yes.
+fs.writeFileSync(path.join(userData, 'scorecard.json'), JSON.stringify({ version: 1, records: Array.from({ length: 3 }, (_, i) => ({
+  at: Date.now() - (3 - i) * 60000, agent: 'Smoke', model: '', local: false, kind: 'docs', outcome: 'merged', result: 'win',
+  escalatedTo: '', fixRounds: 0, fixLoop: true, activeMs: 1000, files: 1, costUsd: 0, tokens: 0,
+})) }));
+
 // a stand-in for docker, so the "run in a container" flow can be exercised: the real command line is typed into the terminal either way
 const fakeBin = path.join(fakeHome, 'fakebin');
 fs.mkdirSync(fakeBin, { recursive: true });
@@ -92,18 +103,33 @@ const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], env: { ...pr
 let out = '';
 child.stdout.on('data', (d) => { out += d; });
 child.stderr.on('data', (d) => { out += d; });
-const timer = setTimeout(() => { console.error('Smoke test timed out after 240s'); const steps = out.split('\n').filter((l) => l.includes('[smoke]')); console.error(steps.length ? steps.slice(-60).join('\n') : `No step was reported. Last output of the app:\n${out.split('\n').slice(-25).join('\n')}`); child.kill('SIGKILL'); }, 240000);
+// 420s: the fixed budget grew with the suite (session replay, semantic diff, adaptive-guard-rule and auto-merge
+// coverage added real steps, each spawning a terminal or running the gates, and several steps now revert/restore
+// a dirty main around a real merge), so 300s started clipping healthy runs too.
+const SMOKE_TIMEOUT_MS = 420000;
+const timer = setTimeout(() => { console.error(`Smoke test timed out after ${SMOKE_TIMEOUT_MS / 1000}s`); const steps = out.split('\n').filter((l) => l.includes('[smoke]')); console.error(steps.length ? steps.slice(-60).join('\n') : `No step was reported. Last output of the app:\n${out.split('\n').slice(-25).join('\n')}`); child.kill('SIGKILL'); }, SMOKE_TIMEOUT_MS);
+
+// Best-effort removal of everything this run created outside the project, whether it passed, failed or timed out
+// (a run used to leave the fixture, the fake home, the Electron userData dir and any agent-run worktree behind,
+// forever — thousands of them pile up in the OS temp dir over time).
+function cleanup() {
+  for (const dir of [fixture, `${fixture}.worktrees`, fakeHome, userData]) {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+}
 
 child.on('close', (code) => {
   clearTimeout(timer);
   const line = out.split('\n').find((l) => l.startsWith('SMOKE_RESULT '));
   if (!line) {
     console.error('No SMOKE_RESULT received. Output:\n' + out.slice(-3000));
+    cleanup();
     process.exit(1);
   }
   const report = require('../src/core/smokeerrors').apply(JSON.parse(line.slice('SMOKE_RESULT '.length)));
   const touched = markerFiles.filter((f) => fs.readFileSync(f, 'utf8') !== '{"marker":"keep me"}');
   if (touched.length) { report.ok = false; report.errors.push(`The smoke test modified real user settings: ${touched.join(', ')}`); }
   console.log(JSON.stringify(report, null, 2));
+  cleanup();
   process.exit(report.ok && code === 0 ? 0 : 1);
 });

@@ -7,7 +7,7 @@
   "license": "UNLICENSED",
   "scripts": {
     "start": "electron .",
-    "test": "node --test \"test/**/*.test.js\"",
+    "test": "node scripts/test.js",
     "bazinga": "node bin/bazinga.js",
     "check": "node bin/ide-check.js",
     "guard": "node bin/ide-guard.js",

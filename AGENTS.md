@@ -48,7 +48,7 @@ Electron-only APIs (`BrowserWindow`, IPC, etc.) from `src/core/`.
 | Task | Command |
 |---|---|
 | Run the app | `npm start -- /path/to/a/project` |
-| Run tests | `npm test` (`node --test "test/**/*.test.js"`) |
+| Run tests | `npm test` (`node scripts/test.js`, which runs every `test/**/*.test.js` under `node --test`) |
 | Run the quality gates on this repo itself | `npm run check` |
 | Merge guard (used as a pre-push hook / PR comment) | `npm run guard` |
 | Environment diagnostics | `npm run doctor` |

@@ -50,6 +50,10 @@
             <button id="q-case" class="toggle" title="Match case">Aa</button>
             <button id="q-re" class="toggle" title="Regular expression">.*</button>
           </div>
+          <div class="searchbox">
+            <input id="q-replace" type="text" placeholder="Replace" spellcheck="false">
+            <button id="q-replace-all" data-icon="replace-all" title="Replace every match shown above, in every file">Replace all</button>
+          </div>
           <div id="search-meta" class="muted"></div>
           <div id="search-results"></div>
         </div>
@@ -70,6 +74,7 @@
               <button id="d-prev" class="icon" data-icon="chevron-left" title="Previous change"></button>
               <button id="d-next" class="icon" data-icon="chevron-right" title="Next change"></button>
               <span id="d-info" class="muted"></span>
+              <button id="d-symbols" class="hidden" data-icon="git-compare-arrows" title="Classes, methods and functions that were added, removed, renamed or moved - a clearer summary than raw line changes"></button>
               <span class="spacer"></span>
               <button id="d-revert-hunk" data-icon="undo-2" title="Undo the change under the cursor (right side); save afterwards with Ctrl+S">Revert this change</button>
               <button id="d-comment" data-icon="message-square-plus" title="Comment on the line under the cursor (right side). You can also click the gutter. Comments are sent to the agent together.">Comment</button>
@@ -111,10 +116,10 @@
       <div id="qo-list"></div>
     </div>
   </div>
-  <div id="modal" class="overlay hidden"><div class="dialog" id="dialog"></div></div>
+  <div id="modal" class="overlay hidden"><div class="dialog" id="dialog" role="dialog" aria-modal="true"></div></div>
 
   <!-- xterm must load before the AMD loader, otherwise its UMD wrapper registers as an AMD module instead of a global -->
-  <div id="board" class="hidden" role="dialog" aria-label="Board"></div>
+  <div id="board" class="hidden" role="dialog" aria-modal="true" aria-label="Board"></div>
   <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
   <script src="../../node_modules/@xterm/addon-search/lib/addon-search.js"></script>

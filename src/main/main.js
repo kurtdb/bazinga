@@ -5,7 +5,7 @@ const path = require('node:path');
 const { PtyManager } = require('./pty');
 const G = require('../core/git');
 const { runChecks } = require('../core/checks');
-const { search } = require('../core/search');
+const { search, replaceInText } = require('../core/search');
 const { runReview } = require('../core/review');
 const scope = require('../core/scope');
 const { fixPath } = require('./shellenv');
@@ -14,6 +14,10 @@ const oversightCore = require('../core/oversight');
 const { DEFAULT_CONFIG, loadConfig, loadScripts, loadChecksConfig, withDefaults } = require('../core/config');
 const { FixLoop, asPaste, relevantFindings, buildEscalationPrompt } = require('../core/fixloop');
 const scorecard = require('../core/scorecard');
+const guardoverrides = require('../core/guardoverrides');
+const replay = require('../core/replay');
+const automerge = require('../core/automerge');
+const semanticdiff = require('../core/semanticdiff');
 const compare = require('../core/compare');
 const prstatus = require('../core/prstatus');
 const workitems = require('../core/workitems');
@@ -266,6 +270,10 @@ function startPoller() {
 function setRoot(dir) {
   usageIndex = null; springIndex = null;
   if (lsp) { lsp.dispose().catch(() => {}); lsp = null; }
+  // canonicalize (resolves symlinks, e.g. macOS /var -> /private/var): `git worktree list` reports paths already
+  // resolved this way, so without this, switching back from a run's worktree to a root opened via its unresolved
+  // form fails the exact-string match in project:switch ("Not a known agent run of this repository").
+  try { dir = fs.realpathSync.native(dir); } catch { /* not on disk (yet) or inaccessible: keep it as given */ }
   root = dir;
   const state = readState();
   state.lastRoot = dir;
@@ -373,7 +381,7 @@ async function runGatesAndTests(r, o = {}) {
 }
 
 /** One line in the scorecard when a run ends: who did the task, what kind of task, and what you did with the result. */
-async function recordOutcome(base, run, outcome) {
+async function recordOutcome(run, outcome) {
   try {
     const kind = (await jevCore.kindOf(run.task, loadConfigSafe(run.root).jev, { key: jevKey() })).kind; // Jev when switched on and sure, else the keyword rules
     let stats = runstats.normalize(run.stats);
@@ -390,7 +398,7 @@ async function recordOutcome(base, run, outcome) {
   } catch { /* the scorecard never blocks a merge or a discard */ }
 }
 
-function setupFixLoop() {
+function setupFixLoop(onDone) {
   fixloop = new FixLoop({
     getConfig: (r) => withDefaults(loadConfigSafe(r), 'fixLoop'),
     runChecks: (r, o) => runGatesAndTests(r, o),
@@ -416,6 +424,7 @@ function setupFixLoop() {
     emit: (evt) => {
       send('fixloop:status', evt);
       if (evt.state === 'fixing') { const t = fixloop.terms.get(evt.id); if (t) { runs.recordStats(t.root, runstats.addRound); runs.journalEvent(t.root, { kind: 'fix-round', text: String(evt.message || evt.summary || '').slice(0, 200) }); } }
+      if (evt.state === 'done' && onDone) { const t = fixloop.terms.get(evt.id); if (t) onDone(t.root); }
       const m = fixLoopMessage(evt);
       if (m) notify('fixloop', m.title, m.body);
     },
@@ -560,7 +569,7 @@ const limitsFile = () => userFile('claude-limits.json');
 const hooksOpts = (config) => ({ server: hookServer, dir: path.join(app.getPath('userData'), 'hook-settings'), statusLine: config && config.insights && config.insights.claudeLimits === true ? `node "${path.join(__dirname, '..', '..', 'bin', 'statusline.js')}" "${limitsFile()}"` : undefined });
 
 function registerIpc() {
-  setupFixLoop();
+  setupFixLoop(tryAutoMerge);
   ipcMain.handle('workflow:selfcheck', (_e, st) => (st ? { verdict: wfselfcheck.verdict(st) } : { workflow: wfselfcheck.WORKFLOW }));
   ipcMain.handle('agent:printCommand', (_e, cmd, shell) => printmode.printCommand(cmd, ['ps', 'cmd', 'posix'].includes(shell) ? shell : 'posix'));
   ipcMain.handle('fleet:settings', () => fleetSettings());
@@ -639,6 +648,101 @@ function registerIpc() {
     return true;
   });
 
+  ipcMain.handle('fs:create', (_e, rel, opts) => safe(async () => {
+    const r = requireRoot();
+    const abs = resolveInRoot(rel);
+    if (fs.existsSync(abs)) return { error: 'A file or folder with that name already exists.' };
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    if (opts && opts.dir) fs.mkdirSync(abs);
+    else {
+      fs.writeFileSync(abs, '');
+      try { getLocalHistory().record(r, toPosix(rel), '', { label: 'created' }); } catch { /* best effort */ }
+    }
+    return { ok: true };
+  }));
+
+  // Snapshots every file under `abs` into local history (best effort) before a delete, so it stays recoverable
+  // even for files that were never tracked by git.
+  function snapshotBeforeDelete(r, abs, rel) {
+    try {
+      const stat = fs.statSync(abs);
+      if (stat.isDirectory()) {
+        for (const name of fs.readdirSync(abs)) {
+          if (name === '.git' || IGNORED_DIRS.has(name)) continue;
+          snapshotBeforeDelete(r, path.join(abs, name), toPosix(path.join(rel, name)));
+        }
+        return;
+      }
+      if (stat.size > MAX_FILE_BYTES) return;
+      const buf = fs.readFileSync(abs);
+      if (buf.subarray(0, 8000).includes(0)) return; // binary: skip the snapshot, the delete still proceeds
+      getLocalHistory().record(r, rel, buf.toString('utf8'), { label: 'before delete' });
+    } catch { /* best effort */ }
+  }
+
+  ipcMain.handle('fs:delete', (_e, rel) => safe(async () => {
+    const r = requireRoot();
+    const abs = resolveInRoot(rel);
+    if (abs === r) return { error: 'Cannot delete the project root.' };
+    if (!fs.existsSync(abs)) return { error: 'Already gone.' };
+    snapshotBeforeDelete(r, abs, toPosix(rel));
+    fs.rmSync(abs, { recursive: true });
+    return { ok: true };
+  }));
+
+  ipcMain.handle('fs:rename', (_e, fromRel, toRel) => safe(async () => {
+    const r = requireRoot();
+    const from = resolveInRoot(fromRel);
+    const to = resolveInRoot(toRel);
+    if (from === r) return { error: 'Cannot rename the project root.' };
+    if (!fs.existsSync(from)) return { error: 'Not found.' };
+    if (fs.existsSync(to)) return { error: 'A file or folder with that name already exists.' };
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.renameSync(from, to);
+    return { ok: true };
+  }));
+
+  ipcMain.handle('fs:duplicate', (_e, rel) => safe(async () => {
+    const r = requireRoot();
+    const from = resolveInRoot(rel);
+    if (from === r) return { error: 'Cannot duplicate the project root.' };
+    if (!fs.existsSync(from)) return { error: 'Not found.' };
+    const dir = path.dirname(from);
+    const base = path.basename(from);
+    const isFile = fs.statSync(from).isFile();
+    const dot = base.lastIndexOf('.');
+    const [stem, ext] = isFile && dot > 0 ? [base.slice(0, dot), base.slice(dot)] : [base, ''];
+    let candidate = `${stem} copy${ext}`;
+    for (let n = 2; fs.existsSync(path.join(dir, candidate)); n++) candidate = `${stem} copy ${n}${ext}`;
+    const to = path.join(dir, candidate);
+    fs.cpSync(from, to, { recursive: true });
+    return { ok: true, rel: toPosix(path.relative(r, to)) };
+  }));
+
+  ipcMain.handle('search:replace', (_e, opts) => safe(async () => {
+    const r = requireRoot();
+    const found = await search(r, opts, 20000);
+    if (found.error) return { error: found.error };
+    const files = [...new Set((found.results || []).map((h) => h.file))];
+    let changedFiles = 0;
+    let replacements = 0;
+    for (const rel of files) {
+      const abs = resolveInRoot(rel);
+      let buf;
+      try { buf = fs.readFileSync(abs); } catch { continue; }
+      if (buf.subarray(0, 8000).includes(0)) continue; // binary
+      const res = replaceInText(buf.toString('utf8'), opts);
+      if (res.error) return res;
+      if (!res.count) continue;
+      try { await lhBaseline(r, rel); } catch { /* best effort */ }
+      fs.writeFileSync(abs, res.content, 'utf8');
+      try { getLocalHistory().record(r, rel, res.content, { label: 'replace in files' }); } catch { /* best effort */ }
+      changedFiles++;
+      replacements += res.count;
+    }
+    return { files: changedFiles, replacements };
+  }));
+
   // local history
   ipcMain.handle('localhistory:list', (_e, rel) => safe(async () => { resolveInRoot(rel); return { entries: getLocalHistory().list(requireRoot(), toPosix(rel)) }; }));
   ipcMain.handle('localhistory:read', (_e, rel, id) => safe(async () => { resolveInRoot(rel); return { content: getLocalHistory().read(requireRoot(), toPosix(rel), id) }; }));
@@ -681,6 +785,12 @@ function registerIpc() {
     return { run };
   }));
   ipcMain.handle('runs:journal', (_e, id) => safe(async () => { const ev = await runs.readJournal(requireRoot(), id); return { events: ev, text: journalCore.format(ev) }; }));
+  // session replay: the run's journal merged with its commits (while prepareReview has not yet folded them away)
+  ipcMain.handle('runs:replay', (_e, id) => safe(async () => {
+    const base = requireRoot();
+    const [events, commits] = await Promise.all([runs.readJournal(base, id), runs.runCommits(base, id)]);
+    return { steps: replay.buildTimeline({ events, commits }) };
+  }));
   // ---------- agent runs in a Docker container ----------
   ipcMain.handle('container:check', () => safe(async () => {
     const cfg = loadConfigSafe(root).agentContainer || {};
@@ -835,14 +945,35 @@ function registerIpc() {
     const base = requireRoot();
     const { run } = await runs.findRun(base, opts.id);
     const result = await runs.mergeRun(base, opts.id, { message: opts.message, squash: opts.squash !== false });
-    await recordOutcome(base, run, 'merged');
+    await recordOutcome(run, 'merged');
+    if (Array.isArray(opts.overriddenItems) && opts.overriddenItems.length) guardoverrides.recordOverride(userFile('guardoverrides.json'), opts.overriddenItems);
     runs.journalEvent(run.root, { kind: 'merged', text: `into ${result && result.into}` }).catch(() => {});
     return { result };
+  }));
+  // adaptive guard rules: offer to relax a rule once it has been overridden past `THRESHOLD` times
+  ipcMain.handle('guardoverrides:get', () => safe(() => {
+    const base = requireRoot();
+    const cfg = loadConfigSafe(base);
+    const eff = require('../core/ciguard').effectivePolicy(base, { mergeGuard: cfg.mergeGuard, protectedPaths: cfg.protectedPaths });
+    const store = guardoverrides.load(userFile('guardoverrides.json'));
+    return { suggestions: guardoverrides.suggestions(store, eff.policy) };
+  }));
+  ipcMain.handle('guardoverrides:dismiss', (_e, ruleId) => safe(() => guardoverrides.dismiss(userFile('guardoverrides.json'), ruleId)));
+  ipcMain.handle('guardoverrides:relax', (_e, ruleId) => safe(() => {
+    const base = requireRoot();
+    const settings = readSettings();
+    const cfg = loadConfigSafe(base);
+    const eff = require('../core/ciguard').effectivePolicy(base, { mergeGuard: cfg.mergeGuard, protectedPaths: cfg.protectedPaths });
+    const current = eff.policy[ruleId] || 'warn';
+    const next = { ...settings, mergeGuard: { ...(settings.mergeGuard || {}), [ruleId]: guardoverrides.relax(current) } };
+    writeJson('settings.json', next);
+    guardoverrides.dismiss(userFile('guardoverrides.json'), ruleId);
+    return { level: next.mergeGuard[ruleId] };
   }));
   ipcMain.handle('runs:discard', (_e, id, why) => safe(async () => {
     const base = requireRoot();
     const { run } = await runs.findRun(base, id);
-    if (why !== 'skip') await recordOutcome(base, run, why === 'lost' ? 'lost' : 'discarded'); // 'skip': a self-check's throw-away run
+    if (why !== 'skip') await recordOutcome(run, why === 'lost' ? 'lost' : 'discarded'); // 'skip': a self-check's throw-away run
     await runs.journalEvent(run.root, { kind: 'discarded' });
     return runs.removeRun(base, id);
   }));
@@ -946,6 +1077,28 @@ function registerIpc() {
     runs.journalEvent(run.root, { kind: 'guard', text: guard.clean ? 'clean' : `${guard.blockers} blocker(s), ${guard.warnings} warning(s): ${guard.items.map((i) => i.id).join(', ')}` });
     return { guard, counts: gateError ? null : res.counts, files: analysis.files.length, changed };
   }
+  // auto-merge: called when the fix loop's gates come back clean (see setupFixLoop's `onDone`). Off unless the project opted
+  // in, and even then only for an (agent, kind of task) pairing with enough scorecard history at a high win rate - see automerge.js.
+  async function tryAutoMerge(termRoot) {
+    try {
+      const base = requireRoot();
+      const { main, runs: list } = await runs.listRuns(base);
+      const run = list.find((r) => termRoot === r.root || termRoot.startsWith(r.root + path.sep));
+      if (!run) return;
+      const cfg = withDefaults(loadConfigSafe(run.root), 'autoMerge');
+      if (!cfg.enabled) return;
+      const { guard } = await guardForRun(base, run, { unattended: true });
+      const kind = (await jevCore.kindOf(run.task, loadConfigSafe(run.root).jev, { key: jevKey() })).kind;
+      const rows = scorecard.summarize(scorecard.load(userFile('scorecard.json')));
+      const elig = automerge.autoMergeEligible({ guard, scorecardRows: rows, agent: run.agent || 'agent', kind, cfg });
+      if (!elig.eligible) { dbg('automerge', `${run.name}: not auto-merged (${elig.reason})`); return; }
+      const result = await runs.mergeRun(base, run.id, { message: `Auto-merged: ${run.name}`, squash: true });
+      await recordOutcome(run, 'merged');
+      dbg('automerge', `${run.name}: auto-merged into ${result.into} - ${elig.reason}`);
+      notify('fixloop', `Auto-merged “${run.name}”`, `${elig.reason}. Merged into ${result.into}. You can undo this from the run list.`);
+      send('run:automerged', { id: run.id, name: run.name, root: run.root, mainRoot: main.root, into: result.into });
+    } catch (err) { dbg('automerge', `failed: ${err.message}`); }
+  }
   // end of a workflow with `finish: merge`: every run of the workflow is merged, but only while the merge guard has nothing to say
   ipcMain.handle('workflow:finish', (_e, opts = {}) => safe(async () => {
     const base = requireRoot();
@@ -958,7 +1111,7 @@ function registerIpc() {
       if (!guard.clean) return { merged, stopped: id, name: run.name, reason: guard.items.map((i) => `${i.level}: ${i.text}`).slice(0, 5).join(' · ') || 'the merge guard is not clean' };
       try {
         const result = await runs.mergeRun(base, id, { message: `${opts.name || run.name}`.slice(0, 120), squash: true });
-        await recordOutcome(base, run, 'merged');
+        await recordOutcome(run, 'merged');
         runs.journalEvent(run.root, { kind: 'merged', text: `into ${result && result.into} (workflow finish)` }).catch(() => {});
         merged.push({ id, name: run.name, into: result && result.into });
       } catch (err) { return { merged, stopped: id, name: run.name, reason: err.message }; }
@@ -1387,6 +1540,15 @@ function registerIpc() {
       blame: blame ? symbols.symbolBlame(blame, s) : null,
     })) };
   }));
+  // semantic diff: what happened to each class/method/function between two versions of a file - added, removed,
+  // renamed, moved or changed - instead of raw line deletes and inserts. Pure text in, so it works for any diff
+  // source (a commit, local history, the live Changes tab); no file is read.
+  ipcMain.handle('symbols:diff', (_e, { rel, original, modified } = {}) => safe(async () => {
+    const cfgSym = loadConfigSafe(requireRoot()).symbolParser;
+    const symbolsOf = async (content) => (cfgSym === 'regex' ? null : await treesitter.symbols(String(rel), String(content))) || symbols.findSymbols(String(rel), String(content));
+    const [oldSymbols, newSymbols] = await Promise.all([symbolsOf(original || ''), symbolsOf(modified || '')]);
+    return { changes: semanticdiff.diffSymbols(original || '', modified || '', oldSymbols, newSymbols) };
+  }));
 
   // files dropped on a terminal / images pasted into it -> text for the prompt (nothing is read)
   ipcMain.handle('drop:format', (_e, paths, opts = {}) => safe(async () => ({ text: dropinsert.formatDropPaths(paths, { root: requireRoot(), shellKind: shellKindOf(loadConfigSafe(root)), agent: !!opts.agent, at: !!opts.at }) })));
@@ -1429,8 +1591,11 @@ function registerIpc() {
     return { command, env, cwd: resolveInRoot(mod.dir || '.'), label: opts.task || 'Spring Boot' };
   }));
   ipcMain.handle('project:switch', (_e, target) => safe(async () => {
-    const { main, runs: list } = await runs.listRuns(requireRoot());
     const abs = path.resolve(String(target || ''));
+    // list from the target, not the current root: the current root can be a run's worktree that was just removed
+    // out from under it (e.g. auto-merge, while that run was the active project) - git can no longer run from a
+    // deleted cwd, so validating against it would always fail "not a known run" even switching back to a real main.
+    const { main, runs: list } = await runs.listRuns(abs);
     const known = [main && main.root, ...list.map((r) => r.root)].filter(Boolean);
     if (!known.includes(abs)) throw new Error('Not a known agent run of this repository.');
     setRoot(abs);

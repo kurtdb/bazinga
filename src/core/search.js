@@ -75,4 +75,19 @@ async function search(root, opts, limit = 2000) {
   return jsSearch(root, opts, limit);
 }
 
-module.exports = { search, rgBinary };
+/**
+ * Replace every match of { query, regex, caseSensitive } in `content` with `replacement`.
+ * In regex mode $1, $&, etc. in the replacement refer to capture groups (native RegExp.replace behaviour);
+ * in plain-text mode a literal "$" in the replacement is never treated as special.
+ * -> { content, count } (count is 0 and content unchanged when nothing matches) | { error }
+ */
+function replaceInText(content, { query, regex, caseSensitive, replacement }) {
+  let re;
+  try { re = new RegExp(regex ? query : escapeRegExp(query), caseSensitive ? 'g' : 'gi'); } catch { return { error: 'Invalid regular expression' }; }
+  const count = (content.match(re) || []).length;
+  if (!count) return { content, count: 0 };
+  const safeReplacement = regex ? String(replacement) : String(replacement).replace(/\$/g, '$$$$');
+  return { content: content.replace(re, safeReplacement), count };
+}
+
+module.exports = { search, rgBinary, replaceInText };

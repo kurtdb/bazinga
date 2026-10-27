@@ -81,7 +81,15 @@
   "coffee": "<path d=\"M10 2v2\" /> <path d=\"M14 2v2\" /> <path d=\"M16 8a1 1 0 0 1 1 1v8a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1h14a4 4 0 1 1 0 8h-1\" /> <path d=\"M6 2v2\" />",
   "hash": "<line x1=\"4\" x2=\"20\" y1=\"9\" y2=\"9\" /> <line x1=\"4\" x2=\"20\" y1=\"15\" y2=\"15\" /> <line x1=\"10\" x2=\"8\" y1=\"3\" y2=\"21\" /> <line x1=\"16\" x2=\"14\" y1=\"3\" y2=\"21\" />",
   "download": "<path d=\"M12 15V3\" /> <path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\" /> <path d=\"m7 10 5 5 5-5\" />",
-  "upload-cloud": "<path d=\"M12 13v8\" /> <path d=\"M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242\" /> <path d=\"m8 17 4-4 4 4\" />"
+  "upload-cloud": "<path d=\"M12 13v8\" /> <path d=\"M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242\" /> <path d=\"m8 17 4-4 4 4\" />",
+  "replace-all": "<path d=\"M14 14a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1\" /> <path d=\"M14 4a1 1 0 0 1 1-1\" /> <path d=\"M15 10a1 1 0 0 1-1-1\" /> <path d=\"M19 14a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1\" /> <path d=\"M21 4a1 1 0 0 0-1-1\" /> <path d=\"M21 9a1 1 0 0 1-1 1\" /> <path d=\"m3 7 3 3 3-3\" /> <path d=\"M6 10V5a2 2 0 0 1 2-2h2\" /> <rect x=\"3\" y=\"14\" width=\"7\" height=\"7\" rx=\"1\" />",
+  "unlock": "<rect width=\"18\" height=\"11\" x=\"3\" y=\"11\" rx=\"2\" ry=\"2\" /> <path d=\"M7 11V7a5 5 0 0 1 9.9-1\" />",
+  "play-circle": "<path d=\"M9 9.003a1 1 0 0 1 1.517-.859l4.997 2.997a1 1 0 0 1 0 1.718l-4.997 2.997A1 1 0 0 1 9 14.996z\" /> <circle cx=\"12\" cy=\"12\" r=\"10\" />",
+  "pause": "<rect x=\"14\" y=\"3\" width=\"5\" height=\"18\" rx=\"1\" /> <rect x=\"5\" y=\"3\" width=\"5\" height=\"18\" rx=\"1\" />",
+  "skip-back": "<path d=\"M17.971 4.285A2 2 0 0 1 21 6v12a2 2 0 0 1-3.029 1.715l-9.997-5.998a2 2 0 0 1-.003-3.432z\" /> <path d=\"M3 20V4\" />",
+  "skip-forward": "<path d=\"M21 4v16\" /> <path d=\"M6.029 4.285A2 2 0 0 0 3 6v12a2 2 0 0 0 3.029 1.715l9.997-5.998a2 2 0 0 0 .003-3.432z\" />",
+  "rewind": "<path d=\"M12 6a2 2 0 0 0-3.414-1.414l-6 6a2 2 0 0 0 0 2.828l6 6A2 2 0 0 0 12 18z\" /> <path d=\"M22 6a2 2 0 0 0-3.414-1.414l-6 6a2 2 0 0 0 0 2.828l6 6A2 2 0 0 0 22 18z\" />",
+  "git-compare-arrows": "<circle cx=\"5\" cy=\"6\" r=\"3\" /> <path d=\"M12 6h5a2 2 0 0 1 2 2v7\" /> <path d=\"m15 9-3-3 3-3\" /> <circle cx=\"19\" cy=\"18\" r=\"3\" /> <path d=\"M12 18H7a2 2 0 0 1-2-2V9\" /> <path d=\"m9 15 3 3-3 3\" />"
 };
   /** An inline <svg> that inherits the text colour (stroke: currentColor), so it follows the light/dark theme. */
   window.icon = function icon(name, cls) {

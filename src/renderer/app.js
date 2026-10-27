@@ -432,6 +432,7 @@
         diffEditor.setModel({ original: tab.original, modified: tab.modified || m.model });
         diffEditor.getModifiedEditor().focus();
         updateDiffBar();
+        refreshSymbolDiff(tab);
       }
     } else {
       editor.setModel(null);
@@ -538,6 +539,43 @@
     const rv = $('#d-reviewed');
     rv.disabled = !taskHash(tab.rel);
     setLabel(rv, isReviewed(tab.rel) ? 'Reviewed' : 'Mark reviewed', isReviewed(tab.rel) ? 'check-check' : 'check');
+  }
+
+  // semantic diff: classes/methods/functions added, removed, renamed or moved, instead of raw line changes
+  function symbolChangeLabel(c) {
+    const kind = c.kind === 'class' ? 'class' : c.kind === 'method' ? 'method' : 'function';
+    switch (c.type) {
+      case 'renamed': return `Renamed ${kind} ${c.name} → ${c.newName}`;
+      case 'moved': return `Moved ${kind} ${c.name} (line ${c.oldLine} → ${c.newLine})`;
+      case 'modified': return `Changed ${kind} ${c.name}`;
+      case 'added': return `Added ${kind} ${c.name}`;
+      case 'removed': return `Removed ${kind} ${c.name}`;
+      default: return `${kind} ${c.name}`;
+    }
+  }
+  function jumpToSymbolChange(c) {
+    const line = c.newLine || c.oldLine;
+    const ed = c.newLine ? diffEditor.getModifiedEditor() : diffEditor.getOriginalEditor();
+    ed.revealLineInCenter(line);
+    ed.setPosition({ lineNumber: line, column: 1 });
+    ed.focus();
+  }
+  async function refreshSymbolDiff(tab) {
+    const box = $('#d-symbols');
+    box.classList.add('hidden');
+    box.onclick = null;
+    if (!tab || tab.kind !== 'diff') return;
+    const originalText = tab.originalText !== undefined ? tab.originalText : tab.original.getValue();
+    const modified = tab.modified || (state.models.get(tab.rel) && state.models.get(tab.rel).model);
+    if (!modified) return;
+    const res = await api.symbols.diff({ rel: tab.rel, original: originalText, modified: modified.getValue() });
+    if (activeTab() !== tab || res.error || !res.changes || !res.changes.length) return;
+    setLabel(box, `${res.changes.length} symbol change${res.changes.length === 1 ? '' : 's'}`);
+    box.classList.remove('hidden');
+    box.onclick = () => {
+      const r = box.getBoundingClientRect();
+      popupMenu(r.left, r.bottom + 4, res.changes.map((c) => ({ label: symbolChangeLabel(c), onclick: () => jumpToSymbolChange(c) })));
+    };
   }
 
   // ---------------------------------------------------------------- review comments on diff lines
@@ -1239,17 +1277,83 @@
     setStatus(r.added && r.added.length ? `Marked ${r.added.join(', ')}.` : 'No conventional source or test folders found that are not marked already (src/main/java, src/test/java, src, test, tests …).');
     return r;
   }
-  function folderMenu(ev, rel) {
+  // New file/folder, rename, duplicate, delete: every tab open under `rel` (or exactly `rel` for a file) is closed
+  // first, since the path it points at is about to disappear or move.
+  async function closeTabsUnder(rel, isDir) {
+    const rels = isDir
+      ? [...new Set(state.tabs.filter((t) => t.rel === rel || t.rel.startsWith(`${rel}/`)).map((t) => t.rel))]
+      : [rel];
+    for (const r of rels) await closeTabsFor(r);
+  }
+  async function createEntry(parentRel, isDir) {
+    const name = window.prompt(`Name of the new ${isDir ? 'folder' : 'file'}${parentRel ? ` (in ${parentRel})` : ''}:`, '');
+    if (!name) return;
+    const rel = parentRel ? `${parentRel}/${name}` : name;
+    const res = await api.fs.create(rel, { dir: isDir });
+    if (res.error) { setStatus(res.error); return; }
+    if (parentRel) state.expanded.add(parentRel);
+    state.quick.stale = true;
+    await renderTree();
+    if (!isDir) openFile(rel);
+    setStatus(`Created ${rel}.`);
+  }
+  async function renameEntry(rel, isDir) {
+    const base = rel.split('/').pop();
+    const name = window.prompt(`Rename "${base}" to:`, base);
+    if (!name || name === base) return;
+    const parent = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
+    const toRel = parent ? `${parent}/${name}` : name;
+    const wasOpen = !isDir && state.tabs.some((t) => t.rel === rel && t.kind === 'file');
+    const res = await api.fs.rename(rel, toRel);
+    if (res.error) { setStatus(res.error); return; }
+    await closeTabsUnder(rel, isDir);
+    state.quick.stale = true;
+    await renderTree();
+    if (wasOpen) await openFile(toRel);
+    setStatus(`Renamed to ${toRel}.`);
+  }
+  async function duplicateEntry(rel) {
+    const res = await api.fs.duplicate(rel);
+    if (res.error) { setStatus(res.error); return; }
+    state.quick.stale = true;
+    await renderTree();
+    setStatus(`Duplicated as ${res.rel}.`);
+  }
+  async function deleteEntry(rel, isDir) {
+    if (!window.confirm(`Delete "${rel}"?\n\n${isDir ? 'This deletes the folder and everything inside it. ' : ''}A local-history snapshot is kept first, so this can be undone from there.`)) return;
+    const res = await api.fs.delete(rel);
+    if (res.error) { setStatus(res.error); return; }
+    await closeTabsUnder(rel, isDir);
+    state.quick.stale = true;
+    await renderTree();
+    setStatus(`Deleted ${rel}.`);
+  }
+  function rowMenu(ev, rel, isDir) {
     ev.preventDefault();
-    const cur = folderRoleOf(rel);
-    const own = cur && cur.exact ? cur.role : null;
-    popupMenu(ev.clientX, ev.clientY, [
-      { label: 'Mark as source folder', checked: own === 'source', onclick: () => markFolder(rel, 'source') },
-      { label: 'Mark as test folder', checked: own === 'tests', onclick: () => markFolder(rel, 'tests') },
-      { label: 'Clear mark', disabled: !own, onclick: () => markFolder(rel, null) },
-      '-',
-      { label: 'Detect source and test folders', onclick: detectFolders },
-    ]);
+    const items = [];
+    if (isDir) {
+      const cur = folderRoleOf(rel);
+      const own = cur && cur.exact ? cur.role : null;
+      items.push(
+        { label: 'New file…', onclick: () => createEntry(rel, false) },
+        { label: 'New folder…', onclick: () => createEntry(rel, true) },
+        '-',
+        { label: 'Mark as source folder', checked: own === 'source', onclick: () => markFolder(rel, 'source') },
+        { label: 'Mark as test folder', checked: own === 'tests', onclick: () => markFolder(rel, 'tests') },
+        { label: 'Clear mark', disabled: !own, onclick: () => markFolder(rel, null) },
+        '-',
+        { label: 'Detect source and test folders', onclick: detectFolders },
+      );
+    }
+    if (rel) {
+      items.push('-',
+        { label: 'Rename…', onclick: () => renameEntry(rel, isDir) },
+        { label: 'Duplicate', onclick: () => duplicateEntry(rel) },
+        { label: 'Copy relative path', onclick: () => api.copy(rel) },
+        '-',
+        { label: 'Delete', onclick: () => deleteEntry(rel, isDir) });
+    }
+    popupMenu(ev.clientX, ev.clientY, items);
   }
 
   async function renderDir(container, rel, depth) {
@@ -1263,7 +1367,7 @@
         el('span', { class: 'name', text: e.name }),
         el('span', { class: 'role' }),
         el('span', { class: 'tag' }));
-      if (e.dir) row.addEventListener('contextmenu', (ev) => folderMenu(ev, e.rel));
+      row.addEventListener('contextmenu', (ev) => rowMenu(ev, e.rel, e.dir));
       row.addEventListener('dragstart', (ev) => { ev.dataTransfer.setData('application/x-bazinga-path', e.rel); ev.dataTransfer.effectAllowed = 'copy'; });
       row.addEventListener('click', async () => {
         if (e.dir) { if (open) state.expanded.delete(e.rel); else state.expanded.add(e.rel); await renderTree(); scheduleSessionSave(); } else openFile(e.rel);
@@ -2008,6 +2112,12 @@
 
   api.pty.onData((id, data) => { for (const t of state.terms.values()) if (t.id === id) { t.term.write(data); t.lastData = Date.now(); if (t.prompt && Date.now() - t.prompt.at > 500) { t.prompt = null; renderBottomTabs(); renderAgentsPane(); } } });
   api.runs.onBudget((b) => { setStatus(`${b.name}: time budget used (${b.usedMin} of ${b.limitMin} min). The fix loop is stopped for it.`); refreshRuns(); });
+  api.runs.onAutoMerged(async (e) => {
+    setStatus(`Auto-merged “${e.name}” into ${e.into}: clean gates and a strong track record for this kind of task.`);
+    for (const t of state.terms.values()) if (t.runId === e.id && t.id !== null && !t.exited) api.pty.kill(t.id);
+    if (state.project && state.project.root === e.root) await switchRoot(e.mainRoot);
+    await renderTree(); await refreshChanges(); await refreshRuns(); await loadProject();
+  });
   api.onAgentPrompt((id, text) => { for (const t of state.terms.values()) if (t.id === id) fleetEvent(t, 'wait', `asks: ${String(text || 'permission').slice(0, 100)}`); dbg('prompt', `window heard: terminal ${id} asks: ${String(text || '').slice(0, 160)}`); for (const t of state.terms.values()) if (t.id === id) t.prompt = { text: text || 'The agent is asking for permission', at: Date.now() }; renderBottomTabs(); renderAgentsPane(); });
   api.pty.onExit((id, code) => {
     dbg('pty', `window heard: terminal ${id} exited (${code})`);
@@ -2188,6 +2298,9 @@
     const flEsc = el('select', { title: 'A stronger agent that takes over the same working copy when this one cannot get the gates clean' }, el('option', { value: '', text: 'nobody (keep trying, then stop)' }), ...agents.map((a) => el('option', { value: a.name, text: a.name })));
     flEsc.value = (fl.escalate && fl.escalate.agent) || '';
     const flEscAfter = num(fl.escalate && fl.escalate.after, 2, 1, 10);
+    const amCur = { ...defaults.autoMerge, ...(settings.autoMerge || {}) };
+    const amOn = el('input', { type: 'checkbox' }); amOn.checked = !!amCur.enabled;
+    const amRate = num(Math.round((amCur.minWinRate ?? 0.8) * 100), 80, 50, 100);
     const notif = el('input', { type: 'checkbox' }); notif.checked = settings.notifications !== undefined ? !!settings.notifications : defaults.notifications !== false;
     const edFont = num(settings.editorFontSize, 13, 8, 32);
     const termFont = num(settings.terminalFontSize, 13, 8, 32);
@@ -2292,6 +2405,7 @@
       next.terminalFontSize = Math.min(32, Math.max(8, Number(termFont.value) || 13));
       next.terminalScrollback = Math.min(50000, Math.max(200, Math.round(Number(scrollback.value)) || 2000));
       next.mergeGuard = Object.fromEntries(Object.entries(guardSel).map(([k, sel]) => [k, sel.value]));
+      next.autoMerge = { enabled: amOn.checked, minWinRate: Math.min(1, Math.max(0.5, (Number(amRate.value) || 80) / 100)) };
       if (lvlSel.value) {
         // a level owns the fix loop and merge guard: keep only what the level does not decide
         next.oversight = lvlSel.value;
@@ -2360,12 +2474,14 @@
     const testMin = el('input', { type: 'text', value: String(ol.testMinutes || 15), title: 'How long the model test waits for each step before giving up' }); testMin.style.maxWidth = '40px';
     const maxOut = el('input', { type: 'text', value: String(ol.maxOutputTokens || 8192), title: 'The most Claude Code lets a local model write in one reply. It is taken out of the context window, so a smaller number leaves more room for the conversation.' }); maxOut.style.maxWidth = '60px';
     const warmFor = el('input', { type: 'text', value: ol.keepAlive || '15m', title: 'How long Ollama keeps the model after each ping, e.g. 15m or 2h' }); warmFor.style.maxWidth = '60px';
-    const f = [
-      el('h3', { text: 'Settings' }),
-      el('div', { class: 'field' }, el('label', { text: 'Theme' }), themeSel),
-      el('div', { class: 'field' }, el('label', { text: 'Terminal shell' }), shell),
-      el('div', { class: 'field' }, el('label', { text: 'Shell arguments' }), shellArgs),
-      el('div', { class: 'field' }, el('div', { class: 'agent-head', text: 'Agent buttons (top bar)' }), agentBox,
+    // ---- fields, keyed by name (not position): a new field only needs a key here and a mention in TABS below,
+    // so adding one can never silently shift another field into the wrong tab or out of the dialog entirely.
+    const f = {
+      title: el('h3', { text: 'Settings' }),
+      theme: el('div', { class: 'field' }, el('label', { text: 'Theme' }), themeSel),
+      shell: el('div', { class: 'field' }, el('label', { text: 'Terminal shell' }), shell),
+      shellArgs: el('div', { class: 'field' }, el('label', { text: 'Shell arguments' }), shellArgs),
+      agentButtons: el('div', { class: 'field' }, el('div', { class: 'agent-head', text: 'Agent buttons (top bar)' }), agentBox,
         el('div', { class: 'line' }, el('label', { text: 'Ollama server' }), urlIn),
         urlNote,
         el('div', { class: 'line' },
@@ -2381,24 +2497,28 @@
         el('label', { class: 'check', title: 'How long the Test button waits for each step' }, ' Model test waits up to ', testMin, ' minutes per step'),
         el('label', { class: 'check', title: 'Claude Code reserves this much of the context window for the model\'s reply (it assumes 32000 for models it does not know, which leaves a 32k window almost empty). At most a quarter of the window is used.' }, ' Longest reply of a local model: ', maxOut, ' tokens (a smaller number leaves more room for files)'),
         el('div', { class: 'hint', text: 'Claude Code on a local model also gets settings that make it behave (no calls to Anthropic, all model aliases on your model, the real context size, long timeouts). Local-model buttons are checked before they start: Ollama running, model installed, context at least 32k. Standing instructions per agent are written to a file and passed with --append-system-prompt-file.' })),
-      el('div', { class: 'field' }, el('label', { text: 'Review command (the review prompt is piped to its stdin)' }), review,
+      reviewCommand: el('div', { class: 'field' }, el('label', { text: 'Review command (the review prompt is piped to its stdin)' }), review,
         el('label', { text: 'Review rules (all projects). A REVIEW.md in the project root is added after these.' }), rulesIn,
         el('div', null, el('button', { title: 'Free and private, but a small local model reviews less well than Claude', onclick: () => { review.value = 'ollama run qwen3.5'; } }, ic('cpu'), 'Use a local model (ollama run)'))),
-      el('div', { class: 'field' }, el('label', { class: 'check' }, auto, ' Run fast checks automatically when files change')),
-      el('div', { class: 'field' }, headWithHelp('Human in the loop', 'How much the agent may do on its own. Lower levels make it ask or explain more before and after it works. Pick one and the detailed settings below follow it.'), lvlSel, lvlHint),
-      el('div', { class: 'field' }, headWithHelp('Fix loop', 'When the agent goes quiet, Bazinga runs your checks (lint, tests). If something fails it sends the problems back to the agent so it fixes them, a few rounds at most.'),
+      autoCheck: el('div', { class: 'field' }, el('label', { class: 'check' }, auto, ' Run fast checks automatically when files change')),
+      humanInLoop: el('div', { class: 'field' }, headWithHelp('Human in the loop', 'How much the agent may do on its own. Lower levels make it ask or explain more before and after it works. Pick one and the detailed settings below follow it.'), lvlSel, lvlHint),
+      fixLoop: el('div', { class: 'field' }, headWithHelp('Fix loop', 'When the agent goes quiet, Bazinga runs your checks (lint, tests). If something fails it sends the problems back to the agent so it fixes them, a few rounds at most.'),
         el('label', { class: 'check' }, flOn, ' When an agent goes quiet, run the gates and send the findings back to it'),
         el('div', { class: 'line wrap' }, 'At most ', flRounds, ' rounds · quiet for ', flIdle, ' seconds · fix ', flInclude),
         el('div', { class: 'line wrap' }, 'Still failing after ', flEscAfter, ' rounds? Hand the run over to ', flEsc),
         el('div', { class: 'hint', text: 'The stronger agent starts in the same working copy with the task, what the first one changed and the problems that remain. Once per run, and never for workflow steps or compared runs. A cloud agent costs money: this is where you choose to spend it.' }),
         el('label', { class: 'check', title: 'Runs only when the static gates are clean. Failures go back to the agent with the output tail.' }, flTests, ' Also run the tests related to the changed files (max 5 files, ', flTestSec, ' s each)'),
         el('div', { class: 'hint', text: 'Stops early when a round changes nothing (same findings, same test output). Your own typing in the terminal resets the round counter.' })),
-      el('div', { class: 'field' }, headWithHelp('Merge guard', 'A last check before an agent’s work is merged into your branch: protected files touched, tests weakened, a bug fix without a test. “block” means you must tick an extra box to merge anyway.'),
+      mergeGuard: el('div', { class: 'field' }, headWithHelp('Merge guard', 'A last check before an agent’s work is merged into your branch: protected files touched, tests weakened, a bug fix without a test. “block” means you must tick an extra box to merge anyway.'),
         el('div', { class: 'guard-grid' }, ...Object.entries(GUARD_LABELS).flatMap(([k, label]) => [el('span', { text: label }), guardSel[k]])),
         el('div', { class: 'hint', text: '“block” needs an explicit “merge anyway” tick in the merge dialog.' })),
-      el('div', { class: 'field' }, el('div', { class: 'agent-head', text: 'Task templates (all projects)' }), tplIn,
+      autoMerge: el('div', { class: 'field' }, headWithHelp('Auto-merge', 'Once the fix loop gets the gates fully clean, merge without asking - but only for an agent and kind of task with a strong, proven track record in the scorecard. Off by default: this skips the review queue.'),
+        el('label', { class: 'check' }, amOn, ' Merge automatically when the gates are clean and this agent has a strong track record for this kind of task'),
+        el('div', { class: 'line wrap' }, 'Needs at least ', amRate, '% wins, with enough runs recorded in the scorecard'),
+        el('div', { class: 'hint', text: 'You can always undo an auto-merge afterwards from the run list.' })),
+      taskTemplates: el('div', { class: 'field' }, el('div', { class: 'agent-head', text: 'Task templates (all projects)' }), tplIn,
         el('div', { class: 'hint', text: 'Shown in “New agent run”. A project can add or replace templates (same name) in .ide/tasks.md.' })),
-      el('div', { class: 'field' }, headWithHelp('Agent safety', 'Limits what an agent can see. Hiding credentials is on by default. A Docker container goes further: the agent only sees its own run folder.'),
+      agentSafety: el('div', { class: 'field' }, headWithHelp('Agent safety', 'Limits what an agent can see. Hiding credentials is on by default. A Docker container goes further: the agent only sees its own run folder.'),
         el('label', { class: 'check' }, scrubOn, ' Start agent terminals without credentials from your environment (tokens, secrets, passwords, cloud keys)'),
         scrubAllow,
         el('label', { class: 'check' }, ccOn, ' Run agent runs in a Docker container (sees only the run’s folder and the repository’s git data)'),
@@ -2420,34 +2540,36 @@
         el('div', { class: 'hint', text: 'The button above builds the image (or by hand: docker build -t bazinga-agent:latest docker/agent). Log in to the agent inside the container once (kept in a Docker volume), or pass an API key variable. Applies to “New agent run”; the toolbar agent buttons still run on your machine. A container does not protect the repository’s git data or what the agent sends over the network.' }),
         el('div', { class: 'line' }, 'Time budget per run: ', budgetIn, ' minutes of active agent work (0 = unlimited)'),
         el('div', { class: 'hint', text: 'When the budget is used you are notified and the fix loop stops for that run. Your own shells are never scrubbed.' })),
-      el('div', { class: 'field' }, el('div', { class: 'agent-head', text: 'Language servers (optional)' }),
+      languageServers: el('div', { class: 'field' }, el('div', { class: 'agent-head', text: 'Language servers (optional)' }),
         el('label', { class: 'check' }, lspOn, ' Hover, go to definition, find references, completion and diagnostics from installed language servers'),
         ...Object.entries(lspCmd).map(([name, input]) => el('div', { class: 'line' }, el('span', { class: 'lsp-name', text: name }), input)),
         el('div', { class: 'hint', text: 'Nothing is bundled: install the server (e.g. jdtls for Java, pyright for Python, typescript-language-server for TS/JS) and it is found on your PATH. Leave a field empty for the default command.' })),
-      el('div', { class: 'field' }, el('div', { class: 'agent-head', text: 'Above classes and methods' }),
+      codeLenses: el('div', { class: 'field' }, el('div', { class: 'agent-head', text: 'Above classes and methods' }),
         el('label', { class: 'check' }, lensUsages, ' Show how often the name is used in the project'),
         el('label', { class: 'check' }, lensBlame, ' Show who changed it last (git blame of its lines); click opens the commit'),
         el('label', { class: 'check' }, lensSpring, ' Java/Kotlin: show the HTTP route above Spring handlers and “N implementations” above interfaces')),
-      el('div', { class: 'field' }, el('label', { class: 'check' }, notif, ' Notify me (OS notification) when an agent needs me and the IDE is in the background')),
-      el('div', { class: 'field' }, el('label', { text: 'Font size (px): editor / terminal' }), el('div', { class: 'line' }, edFont, termFont)),
-      el('div', { class: 'field' }, el('label', { text: 'Terminal scrollback (lines kept per terminal; each one costs memory)' }), scrollback),
-      el('div', { class: 'field' }, el('label', { class: 'check' }, cp, ' Save a checkpoint before an agent terminal starts')),
-      el('div', { class: 'hint', text: 'These are your personal defaults. A project’s .ide/config.json overrides them.' }),
-      el('div', { class: 'actions' }, el('button', { onclick: close }, ic('x'), 'Cancel'), el('button', { class: 'primary', onclick: save }, ic('check'), 'Save'))];
+      notifications: el('div', { class: 'field' }, el('label', { class: 'check' }, notif, ' Notify me (OS notification) when an agent needs me and the IDE is in the background')),
+      fontSize: el('div', { class: 'field' }, el('label', { text: 'Font size (px): editor / terminal' }), el('div', { class: 'line' }, edFont, termFont)),
+      scrollback: el('div', { class: 'field' }, el('label', { text: 'Terminal scrollback (lines kept per terminal; each one costs memory)' }), scrollback),
+      checkpoint: el('div', { class: 'field' }, el('label', { class: 'check' }, cp, ' Save a checkpoint before an agent terminal starts')),
+      footnote: el('div', { class: 'hint', text: 'These are your personal defaults. A project’s .ide/config.json overrides them.' }),
+      actions: el('div', { class: 'actions' }, el('button', { onclick: close }, ic('x'), 'Cancel'), el('button', { class: 'primary', onclick: save }, ic('check'), 'Save')),
+    };
     // ---- tabs: related settings together; every control stays in the DOM, so Save reads all of them whichever tab is open
     const TABS = [
-      ['general', 'General', [1, 15, 16, 14, 2, 3], 'settings'],
-      ['agents', 'Agents', [4, 10, 17], 'bot'],
-      ['review', 'Review & checks', [5, 6], 'shield-check'],
-      ['oversight', 'Oversight', [7, 8, 9], 'eye'],
-      ['safety', 'Safety', [11], 'lock'],
-      ['editor', 'Editor', [12, 13], 'file-code'],
+      ['general', 'General', ['theme', 'fontSize', 'scrollback', 'notifications', 'shell', 'shellArgs'], 'settings'],
+      ['agents', 'Agents', ['agentButtons', 'taskTemplates', 'checkpoint'], 'bot'],
+      ['review', 'Review & checks', ['reviewCommand', 'autoCheck'], 'shield-check'],
+      ['oversight', 'Oversight', ['humanInLoop', 'fixLoop', 'mergeGuard', 'autoMerge'], 'eye'],
+      ['safety', 'Safety', ['agentSafety'], 'lock'],
+      ['editor', 'Editor', ['languageServers', 'codeLenses'], 'file-code'],
     ];
-    const used = new Set(TABS.flatMap((t) => t[2]).concat([0, 18, 19]));
-    if (f.some((_, i) => !used.has(i))) throw new Error('A settings field is not assigned to a tab.');
+    const used = new Set(TABS.flatMap((t) => t[2]).concat(['title', 'footnote', 'actions']));
+    const stray = Object.keys(f).filter((k) => !used.has(k));
+    if (stray.length) throw new Error(`Settings field(s) not assigned to a tab: ${stray.join(', ')}.`);
     let tabId = 'general';
     try { const saved = localStorage.getItem('bazinga.settingsTab'); if (TABS.some((t) => t[0] === saved)) tabId = saved; } catch { /* no storage */ }
-    const panels = new Map(TABS.map(([id, , idx]) => [id, el('div', { class: 'set-panel', id: `set-panel-${id}`, role: 'tabpanel' }, ...idx.map((i) => f[i]))]));
+    const panels = new Map(TABS.map(([id, , keys]) => [id, el('div', { class: 'set-panel', id: `set-panel-${id}`, role: 'tabpanel' }, ...keys.map((k) => f[k]))]));
     const tabBtns = new Map();
     const showTab = (id) => {
       tabId = id;
@@ -2463,7 +2585,7 @@
       const next = ids[(ids.indexOf(tabId) + (e.key === 'ArrowRight' ? 1 : ids.length - 1)) % ids.length];
       showTab(next); tabBtns.get(next).focus();
     });
-    $('#dialog').replaceChildren(f[0], tabBar, el('div', { class: 'set-body' }, ...panels.values()), f[18], f[19]);
+    $('#dialog').replaceChildren(f.title, tabBar, el('div', { class: 'set-body' }, ...panels.values()), f.footnote, f.actions);
     showTab(tabId);
     $('#modal').classList.remove('hidden');
   }
@@ -3365,6 +3487,7 @@
           el('button', { class: 'primary', title: 'Open this run’s changes (switches the IDE to its worktree)', onclick: () => reviewRun(run) }, ic('eye'), 'Review'),
           el('button', { title: 'Open a shell in this run’s worktree', onclick: () => openRunTerminal(run) }, ic('terminal'), 'Terminal'),
           el('button', { class: 'icon', title: 'Journal: what happened in this run', 'aria-label': 'Journal', onclick: () => openJournal(run) }, ic('history')),
+          el('button', { class: 'icon', title: 'Replay: scrub through this run step by step', 'aria-label': 'Replay', onclick: () => openReplay(run) }, ic('play-circle')),
           el('button', { class: 'icon', title: 'Pull request status and linked work items (asks gh / az)', 'aria-label': 'PR status', onclick: () => loadPrStatus(run) }, ic('git-pull-request')),
           el('button', { title: 'Bring the result into your branch', onclick: () => mergeRunDialog(run) }, ic('git-merge'), 'Merge…'),
           el('button', { class: 'icon danger', title: 'Discard: delete the worktree and branch', 'aria-label': 'Discard', onclick: () => discardRun(run) }, ic('trash-2')))));
@@ -4122,8 +4245,64 @@
     $('#dialog').replaceChildren(el('h3', { text: `Journal · ${run.name}` }),
       el('pre', { class: 'journal', text: body }),
       el('div', { class: 'hint', text: 'Kept inside the repository’s .git folder, so it survives merging or discarding the run.' }),
-      el('div', { class: 'actions' }, el('button', { text: 'Copy', onclick: () => api.copy(body) }), el('button', { class: 'primary', onclick: close }, ic('check'), 'Close')));
+      el('div', { class: 'actions' }, el('button', { onclick: () => api.copy(body) }, ic('clipboard-copy'), 'Copy'), el('button', { class: 'primary', onclick: close }, ic('check'), 'Close')));
     $('#modal').classList.remove('hidden');
+  }
+
+  // session replay: scrub through a run's journal + (while still intact) its commits, step by step
+  async function openReplay(run) {
+    const close = () => $('#modal').classList.add('hidden');
+    const res = await api.runs.replay(run.id);
+    if (res.error) { setStatus(res.error); return; }
+    const steps = res.steps || [];
+    let selected = steps.length - 1;
+    const list = el('div', { class: 'replay-list' });
+    const detail = el('div', { class: 'replay-detail' });
+    const scrubber = el('input', { type: 'range', min: '0', max: String(Math.max(0, steps.length - 1)), step: '1', value: String(Math.max(0, selected)) });
+    const prevBtn = el('button', { class: 'icon', title: 'Previous step' }, ic('skip-back'));
+    const nextBtn = el('button', { class: 'icon', title: 'Next step' }, ic('skip-forward'));
+    const renderStep = async () => {
+      for (const row of list.children) row.classList.remove('sel');
+      const row = list.children[selected];
+      if (row) { row.classList.add('sel'); row.scrollIntoView({ block: 'nearest' }); }
+      prevBtn.disabled = selected <= 0; nextBtn.disabled = selected >= steps.length - 1;
+      const s = steps[selected];
+      if (!s) { fill(detail, el('div', { class: 'empty', text: 'Nothing recorded yet.' })); return; }
+      if (s.type === 'event') {
+        fill(detail, el('div', { class: 'hint', text: `${new Date(s.t).toLocaleTimeString()} · ${s.kind}` }), el('div', { text: s.text || '(no detail)' }));
+        return;
+      }
+      fill(detail, el('div', { class: 'hint', text: 'Loading…' }));
+      const info = await api.history.info(s.sha);
+      if (selected !== steps.indexOf(s)) return;
+      if (info.error) { fill(detail, el('div', { class: 'hint bad', text: info.error })); return; }
+      fill(detail, el('div', { class: 'hint', text: `${new Date(s.t).toLocaleTimeString()} · commit ${s.sha.slice(0, 7)}` }), el('pre', { class: 'c-msg', text: info.info.message }),
+        ...info.info.files.map((f) => el('div', { class: 'row file', title: f.oldPath ? `${f.oldPath} → ${f.path}` : f.path, onclick: () => openCommitDiff(s.sha, f) },
+          el('span', { class: `tag st-${f.status === 'R' ? 'M' : f.status}`, text: f.status }), el('span', { class: 'name', text: f.path }))));
+    };
+    steps.forEach((s, i) => {
+      const label = s.type === 'event' ? `${s.kind}${s.text ? `: ${s.text}` : ''}` : `commit ${s.sha.slice(0, 7)}: ${s.subject}`;
+      list.appendChild(el('div', { class: `row replay-step ${s.type}`, title: new Date(s.t).toLocaleString(), onclick: () => { selected = i; scrubber.value = String(i); renderStep(); } },
+        ic(s.type === 'commit' ? 'git-commit-horizontal' : 'history'), el('span', { class: 'name', text: label }), el('span', { class: 'muted small', text: ago(s.t / 1000) })));
+    });
+    const step = (d) => { const n = selected + d; if (n < 0 || n > steps.length - 1) return; selected = n; scrubber.value = String(selected); renderStep(); };
+    scrubber.addEventListener('input', () => { selected = Number(scrubber.value); renderStep(); });
+    prevBtn.addEventListener('click', () => step(-1));
+    nextBtn.addEventListener('click', () => step(1));
+    const body = el('div', { class: 'replay-body' }, list, detail);
+    const wrap = el('div', null, el('div', { class: 'line' }, prevBtn, scrubber, nextBtn), body);
+    // keyboard stepping (←/→, j/k) alongside the buttons; scoped to this dialog's own nodes, so it is gone once replay closes
+    wrap.addEventListener('keydown', (e) => {
+      const k = e.key.toLowerCase();
+      if (e.key === 'ArrowLeft' || k === 'j') { e.preventDefault(); step(-1); }
+      else if (e.key === 'ArrowRight' || k === 'k') { e.preventDefault(); step(1); }
+    });
+    $('#dialog').replaceChildren(el('h3', { text: `Replay · ${run.name}` }),
+      steps.length ? wrap : el('div', { class: 'empty', text: 'Nothing recorded for this run yet.' }),
+      el('div', { class: 'hint', text: 'Built from the run’s journal and the commits it made before review folded them into staged changes (opening Merge or the guard does that fold, after which newer commits stop showing here).' }),
+      el('div', { class: 'actions' }, el('button', { class: 'primary', onclick: close }, ic('check'), 'Close')));
+    $('#modal').classList.remove('hidden');
+    if (steps.length) await renderStep();
   }
 
   async function openCompare(preselect) {
@@ -4562,7 +4741,8 @@
       close();
       if (viewing && !(await switchRoot(state.runs.main.root))) return;
       setStatus('Merging…');
-      const res = await api.runs.merge({ id: run.id, message: msg.value, squash: squash.checked });
+      const overriddenItems = override.checked && guard ? guard.items.filter((i) => i.level === 'block').map((i) => i.id) : [];
+      const res = await api.runs.merge({ id: run.id, message: msg.value, squash: squash.checked, overriddenItems });
       if (res.error) { window.alert(res.error); setStatus('Merge failed.'); await refreshRuns(); return; }
       for (const t of state.terms.values()) if (t.runId === run.id && t.id !== null && !t.exited) api.pty.kill(t.id);
       await renderTree(); await refreshChanges(); await refreshRuns(); await loadProject();
@@ -4586,6 +4766,23 @@
     fill(guardBox, el('div', { class: 'guard-head', text: guard.clean ? 'Ready to merge' : guard.ok ? `${guard.warnings} thing${guard.warnings === 1 ? '' : 's'} to look at` : `${guard.blockers} blocker${guard.blockers === 1 ? '' : 's'}, ${guard.warnings} warning${guard.warnings === 1 ? '' : 's'}` }), ...guardRows(guard));
     overrideRow.classList.toggle('hidden', guard.ok);
     sync();
+    if (!guard.ok) await addGuardSuggestions(guardBox, guard, run);
+  }
+
+  // adaptive guard rules: offer to relax a blocker once it has been overridden past the threshold
+  async function addGuardSuggestions(guardBox, guard, run) {
+    const got = await api.guardoverrides.get();
+    const relevant = (got.suggestions || []).filter((s) => guard.items.some((i) => i.id === s.id && i.level === 'block'));
+    if (!relevant.length) return;
+    guardBox.appendChild(el('div', { class: 'guard-suggestion' }, ...relevant.map((s) => {
+      const item = guard.items.find((i) => i.id === s.id);
+      const relaxBtn = el('button', null, ic('unlock'), `Relax to ${s.next === 'off' ? 'ignore' : s.next}`);
+      const dismissBtn = el('button', null, ic('x'), 'Not now');
+      relaxBtn.addEventListener('click', async () => { await api.guardoverrides.relax(s.id); await mergeRunDialog(run); });
+      dismissBtn.addEventListener('click', async () => { await api.guardoverrides.dismiss(s.id); row.remove(); });
+      const row = el('div', { class: 'line wrap' }, el('span', { text: `You have overridden “${item.text}” ${s.count} times.` }), relaxBtn, dismissBtn);
+      return row;
+    })));
   }
 
   async function openPrDialog(run, guard) {
@@ -4827,6 +5024,18 @@
   for (const [id, key] of [['q-case', 'caseSensitive'], ['q-re', 'regex']]) {
     $(`#${id}`).addEventListener('click', () => { state.search[key] = !state.search[key]; $(`#${id}`).classList.toggle('on', state.search[key]); runSearch(); });
   }
+  async function replaceAll() {
+    const query = $('#q').value;
+    const replacement = $('#q-replace').value;
+    if (!query) { $('#q').focus(); return; }
+    if (!window.confirm(`Replace every match of "${query}" with "${replacement}" in every file currently shown?\n\nEach changed file gets a local-history snapshot first, so this can be undone per file.`)) return;
+    const res = await api.search.replace({ query, regex: state.search.regex, caseSensitive: state.search.caseSensitive, replacement });
+    if (res.error) { setStatus(res.error); return; }
+    setStatus(res.replacements ? `Replaced ${res.replacements} match${res.replacements === 1 ? '' : 'es'} in ${res.files} file${res.files === 1 ? '' : 's'}.` : 'No matches to replace.');
+    await runSearch();
+  }
+  $('#q-replace-all').addEventListener('click', replaceAll);
+  $('#q-replace').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); replaceAll(); } });
   $('#qo-input').addEventListener('input', () => { state.quick.sel = 0; renderQuick(); });
   $('#qo-input').addEventListener('keydown', (e) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); state.quick.sel = Math.min(state.quick.sel + 1, state.quick.items.length - 1); renderQuick(); }
@@ -4836,9 +5045,45 @@
   $('#quickopen').addEventListener('mousedown', (e) => { if (e.target.id === 'quickopen') closeQuickOpen(); });
   $('#modal').addEventListener('mousedown', (e) => { if (e.target.id === 'modal') $('#modal').classList.add('hidden'); });
 
+  // Focus trap + restore for the generic modal dialog and the board overlay: move focus in on open (unless the
+  // opener already focused something inside, e.g. a text field), cycle Tab within it, and give focus back to
+  // whatever opened it on close — regardless of which of the ~30 call sites did the opening/closing.
+  function wireDialogFocus(overlay, content) {
+    let prevFocus = null;
+    let wasHidden = overlay.classList.contains('hidden');
+    const focusableSel = 'input, textarea, select, button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])';
+    new MutationObserver(() => {
+      const hidden = overlay.classList.contains('hidden');
+      if (hidden === wasHidden) return;
+      wasHidden = hidden;
+      if (!hidden) {
+        prevFocus = document.activeElement;
+        if (!content.contains(document.activeElement)) {
+          const first = content.querySelector(focusableSel);
+          if (first) first.focus();
+        }
+      } else if (prevFocus && document.body.contains(prevFocus) && typeof prevFocus.focus === 'function') {
+        prevFocus.focus();
+      }
+    }).observe(overlay, { attributes: true, attributeFilter: ['class'] });
+    overlay.addEventListener('keydown', (e) => {
+      if (e.key !== 'Tab' || overlay.classList.contains('hidden')) return;
+      const items = [...content.querySelectorAll(focusableSel)].filter((el) => el.offsetParent !== null);
+      if (!items.length) return;
+      const first = items[0], last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    });
+  }
+  wireDialogFocus($('#modal'), $('#dialog'));
+  wireDialogFocus($('#board'), $('#board'));
+
+  // right-click on empty space below the rows: same menu as the project root folder
+  $('#side-files').addEventListener('contextmenu', (ev) => { if (!ev.target.closest('.row')) rowMenu(ev, '', true); });
+
   window.addEventListener('keydown', (e) => {
     const k = e.key.toLowerCase();
-    if (e.key === 'Escape') { closeQuickOpen(); $('#modal').classList.add('hidden'); return; }
+    if (e.key === 'Escape') { closeQuickOpen(); $('#modal').classList.add('hidden'); if (boardUi.open) closeBoard(); return; }
     const mod = IS_MAC ? e.metaKey : e.ctrlKey;
     if (mod && !e.shiftKey && k === 's') { e.preventDefault(); saveActive(); }
     else if (mod && !e.shiftKey && k === 'p') { e.preventDefault(); openQuickOpen(); }
@@ -5052,6 +5297,74 @@
       await openFile(first.dataset.rel);
       return state.models.size > 0 && typeof window.Terminal === 'function' && typeof window.FitAddon === 'object';
     });
+
+    await step('file tree: new file/folder, rename, duplicate and delete (IPC + tree refresh + local history); the context menu offers them on files too', async () => {
+      // the context menu now has file-ops on a plain file row, not just folders (regression: right-click used to do nothing on a file)
+      await renderTree();
+      document.querySelector('#side-files .row[data-rel="a.py"]').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 60, clientY: 60 }));
+      await sleep(50);
+      const fileMenuLabels = [...document.querySelectorAll('.ctx-menu .ctx-item')].map((b) => b.textContent);
+      document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      await sleep(50);
+      const fileMenuOk = /Rename…/.test(fileMenuLabels.join()) && /Duplicate/.test(fileMenuLabels.join()) && /Delete/.test(fileMenuLabels.join()) && !/New file/.test(fileMenuLabels.join());
+
+      const created = await api.fs.create('tree-ops/new.txt', {});
+      state.expanded.add('tree-ops');
+      await renderTree();
+      const createdOk = !created.error && !!document.querySelector('#side-files .row[data-rel="tree-ops/new.txt"]');
+      const dupeExists = await api.fs.create('tree-ops/new.txt', {}); // refuses: already exists
+
+      const renamed = await api.fs.rename('tree-ops/new.txt', 'tree-ops/renamed.txt');
+      await renderTree();
+      const renamedOk = !renamed.error && !document.querySelector('#side-files .row[data-rel="tree-ops/new.txt"]') && !!document.querySelector('#side-files .row[data-rel="tree-ops/renamed.txt"]');
+
+      const dup = await api.fs.duplicate('tree-ops/renamed.txt');
+      await renderTree();
+      const dupOk = !dup.error && dup.rel === 'tree-ops/renamed copy.txt' && !!document.querySelector('#side-files .row[data-rel="tree-ops/renamed copy.txt"]');
+
+      const delRes = await api.fs.delete('tree-ops/renamed copy.txt');
+      await renderTree();
+      const delOk = !delRes.error && !document.querySelector('#side-files .row[data-rel="tree-ops/renamed copy.txt"]');
+      const deletedHistory = await api.localHistory.list('tree-ops/renamed copy.txt');
+      const historyOk = !!(deletedHistory.entries || []).find((e) => e.label === 'before delete');
+
+      const rootRefused = (await api.fs.delete('')).error;
+      await api.fs.delete('tree-ops');
+      await renderTree();
+
+      const ok = fileMenuOk && createdOk && !!dupeExists.error && renamedOk && dupOk && delOk && historyOk && !!rootRefused;
+      return ok ? true : JSON.stringify({ fileMenuLabels, createdOk, dupeExists, renamedOk, dupOk, delOk, historyOk, rootRefused });
+    });
+
+    await step('replace in files: every match of a search is replaced across every file it was found in, with a count back', async () => {
+      const before = { a: (await api.fs.read('a.py')).content, b: (await api.fs.read('b.py')).content };
+      // snapshot everything currently changed, by content - not just a.py/b.py: the regex-mode replace below is
+      // project-wide and also rewrites util.py, calls.py, the Java fixtures and the untracked .ide/config.json
+      // and checks.yaml. Reverting an untracked file deletes it, so every one of them must be put back by its
+      // exact captured content afterward, or later steps silently lose agent definitions and check config.
+      await refreshChanges();
+      const snapshot = await Promise.all(state.changes.map(async (c) => ({ path: c.path, content: (await api.fs.read(c.path)).content })));
+      try {
+        const res = await api.search.replace({ query: 'print', regex: false, caseSensitive: false, replacement: 'LOG' });
+        const afterA = (await api.fs.read('a.py')).content;
+        const literalOk = /LOG\(/.test(afterA) && !/print\(/.test(afterA);
+
+        await api.fs.write('a.py', before.a); // restore before the regex-mode check reuses the same file
+        const res2 = await api.search.replace({ query: '(\\w+)\\(', regex: true, caseSensitive: false, replacement: '$1 /*wrapped*/(' });
+        const afterA2 = (await api.fs.read('a.py')).content;
+        const regexOk = /print \/\*wrapped\*\/\(/.test(afterA2);
+
+        const noMatch = await api.search.replace({ query: 'nope-nowhere-xyz', regex: false, caseSensitive: false, replacement: 'x' });
+        const ok = !res.error && res.files >= 1 && res.replacements >= 1 && literalOk && !res2.error && regexOk && !noMatch.error && noMatch.files === 0;
+        return ok ? true : JSON.stringify({ res, literalOk, res2, regexOk, noMatch });
+      } finally {
+        await refreshChanges();
+        for (const c of state.changes) await api.git.revert(c.path);
+        for (const f of snapshot) await api.fs.write(f.path, f.content);
+        await refreshChanges();
+      }
+    });
+
     await step('terminal pty', async () => {
       const entry = await newTerminal({ title: 'smoke', initialInput: 'echo SMOKE_OK\r' });
       if (!entry || entry.id === null) return 'pty unavailable';
@@ -5339,6 +5652,83 @@
       await refreshRuns();
       const gone = !rm.error && state.runs.runs.length === 0;
       return inWorktree && echoed && sawChange && flagged && listed && termsKept && back && gone && dialogViewing && dialogOther ? true : JSON.stringify({ inWorktree, echoed, sawChange, flagged, listed, termsKept, back, gone, dialogViewing, dialogOther, err: rm.error });
+    });
+    await step('session replay: a run’s journal events and commits can be scrubbed through, with prev/next and arrow keys', async () => {
+      const mainRoot = state.project.root;
+      const r = await startRun({ task: 'replay demo', name: 'replay run', agent: { name: 'Smoke', command: 'echo smoke' }, allow: '' });
+      await api.fs.write('replay-a.txt', 'one\n'); await api.git.stage(['replay-a.txt']); await api.git.commit('first step');
+      await api.fs.write('replay-a.txt', 'two\n'); await api.git.stage(['replay-a.txt']); await api.git.commit('second step');
+      await openReplay(r.run);
+      const stepsShown = document.querySelectorAll('#dialog .replay-step').length;
+      const scrubber = document.querySelector('#dialog input[type=range]');
+      const before = scrubber.value;
+      const prevBtn = [...document.querySelectorAll('#dialog button.icon')].find((b) => b.title === 'Previous step');
+      prevBtn.click();
+      const afterClick = scrubber.value;
+      document.querySelector('#dialog .line').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+      const afterArrow = scrubber.value;
+      $('#modal').classList.add('hidden');
+      await switchRoot(mainRoot);
+      await api.runs.discard(r.run.id, 'skip');
+      await refreshRuns();
+      const stepped = Number(afterClick) === Number(before) - 1 && Number(afterArrow) === Number(afterClick) + 1;
+      return stepsShown >= 2 && stepped ? true : JSON.stringify({ stepsShown, before, afterClick, afterArrow });
+    });
+    await step('adaptive guard rules: overriding the same blocker enough times offers to relax it', async () => {
+      const mainRoot = state.project.root;
+      // main carries the fixture's own uncommitted a.py/b.py edits for most of this suite (other steps rely on
+      // them staying uncommitted) - but mergeRun refuses to merge into a dirty main, so set that aside for the
+      // duration of this step's real merges and put the exact same bytes back, uncommitted, before returning.
+      await refreshChanges();
+      const stashed = await Promise.all(state.changes.map(async (c) => ({ path: c.path, content: (await api.fs.read(c.path)).content })));
+      for (const f of stashed) await api.git.revert(f.path);
+      const restore = async () => { for (const f of stashed) await api.fs.write(f.path, f.content); await refreshChanges(); };
+      const diag = [];
+      // build up 3 real overrides of the same blocker (protectedPaths, from touching .env) via the API directly -
+      // the merge dialog's own "Merge" button is already covered by the "agent run in worktree" step, and clicking it
+      // here too would risk a blocking window.alert() on any unexpected guard error, three times over, for no extra coverage.
+      for (let i = 0; i < 3; i++) {
+        const r = await startRun({ task: `protected file run ${i}`, name: `protected ${i}`, agent: { name: 'Smoke', command: 'echo smoke' }, allow: '**', activate: true });
+        await api.fs.write('.env', `N=${i}\n`);
+        await refreshChanges();
+        // switch back to the main root BEFORE merging/discarding: merge/discard removes the run's worktree, and the
+        // real UI always steps away first too - staying "inside" a root about to be deleted is what broke this before.
+        await switchRoot(mainRoot);
+        const g = await api.runs.guard({ id: r.run.id });
+        const blockers = (g.guard ? g.guard.items : []).filter((it) => it.level === 'block').map((it) => it.id);
+        const res = await api.runs.merge({ id: r.run.id, message: `protected ${i}`, squash: true, overriddenItems: blockers });
+        if (res.error || !blockers.includes('protectedPaths')) { diag.push({ i, error: res.error, blockers, guardError: g.error }); await api.runs.discard(r.run.id, 'skip').catch(() => {}); }
+      }
+      await refreshRuns();
+      if (diag.length) { await restore(); return JSON.stringify(diag); }
+      const r4 = await startRun({ task: 'protected file run 3', name: 'protected 3', agent: { name: 'Smoke', command: 'echo smoke' }, allow: '**', activate: true });
+      await api.fs.write('.env', 'N=3\n');
+      await refreshChanges();
+      await mergeRunDialog(r4.run);
+      const suggested = !!document.querySelector('#dialog .guard-suggestion');
+      const text = $('#dialog').textContent;
+      $('#modal').classList.add('hidden');
+      await switchRoot(mainRoot);
+      await api.runs.discard(r4.run.id, 'skip');
+      await refreshRuns();
+      await restore();
+      return suggested && /overridden/.test(text) ? true : `no suggestion after 3 overrides: ${text.slice(0, 300)}`;
+    });
+    await step('semantic diff: the symbol-changes button summarises added/removed/renamed functions and classes', async () => {
+      const before = (await api.fs.read('util.py')).content;
+      const after = before.replace('def helper(x):', 'def helper2(x):').replace('helper(1)', 'helper2(1)');
+      await api.fs.write('util.py', after);
+      await openDiff('util.py');
+      const btn = $('#d-symbols');
+      const shown = await waitFor(() => !btn.classList.contains('hidden'));
+      if (shown) btn.click();
+      await sleep(50);
+      const text = (document.querySelector('.ctx-menu') || { textContent: '' }).textContent;
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      const label = btn.textContent;
+      await api.git.revert('util.py');
+      await loadProject(); await refreshChanges();
+      return shown && /renamed/i.test(text) && /helper/.test(text) ? true : JSON.stringify({ shown: !!shown, label, text: text.slice(0, 300) });
     });
     await step('two agents, same task, compared', async () => {
       const mainRoot = state.project.root;
@@ -5893,7 +6283,7 @@
         const md2 = (await api.fs.read('AGENTS.md')).content || '';
         const gone = !/bazinga:folders/.test(md2);
         const cfgAfter = JSON.parse((await api.fs.read('.ide/config.json')).content || '{}');
-        const ok = labels.length === 4 && menuClosed && badged && JSON.stringify(saved1) === JSON.stringify({ tests: ['tests'] }) && !second.error && block && nested && checked && clearEnabled && cleared && !!root.error && gone && !cfgAfter.folders;
+        const ok = labels.length === 10 && menuClosed && badged && JSON.stringify(saved1) === JSON.stringify({ tests: ['tests'] }) && !second.error && block && nested && checked && clearEnabled && cleared && !!root.error && gone && !cfgAfter.folders;
         return ok ? true : JSON.stringify({ labels, menuClosed, badged, saved1, second, block, nested, checked, clearEnabled, cleared, root, gone, cfgAfter });
       } finally {
         await api.fs.write('.ide/config.json', origCfg || '{}\n');
@@ -6002,6 +6392,25 @@
 
       const ok = ariaOk && panelOk && badgeFits && dragOk;
       return ok ? true : JSON.stringify({ ariaOk, panelOk, badgeFits, dragOk, newW });
+    });
+
+    await step('dialog focus: opening a modal moves focus inside it, Tab wraps, closing gives focus back to the opener', async () => {
+      const opener = $('#btn-settings');
+      opener.focus();
+      await openSettings();
+      await sleep(0);
+      const dialog = $('#dialog');
+      const focusedInsideOnOpen = dialog.contains(document.activeElement);
+      const items = [...dialog.querySelectorAll('input, textarea, select, button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')].filter((el) => el.offsetParent !== null);
+      const first = items[0], last = items[items.length - 1];
+      last.focus();
+      $('#modal').dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+      const wrappedToFirst = document.activeElement === first;
+      $('#modal').classList.add('hidden');
+      await sleep(0);
+      const restored = document.activeElement === opener;
+      const ok = focusedInsideOnOpen && wrappedToFirst && restored;
+      return ok ? true : JSON.stringify({ focusedInsideOnOpen, wrappedToFirst, restored });
     });
 
     await step('history graph + commit diff + blame', async () => {
@@ -6202,6 +6611,49 @@
       await loadProject(); await refreshChanges();
       if (!result) return 'pty unavailable';
       return result.fixing && result.gotPrompt && result.stopped && result.badge ? true : JSON.stringify(result);
+    });
+
+    await step('auto-merge: a clean run by an agent with a strong track record for this kind of task merges itself', async () => {
+      // scripts/smoke.js seeded 3 prior "docs"-kind wins for the agent "Smoke" (scorecard.js's MIN_RUNS), so a 4th
+      // clean one should clear automerge.autoMergeEligible()'s bar without needing to fabricate a scorecard here.
+      const mainRoot = state.project.root;
+      // main carries the fixture's own uncommitted a.py/b.py edits for most of this suite - mergeRun refuses into
+      // a dirty main, so set them aside for the real merge this step exercises and put the exact bytes back after.
+      await refreshChanges();
+      const stashed = await Promise.all(state.changes.map(async (c) => ({ path: c.path, content: (await api.fs.read(c.path)).content })));
+      for (const f of stashed) await api.git.revert(f.path);
+      const restore = async () => { for (const f of stashed) await api.fs.write(f.path, f.content); await refreshChanges(); };
+      const cur = await api.settings.get();
+      const prevSettings = cur.settings;
+      await api.settings.save({ ...prevSettings, fixLoop: { enabled: true, maxRounds: 3, idleSeconds: 2, tier: 'fast', include: 'error' }, autoMerge: { enabled: true, minWinRate: 0.8 } });
+      await loadProject();
+      const events = [];
+      const offStatus = api.fixloop.onStatus((e) => events.push(e.state));
+      let merged = null;
+      const offMerged = api.runs.onAutoMerged((e) => { merged = e; });
+      // "echo smoke" exits in a few ms, well under idleSeconds: the pty's own exit handler unregisters it from the
+      // fix loop before idle ever gets a chance to fire. Use a process that stays alive and goes idle instead, like
+      // the "fix loop end to end" step above does with fake-agent.js - and print at least IdleDetector's minBytes
+      // (400) first, or poll() never considers it busy enough to ever call it idle.
+      const r = await startRun({ task: 'update the docs for this module', name: 'automerge docs', agent: { name: 'Smoke', command: "node -e \"console.log('smoke '.repeat(80)); process.stdin.resume();\"" }, allow: '**' });
+      if (!r) { offStatus(); offMerged(); await api.settings.save(prevSettings); await restore(); return 'start failed'; }
+      await api.fs.write('automerge-notes.md', '# notes\n'); // not a .py file: the demo gate (match *.py) stays quiet, so the gates come back clean
+      await refreshChanges();
+      if (r.entry && r.entry.id !== null) {
+        await waitFor(() => events.includes('done') || merged, 20000);
+        await waitFor(() => merged, 8000);
+      }
+      offStatus(); offMerged();
+      // on success the merge already removed the run's worktree while this was still the active root (tryAutoMerge
+      // runs unattended, before anyone switches away) - project:switch now lists from the target rather than the
+      // current root for exactly this case, so this still succeeds even though the old root no longer exists on disk.
+      await api.runs.switchTo(mainRoot);
+      if (!merged) await api.runs.discard(r.run.id, 'skip');
+      await api.settings.save(prevSettings);
+      await loadProject(); await refreshChanges(); await refreshRuns();
+      await restore();
+      if (!r.entry || r.entry.id === null) return 'pty unavailable';
+      return merged && merged.id === r.run.id ? true : JSON.stringify({ events, merged });
     });
 
     await step('switching project with a diff open does not throw (regression: TextModel disposed before DiffEditorWidget model reset)', async () => {

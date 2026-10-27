@@ -57,6 +57,21 @@ test('changes in a run are isolated; prepareReview folds the agent’s own commi
   assert.equal((await R.listRuns(root)).runs[0].commits, 0);
 });
 
+test('runCommits: the run’s own commits, oldest first, until prepareReview folds them away', async () => {
+  const root = repo();
+  const run = await R.createRun(root, { name: 'edit' });
+  assert.deepEqual(await R.runCommits(root, run.id), []); // nothing committed yet
+  write(run.root, 'a.txt', 'two\n');
+  sh(run.root, 'add', '-A'); sh(run.root, 'commit', '-q', '-m', 'first');
+  write(run.root, 'a.txt', 'three\n');
+  sh(run.root, 'add', '-A'); sh(run.root, 'commit', '-q', '-m', 'second');
+  const commits = await R.runCommits(root, run.id);
+  assert.deepEqual(commits.map((c) => c.subject), ['first', 'second']);
+  assert.ok(commits.every((c) => /^[0-9a-f]{40}$/.test(c.sha) && Number.isFinite(c.time)));
+  await R.prepareReview(root, run.id);
+  assert.deepEqual(await R.runCommits(root, run.id), []); // folded into staged changes: no commits left to replay
+});
+
 test('mergeRun squashes into the main branch, removes worktree and branch', async () => {
   const root = repo();
   const run = await R.createRun(root, { name: 'feature' });

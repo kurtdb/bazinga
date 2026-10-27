@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+- **Semantic diff:** a “symbol changes” button in the diff toolbar summarises what actually moved — functions and classes added, removed, or renamed — instead of making you read it out of the raw line diff.
+- **Auto-merge:** once the fix loop gets the gates fully clean, a run can merge itself without asking, but only for an agent and kind of task with a strong, proven track record in the scorecard (off by default; undo from the run list afterwards).
+- **Session replay:** a scrubber over a run's own journal events and commits, so you can step back through what an agent actually did.
+- **Adaptive guard rules:** override the same merge-guard blocker enough times and Bazinga offers to relax it, so recurring friction turns into a one-click settings change instead of repeating the same override forever.
 - **Start-up safety net:** if the window cannot start (a script error, a crash, or no sign of life within 25 seconds) you get one clear message with “Reload”, “Copy details” and “Open log folder” instead of an empty window.
 - **Plain error messages:** low-level failures (program not found, permission denied, disk full, port in use, nothing listening, not a git repository, git lock, login rejected, broken JSON file …) are explained in one sentence with the raw text in brackets.
 - **Open in VS Code / IntelliJ** (right-click in the editor, or the command palette): opens the file at the cursor. `externalEditor` (`auto`, `vscode`, `idea`); `auto` prefers IntelliJ for Maven/Gradle projects.

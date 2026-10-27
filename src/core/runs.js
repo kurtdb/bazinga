@@ -15,6 +15,7 @@ const journal = require('./journal');
 
 const BRANCH_PREFIX = 'agent/';
 const META_FILE = 'bazinga-run.json';
+const SEP = '\x1f';
 
 const slugify = (s) => String(s || 'run').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'run';
 const trim = (s) => String(s).trim();
@@ -257,6 +258,17 @@ async function undoMerged(root, commit) {
   return { undone: entry.name, revert };
 }
 
+/** Commits the run made since it branched off, oldest first, and their shas/subjects/times (unix seconds). Empty once
+ *  prepareReview() has folded them into staged changes - see its `git reset --soft` above. */
+async function runCommits(root, id) {
+  const { run } = await findRun(root, id);
+  if (!run.baseCommit) return [];
+  let out = '';
+  try { out = trim(await git(run.top, ['log', '--reverse', `--format=%H${SEP}%s${SEP}%at`, `${run.baseCommit}..HEAD`])); } catch { return []; }
+  if (!out) return [];
+  return out.split('\n').map((l) => { const [sha, subject, time] = l.split(SEP); return { sha, subject, time: Number(time) }; });
+}
+
 /** All run journals of the repository (also of merged and discarded runs): {runId: events[]} */
 async function allJournals(root) {
   const dir = await journalDir(root);
@@ -275,4 +287,4 @@ async function removeRun(root, id) {
 }
 
 module.exports = { commonGitDir, journalEvent, readJournal, journalDir,
-  recordStats, recordMeta, slugify, createRun, listRuns, findRun, prepareReview, mergeRun, removeRun, listMerged, undoMerged, allJournals, BRANCH_PREFIX };
+  recordStats, recordMeta, slugify, createRun, listRuns, findRun, prepareReview, mergeRun, removeRun, listMerged, undoMerged, allJournals, runCommits, BRANCH_PREFIX };

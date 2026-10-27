@@ -14,7 +14,7 @@ const NAMES = [
   'play', 'fast-forward', 'square', 'sparkles', 'sun', 'moon', 'settings', 'refresh-cw', 'files', 'search', 'bot',
   'scroll-text', 'chevron-right', 'chevron-down', 'chevron-left', 'circle-alert', 'triangle-alert', 'info',
   'circle-check', 'undo-2', 'terminal', 'square-terminal', 'trash-2', 'eye', 'clipboard-copy', 'send', 'copy',
-  'list-checks', 'stethoscope', 'message-square-plus', 'globe', 'shield-check', 'history', 'git-commit-horizontal', 'archive', 'archive-restore', 'tag', 'git-pull-request', 'external-link', 'flask-conical', 'bell', 'repeat', 'command', 'link', 'user', 'bug', 'timer', 'cpu', 'package', 'workflow', 'arrow-up', 'arrow-down', 'database', 'braces', 'coffee', 'hash', 'download', 'upload-cloud',
+  'list-checks', 'stethoscope', 'message-square-plus', 'globe', 'shield-check', 'history', 'git-commit-horizontal', 'archive', 'archive-restore', 'tag', 'git-pull-request', 'external-link', 'flask-conical', 'bell', 'repeat', 'command', 'link', 'user', 'bug', 'timer', 'cpu', 'package', 'workflow', 'arrow-up', 'arrow-down', 'database', 'braces', 'coffee', 'hash', 'download', 'upload-cloud', 'replace-all', 'unlock', 'play-circle', 'pause', 'skip-back', 'skip-forward', 'rewind', 'git-compare-arrows',
 ];
 
 let dir;

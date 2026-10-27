@@ -8,20 +8,22 @@ Full documentation (every feature, configuration, CI integration, known limits..
 
 **Core IDE**
 - Real terminals for Claude Code and GitHub Copilot CLI (pty via xterm.js + node-pty), plus any other CLI or ACP agent
-- Monaco diff viewer over whatever the agent changed, editable, with per-hunk stage/revert
+- Monaco diff viewer over whatever the agent changed, editable, with per-hunk stage/revert, and an optional semantic-diff summary (renamed/moved/added/removed classes, methods and functions, not just changed lines)
 - Quality gates (lint, types, tests, security scans, duplicate-code/duplicate-component detection) on changed files — a Problems panel plus editor squiggles
-- Script runner for your own commands, file tree with source/test folder marking, project search, quick open, commit graph/stash/blame, no bundler, no language server by default (opt-in)
+- Script runner for your own commands, file tree with new/rename/duplicate/delete and source/test folder marking, project search with replace-all across files, quick open, commit graph/stash/blame, no bundler, no language server by default (opt-in)
 
 **Agent runs**
 - Parallel agents, each in its own git worktree and branch — review, merge (squash or merge commit) or discard independently
 - Compare two runs side by side; "best of N agents" on one task, ranked by the gates, pick a winner
 - Board view (backlog → running → needs you → ready to review) and a Fleet dashboard (context meter, tokens, cost, stale/needs-approval state)
 - Scorecard: which agent wins which kind of task and at what cost, from your own merge/discard history; optional hand-over to a stronger agent after N failed fix rounds
+- Session replay: scrub step by step through a run's journal and the commits it made, before and after the fact
+- Auto-merge (opt-in, off by default): once the gates are clean, merge without asking — but only for an agent/task-kind pairing with a proven scorecard track record; always undoable from the run list
 
 **Keeping agents honest**
 - Task allowlist (scope flags on out-of-scope files), weakened/deleted-test detection, agent self-reported-summary cross-check, reviewed checkmarks
 - Oversight levels (Autonomous → Supervised → Guided → Step by step) controlling the fix loop, merge guard strictness and notifications
-- Merge guard: protected paths, weakened tests, scope, unreviewed files — `block`/`warn`/`off` per rule, enforceable in CI too (`bazinga guard --comment` on a PR) with a shared policy floor
+- Merge guard: protected paths, weakened tests, scope, unreviewed files — `block`/`warn`/`off` per rule, enforceable in CI too (`bazinga guard --comment` on a PR) with a shared policy floor; adaptive — a rule you keep overriding offers to relax itself after a few times
 - Optional Docker container per agent run (dropped capabilities, no network by default, scrubbed credentials)
 
 **Workflows**
