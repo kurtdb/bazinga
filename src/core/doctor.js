@@ -15,6 +15,8 @@ const TOOLS = [
   { id: 'rg', label: 'ripgrep', args: ['--version'], hint: 'Makes project search fast; a built-in search is used without it.' },
   { id: 'claude', label: 'Claude Code', args: ['--version'], hint: 'The Claude agent button and the AI review command.' },
   { id: 'copilot', label: 'Copilot CLI', args: ['--version'], hint: 'The Copilot agent button.' },
+  { id: 'codex', label: 'Codex CLI', args: ['--version'], hint: 'The Codex agent button.' },
+  { id: 'gemini', label: 'Gemini CLI', args: ['--version'], hint: 'The Gemini agent button.' },
   { id: 'gh', label: 'GitHub CLI', args: ['--version'], hint: 'Opening pull requests and reading their status on GitHub (run "gh auth login").' },
   { id: 'az', label: 'Azure CLI', args: ['--version'], hint: 'Pull requests on Azure DevOps (run "az login" and "az extension add --name azure-devops").' },
   { id: 'docker', label: 'Docker', args: ['--version'], hint: 'Optional: run agents in a container (Settings → Agent safety). Build the image: docker build -t bazinga-agent:latest docker/agent' },

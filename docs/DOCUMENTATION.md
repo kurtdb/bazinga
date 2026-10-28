@@ -55,7 +55,7 @@ Tested with fakes and a real Electron smoke run; not yet with someone seeing it 
 
 | Where | What |
 |---|---|
-| Top bar **Claude / Copilot** | Opens a terminal and starts `claude` / `copilot`. Edit the list in `.ide/config.json`. |
+| Top bar **Claude / Copilot / Codex / Gemini** | Opens a terminal and starts `claude` / `copilot` / `codex` / `gemini`. Edit the list in `.ide/config.json`. |
 | **Changes** tab | Files changed in git (M modified, A added, U untracked, D deleted). Click for a diff. |
 | **Fast checks** | Runs the cheap gates on changed files (lint, type check). |
 | **All checks** | Adds the slow gates (compile, tests, Semgrep, Pyright). |
@@ -89,7 +89,7 @@ The editor is Monaco with syntax highlighting for Java, Python, TypeScript/JS, Y
 - Each run has **Review** (switches the whole IDE to that worktree: Changes, diffs, quality gates, scope flags, reviewed ticks, AI review all work as usual), **Terminal**, **Merge…** and **Discard**. Terminals keep running while you switch between runs.
 - If the agent commits by itself, Review folds those commits back into staged changes on top of the starting commit, so everything shows up in one place.
 - **Merge** squashes the run into your current branch as one commit with your message (or a normal merge commit if you untick *Squash*), then deletes the worktree and branch. It needs a clean main working tree and rolls back completely on conflicts. **Discard** deletes everything.
-- The task is passed to Claude Code as `claude "<task>"` (through an environment variable, so quoting is not a problem). Other agents: set `taskCommand` in the agent's config, with `{task}` where the prompt goes (the default for Copilot is `copilot -i {task}`; check your version with `copilot --help`). An agent without one gets the task pasted into its input box, which you confirm with Enter.
+- The task is passed to Claude Code as `claude "<task>"` (through an environment variable, so quoting is not a problem). Other agents: set `taskCommand` in the agent's config, with `{task}` where the prompt goes (the default for Copilot is `copilot -i {task}`, for Codex `codex {task}`, for Gemini `gemini -i {task}`; check your version with `copilot --help` / `codex --help` / `gemini --help`). An agent without one (Aider, by default) gets the task pasted into its input box instead, which you confirm with Enter.
 - Untracked project config (`.ide/`) is copied into each worktree. Dependencies are not: set `"runLinkDirs": ["node_modules"]` in `.ide/config.json` to link them (shared with your main checkout), or run the install in the worktree.
 - Limits: every run needs at least one commit in the repository; runs are separate checkouts, so a long-running dev server or database is shared by all of them.
 
@@ -108,7 +108,7 @@ Right-click a folder in the file tree: *Mark as source folder*, *Mark as test fo
 The marks are saved in the project's `.ide/config.json` (`"folders": { "source": ["src/main/java"], "tests": ["src/test/java"] }`), so they are committed and shared with the team; other keys in that file are left alone, and a file that is not valid JSON is never overwritten. The model is told in two places:
 
 - **The standing instructions** of every Claude Code agent (the file passed with `--append-system-prompt-file`, which the slim local-model prompt keeps): *“Project layout (folders the user marked in Bazinga…) – Source code: … – Tests: … Production code belongs in the source folders and tests in the test folders; mirror the path of the code under test…”*. Only folders that still exist are mentioned. An agent that is already running keeps the instructions it started with: marks apply from the next start.
-- **A managed block in AGENTS.md** (`bazinga:folders`), for agents that read that file instead (Copilot, Aider, OpenCode…). It sits next to the skills block and only the text between its markers is touched; it is removed again when the last mark is cleared. Switch it off with `"foldersIndex": false` in `.ide/config.json`.
+- **A managed block in AGENTS.md** (`bazinga:folders`), for agents that read that file instead (Copilot, Codex, Aider, OpenCode…). It sits next to the skills block and only the text between its markers is touched; it is removed again when the last mark is cleared. Switch it off with `"foldersIndex": false` in `.ide/config.json`.
 
 - **The exact file names.** The standing instructions also list the code files inside the marked folders (up to 60 lines, `foldersFiles` in `.ide/config.json`, `0` switches it off; skipping `node_modules`, `target`, `build`, `.venv` and the like; with more files than that, one line per folder with its file count instead), so the model uses real paths instead of guessing or searching. The AGENTS.md block lists only the folders, so it does not change with every new file.
 - **Paths are corrected for local models** (the tool-call helper, *Repair tool calls* on): when a model reads or edits `pipeline.py` and that name does not exist as given, the helper looks in the marked folders and uses the file if there is exactly one (`edgy/pipeline.py`); with two candidates it leaves the path alone and lets the tool report the error. A new file named like a test (`test_x.py`, `x_test.go`, `XTest.java`, `x.spec.ts`) without a folder goes into the marked test folder, when there is exactly one. A path with a folder in it is never moved. Every correction shows under *Behind the scenes* (`file_path pipeline.py → edgy/pipeline.py (found in a marked folder)`). The marks are read from the working folder's `.ide/config.json` on every request, so a change applies at once, also in a run's worktree.
@@ -216,7 +216,7 @@ The project button (top left) lists your recent projects. Picking one replaces t
 
 ## Settings
 
-The settings dialog (gear) is grouped in tabs: *General* (theme, fonts, notifications, shell), *Agents* (agent buttons with a preset menu for Claude Code, Copilot, Claude Code or Aider on a local Ollama model; task templates; checkpoints), *Review & checks*, *Oversight* (human-in-the-loop level, fix loop, merge guard), *Safety* (environment scrub, Docker, time budget) and *Editor* (language servers, code lenses). The last tab you used is remembered, and Save stores every tab at once.
+The settings dialog (gear) is grouped in tabs: *General* (theme, fonts, notifications, shell), *Agents* (agent buttons with a preset menu for Claude Code, Copilot, Codex, Gemini, Aider (cloud or a local Ollama model), or Claude Code on a local Ollama model/OpenAI-style server; task templates; checkpoints), *Review & checks*, *Oversight* (human-in-the-loop level, fix loop, merge guard), *Safety* (environment scrub, Docker, time budget) and *Editor* (language servers, code lenses). The last tab you used is remembered, and Save stores every tab at once.
 
 ## Local models (optional)
 
@@ -422,7 +422,7 @@ The smoke test is a real Electron run and was occasionally red for no visible re
 - **Local history**: every save and every change on disk is kept outside the project (in the IDE's data folder), with automatic pruning by age, count and total size. Command palette → *Local history of this file…* lists the versions of the open file, shows a diff and restores one (the current content is kept first). It also catches what an agent overwrote before you committed anything.
 - **Environment check**: `npm run doctor`, or *Check environment…* in the palette, shows which tools are present and which are too old (node, git, the agents, Java/Maven/Gradle, `gh`/`az`, ripgrep, language servers) with a hint for each missing one.
 - **Run statistics**: each agent run card shows how long the agent actually worked (time its terminal was producing output, not your reading time) and how many fix-loop rounds it needed, e.g. `worked 12m · 2 fix rounds`. Only runs whose terminal the IDE started are measured, and idle detection is a heuristic.
-- **Terminal restore**: after a restart the plain terminals and agent terminals reopen in the same folders. Claude Code and Copilot CLI are resumed with `--continue`; for any other agent add `"resumeCommand"` to its entry in the settings or `.ide/config.json` (otherwise it only reopens the folder and says so). The IDE stores titles and folders only, never terminal content, and ignores folders outside the project.
+- **Terminal restore**: after a restart the plain terminals and agent terminals reopen in the same folders. Claude Code and Copilot CLI are resumed with `--continue`, Codex with `codex resume --last`, Gemini with `gemini --resume latest`; for any other agent (Aider included - it has no resume command) add `"resumeCommand"` to its entry in the settings or `.ide/config.json` (otherwise it only reopens the folder and says so). The IDE stores titles and folders only, never terminal content, and ignores folders outside the project.
 - **Language servers (opt-in)**: hover, go to definition, references, completion and diagnostics. Off by default; enable in `.ide/config.json`:
 
 ```json
@@ -443,10 +443,10 @@ A server command defined by a project asks for your approval before it runs. Res
 - Tested only with fakes or simulation: real OS file drags and clipboard screenshots (events are simulated), skills fetched from real GitHub URLs (unit-tested against local git repositories), the permission-prompt patterns (matched on sample output of Claude Code style prompts, other agents may word them differently), and the environment scrub (checked on the variables passed to the pty, not against a real agent).
 - Built and tested on Linux (unit tests plus a headless Electron smoke run, including a real pty). It has **not** been run on Windows yet, so expect to fix small things there: ConPTY behaviour, path edge cases, antivirus slowness.
 - No debugger, no extension marketplace, no rename/refactoring (the language-server client deliberately does not implement rename).
-- Spring/Maven/Gradle commands are built and unit-tested, and the UI is smoke-tested, but no real Maven/Gradle build was run here; `copilot --continue` comes from GitHub's CLI reference and was not run either.
+- Spring/Maven/Gradle commands are built and unit-tested, and the UI is smoke-tested, but no real Maven/Gradle build was run here; `copilot --continue` comes from GitHub's CLI reference, `codex resume --last` from OpenAI's and `gemini -i {task}` / `gemini --resume latest` from Google's, and none of the three was run against the real CLI here.
 - Language servers (including exact usages), `gh`/`az` pull requests and their status, and OS notifications are tested with fakes and unit tests only (sample JSON for `gh`/`az`), not against jdtls, pyright, typescript-language-server, real GitHub/Azure DevOps or real OS notification centres. Spring endpoints, beans and implementations are text patterns: meta-annotations, constants in mapping paths and Kotlin DSL routes are missed.
 - The related-tests step of the fix loop is tested with real `node --test` files; Maven, Gradle, pytest and vitest commands are built and unit-tested but were not run here.
-- Copilot runs as the CLI in a terminal; there is no inline completion.
+- Copilot, Codex, Gemini and Aider run as CLIs in a terminal; there is no inline completion.
 - If the antivirus scans `node_modules` and `.m2`, Maven and npm gates will be slow whatever the IDE does. Ask IT for exclusions.
 - Hunk revert and hunk staging work on the change under the cursor, using git's own hunks.
 

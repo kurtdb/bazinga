@@ -1,6 +1,12 @@
 # Changelog
 
 ## Unreleased
+- **Safe-to-merge verdict:** the merge dialog shows one line — “Safe to merge”, “Needs a look” or “Blocked” — fusing the merge guard, the scorecard's track record for this agent and kind of task, and the auto-merge win-rate bar. Shown even when auto-merge itself is off, so you can see why a run would (or wouldn't) qualify before ever turning it on.
+- **Auto-merge dry run:** a checkbox that logs what would have been auto-merged, and why, without actually merging — a way to build trust in the feature before switching it on for real.
+- **Guard overrides, visible:** the scorecard screen lists how many times you've overridden each merge-guard blocker across every project, so the pattern behind “offers to relax it” (see Adaptive guard rules, below) is no longer a mystery.
+- Semantic diff's symbol-change count now also appears in the merge dialog, summed across every changed file in the run, not just the one you happen to have open.
+- Session replay no longer loses an agent's own commits the first time you open Review or Merge: they are snapshotted into the run's journal (shown as read-only history, since the per-file diff is genuinely gone once squashed into staged changes) before being folded away.
+- Agent presets: Codex, Gemini CLI and Aider join Claude Code and Copilot in Settings → Agents → “Add from a preset…”.
 - **Semantic diff:** a “symbol changes” button in the diff toolbar summarises what actually moved — functions and classes added, removed, or renamed — instead of making you read it out of the raw line diff.
 - **Auto-merge:** once the fix loop gets the gates fully clean, a run can merge itself without asking, but only for an agent and kind of task with a strong, proven track record in the scorecard (off by default; undo from the run list afterwards).
 - **Session replay:** a scrubber over a run's own journal events and commits, so you can step back through what an agent actually did.

@@ -72,6 +72,21 @@ test('runCommits: the run’s own commits, oldest first, until prepareReview fol
   assert.deepEqual(await R.runCommits(root, run.id), []); // folded into staged changes: no commits left to replay
 });
 
+test('prepareReview snapshots the folded commits into the journal first, so replay keeps showing them afterwards', async () => {
+  const root = repo();
+  const run = await R.createRun(root, { name: 'edit' });
+  write(run.root, 'a.txt', 'two\n');
+  sh(run.root, 'add', '-A'); sh(run.root, 'commit', '-q', '-m', 'first step');
+  await R.prepareReview(root, run.id); // folds + must snapshot before the commit is gone
+  const events = await R.readJournal(root, run.id);
+  const snaps = events.filter((e) => e.kind === 'commit-snapshot');
+  assert.equal(snaps.length, 1);
+  assert.match(snaps[0].text, /^first step \([0-9a-f]{7}\)$/);
+  // calling it again (second Review/merge-dialog open) must not duplicate the snapshot - nothing new to fold
+  await R.prepareReview(root, run.id);
+  assert.equal((await R.readJournal(root, run.id)).filter((e) => e.kind === 'commit-snapshot').length, 1);
+});
+
 test('mergeRun squashes into the main branch, removes worktree and branch', async () => {
   const root = repo();
   const run = await R.createRun(root, { name: 'feature' });

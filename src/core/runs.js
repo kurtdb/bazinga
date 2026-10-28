@@ -169,10 +169,16 @@ async function findRun(root, id) {
 /**
  * Agents often commit on their own, which would hide their work from the Changes tab (it compares with HEAD).
  * Put those commits back as staged changes on top of the base commit. Returns how many commits were folded.
+ * Before folding (losing them from `git log` for good), each commit is written into the run's journal as a plain
+ * event - journal entries always survive, see journal.js - so session replay keeps showing them afterwards, just
+ * without the per-file drill-down a live commit offers (that information is genuinely gone once the commits are
+ * squashed into uncommitted changes, so showing it as un-clickable history is the honest version of this fix).
  */
 async function prepareReview(root, id) {
   const { run } = await findRun(root, id);
   if (!run.baseCommit || !run.commits) return { folded: 0 };
+  const commits = await runCommits(root, id);
+  for (const c of commits) await journalEvent(run.top, { kind: 'commit-snapshot', text: `${c.subject} (${c.sha.slice(0, 7)})`, t: c.time * 1000 });
   await git(run.top, ['reset', '--soft', run.baseCommit]);
   return { folded: run.commits };
 }

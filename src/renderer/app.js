@@ -66,6 +66,7 @@
     },
   };
   const MONACO_THEMES = { light: 'vs', dark: 'vs-dark', 'high-contrast': 'bazinga-hc', 'high-contrast-light': 'bazinga-hc-light', night: 'bazinga-night', nerd: 'bazinga-nerd' };
+  const GUARD_LABELS = { errors: 'Gate errors in the changes', tests: 'Tests deleted or weakened', scope: 'Files outside the task scope', unreviewed: 'Files not marked reviewed', summary: 'Files missing from the agent’s summary', gatesNotRun: 'Gates could not be run', protectedPaths: 'Protected files changed (.env, CI workflows, keys…)', bugfixTest: 'Bugfix without a new or changed test', dependencies: 'Dependency files changed', testsImmutable: 'Existing unit/integration tests modified (immutable tests)' };
   const THEME_META = {
     system: { label: 'System', icon: 'settings' },
     light: { label: 'Light', icon: 'sun' },
@@ -2322,13 +2323,12 @@
     const amCur = { ...defaults.autoMerge, ...(settings.autoMerge || {}) };
     const amOn = el('input', { type: 'checkbox' }); amOn.checked = !!amCur.enabled;
     const amRate = num(Math.round((amCur.minWinRate ?? 0.8) * 100), 80, 50, 100);
+    const amDry = el('input', { type: 'checkbox' }); amDry.checked = !!amCur.dryRun;
     const notif = el('input', { type: 'checkbox' }); notif.checked = settings.notifications !== undefined ? !!settings.notifications : defaults.notifications !== false;
     const edFont = num(settings.editorFontSize, 13, 8, 32);
     const termFont = num(settings.terminalFontSize, 13, 8, 32);
     const scrollback = num(settings.terminalScrollback || defaults.terminalScrollback, 2000, 200, 50000);
     const guardCur = { ...defaults.mergeGuardDefaults, ...(settings.mergeGuard || {}) };
-    const GUARD_LABELS = { errors: 'Gate errors in the changes', tests: 'Tests deleted or weakened', scope: 'Files outside the task scope', unreviewed: 'Files not marked reviewed', summary: 'Files missing from the agent’s summary', gatesNotRun: 'Gates could not be run' };
-    Object.assign(GUARD_LABELS, { protectedPaths: 'Protected files changed (.env, CI workflows, keys…)', bugfixTest: 'Bugfix without a new or changed test', dependencies: 'Dependency files changed', testsImmutable: 'Existing unit/integration tests modified (immutable tests)' });
     const guardSel = {};
     for (const k of Object.keys(GUARD_LABELS)) {
       guardSel[k] = el('select', null, el('option', { value: 'block', text: 'block' }), el('option', { value: 'warn', text: 'warn' }), el('option', { value: 'off', text: 'ignore' }));
@@ -2426,7 +2426,7 @@
       next.terminalFontSize = Math.min(32, Math.max(8, Number(termFont.value) || 13));
       next.terminalScrollback = Math.min(50000, Math.max(200, Math.round(Number(scrollback.value)) || 2000));
       next.mergeGuard = Object.fromEntries(Object.entries(guardSel).map(([k, sel]) => [k, sel.value]));
-      next.autoMerge = { enabled: amOn.checked, minWinRate: Math.min(1, Math.max(0.5, (Number(amRate.value) || 80) / 100)) };
+      next.autoMerge = { enabled: amOn.checked, minWinRate: Math.min(1, Math.max(0.5, (Number(amRate.value) || 80) / 100)), dryRun: amDry.checked };
       if (lvlSel.value) {
         // a level owns the fix loop and merge guard: keep only what the level does not decide
         next.oversight = lvlSel.value;
@@ -2447,6 +2447,11 @@
       ['Aider on a local model (Ollama)', { name: 'qwen3:8b', command: 'aider --model ollama_chat/qwen3:8b', env: { OLLAMA_API_BASE: 'http://127.0.0.1:11434' } }],
       ['Claude Code on an OpenAI-style server (LM Studio, llama.cpp, vLLM, gateways)', { name: 'LM Studio', command: localClaudeCmd('your-model-name'), api: 'openai', context: 32768, hint: LOCAL_HINT, env: { ANTHROPIC_BASE_URL: 'http://localhost:1234/v1', ANTHROPIC_AUTH_TOKEN: 'lm-studio', ANTHROPIC_API_KEY: '' } }],
       ['ACP agent (Agent Client Protocol; type the command your agent documents)', { name: 'ACP agent', command: 'your-agent --acp', protocol: 'acp', policy: 'ask' }],
+      ['OpenAI Codex CLI', { name: 'Codex', command: 'codex', taskCommand: 'codex {task}', resumeCommand: 'codex resume --last' }],
+      ['Google Gemini CLI', { name: 'Gemini', command: 'gemini', taskCommand: 'gemini -i {task}', resumeCommand: 'gemini --resume latest' }],
+      // aider -m/--message is one-shot (it exits after that message), not "start interactive with this opening message"
+      // like the other presets' taskCommand - so, like the local-model Aider preset above, the task is pasted in instead.
+      ['Aider (cloud API)', { name: 'Aider', command: 'aider' }],
     ];
     const presetSel = el('select', { id: 'set-preset', title: 'Add a ready-made agent button; edit the model name afterwards' }, el('option', { value: '', text: 'Add from a preset…' }), ...AGENT_PRESETS.map(([label], i) => el('option', { value: String(i), text: label })));
     presetSel.addEventListener('change', () => {
@@ -2536,6 +2541,7 @@
       autoMerge: el('div', { class: 'field' }, headWithHelp('Auto-merge', 'Once the fix loop gets the gates fully clean, merge without asking - but only for an agent and kind of task with a strong, proven track record in the scorecard. Off by default: this skips the review queue.'),
         el('label', { class: 'check' }, amOn, ' Merge automatically when the gates are clean and this agent has a strong track record for this kind of task'),
         el('div', { class: 'line wrap' }, 'Needs at least ', amRate, '% wins, with enough runs recorded in the scorecard'),
+        el('label', { class: 'check', title: 'Logs what would have been auto-merged, and why, without actually merging - a way to build trust in the feature before turning it on for real.' }, amDry, ' Dry run: log it instead of merging'),
         el('div', { class: 'hint', text: 'You can always undo an auto-merge afterwards from the run list.' })),
       taskTemplates: el('div', { class: 'field' }, el('div', { class: 'agent-head', text: 'Task templates (all projects)' }), tplIn,
         el('div', { class: 'hint', text: 'Shown in “New agent run”. A project can add or replace templates (same name) in .ide/tasks.md.' })),
@@ -4290,6 +4296,12 @@
       const s = steps[selected];
       if (!s) { fill(detail, el('div', { class: 'empty', text: 'Nothing recorded yet.' })); return; }
       if (s.type === 'event') {
+        // a commit folded into staged changes before review - see runs.prepareReview(). The commit itself is gone
+        // (squashed into uncommitted changes), so there is no file list to show any more, just that it happened.
+        if (s.kind === 'commit-snapshot') {
+          fill(detail, el('div', { class: 'hint', text: `${new Date(s.t).toLocaleTimeString()} · folded into staged changes before merge - no per-file diff any more` }), el('pre', { class: 'c-msg', text: s.text || '' }));
+          return;
+        }
         fill(detail, el('div', { class: 'hint', text: `${new Date(s.t).toLocaleTimeString()} · ${s.kind}` }), el('div', { text: s.text || '(no detail)' }));
         return;
       }
@@ -4302,9 +4314,10 @@
           el('span', { class: `tag st-${f.status === 'R' ? 'M' : f.status}`, text: f.status }), el('span', { class: 'name', text: f.path }))));
     };
     steps.forEach((s, i) => {
-      const label = s.type === 'event' ? `${s.kind}${s.text ? `: ${s.text}` : ''}` : `commit ${s.sha.slice(0, 7)}: ${s.subject}`;
+      const isCommitLike = s.type === 'commit' || s.kind === 'commit-snapshot';
+      const label = s.type === 'commit' ? `commit ${s.sha.slice(0, 7)}: ${s.subject}` : s.kind === 'commit-snapshot' ? `commit ${s.text}` : `${s.kind}${s.text ? `: ${s.text}` : ''}`;
       list.appendChild(el('div', { class: `row replay-step ${s.type}`, title: new Date(s.t).toLocaleString(), onclick: () => { selected = i; scrubber.value = String(i); renderStep(); } },
-        ic(s.type === 'commit' ? 'git-commit-horizontal' : 'history'), el('span', { class: 'name', text: label }), el('span', { class: 'muted small', text: ago(s.t / 1000) })));
+        ic(isCommitLike ? 'git-commit-horizontal' : 'history'), el('span', { class: 'name', text: label }), el('span', { class: 'muted small', text: ago(s.t / 1000) })));
     });
     const step = (d) => { const n = selected + d; if (n < 0 || n > steps.length - 1) return; selected = n; scrubber.value = String(selected); renderStep(); };
     scrubber.addEventListener('input', () => { selected = Number(scrubber.value); renderStep(); });
@@ -4315,8 +4328,8 @@
     // keyboard stepping (←/→, j/k) alongside the buttons; scoped to this dialog's own nodes, so it is gone once replay closes
     wrap.addEventListener('keydown', (e) => {
       const k = e.key.toLowerCase();
-      if (e.key === 'ArrowLeft' || k === 'j') { e.preventDefault(); step(-1); }
-      else if (e.key === 'ArrowRight' || k === 'k') { e.preventDefault(); step(1); }
+      if (e.key === 'ArrowLeft' || k === 'k') { e.preventDefault(); step(-1); }
+      else if (e.key === 'ArrowRight' || k === 'j') { e.preventDefault(); step(1); }
     });
     $('#dialog').replaceChildren(el('h3', { text: `Replay · ${run.name}` }),
       steps.length ? wrap : el('div', { class: 'empty', text: 'Nothing recorded for this run yet.' }),
@@ -4781,10 +4794,23 @@
 
     const reviewed = viewing && state.scope ? state.scope.files.map((f) => f.path).filter(isReviewed) : [];
     const res = await api.runs.guard({ id: run.id, reviewed, summary: viewing ? state.task.summary : '', allow: viewing ? state.task.allow : undefined });
+    let verdictRow = null; let symbolRow = null;
     if (res.error) {
       guard = { ok: false, clean: false, blockers: 1, warnings: 0, items: [{ id: 'gatesNotRun', level: 'block', text: `Could not check this run: ${res.error}` }] };
-    } else guard = res.guard;
-    fill(guardBox, el('div', { class: 'guard-head', text: guard.clean ? 'Ready to merge' : guard.ok ? `${guard.warnings} thing${guard.warnings === 1 ? '' : 's'} to look at` : `${guard.blockers} blocker${guard.blockers === 1 ? '' : 's'}, ${guard.warnings} warning${guard.warnings === 1 ? '' : 's'}` }), ...guardRows(guard));
+    } else {
+      guard = res.guard;
+      // the same fused verdict auto-merge itself would use, shown here even when auto-merge is off or did not qualify
+      const v = res.verdict;
+      if (v) {
+        const vClass = v.level === 'ready' ? 'ok' : v.level === 'blocked' ? 'block' : 'warn';
+        verdictRow = el('div', { class: `guard-row verdict ${vClass}`, title: v.detail },
+          ic(v.level === 'ready' ? 'circle-check' : v.level === 'blocked' ? 'circle-alert' : 'triangle-alert'),
+          el('div', null, el('div', { text: v.label }), el('div', { class: 'muted small', text: v.detail })));
+      }
+      if (res.symbolChanges) symbolRow = el('div', { class: 'guard-row ok muted' }, ic('git-compare-arrows'), el('span', { text: `${res.symbolChanges} symbol change${res.symbolChanges === 1 ? '' : 's'} across this run’s files` }));
+    }
+    fill(guardBox, el('div', { class: 'guard-head', text: guard.clean ? 'Ready to merge' : guard.ok ? `${guard.warnings} thing${guard.warnings === 1 ? '' : 's'} to look at` : `${guard.blockers} blocker${guard.blockers === 1 ? '' : 's'}, ${guard.warnings} warning${guard.warnings === 1 ? '' : 's'}` }),
+      ...(verdictRow ? [verdictRow] : []), ...(symbolRow ? [symbolRow] : []), ...guardRows(guard));
     overrideRow.classList.toggle('hidden', guard.ok);
     sync();
     if (!guard.ok) await addGuardSuggestions(guardBox, guard, run);
@@ -4878,7 +4904,7 @@
   const scCost = (v) => (v === 0 ? 'free' : v === null || v === undefined ? '?' : v < 0.01 ? '<$0.01' : `$${v.toFixed(v < 10 ? 2 : 1)}`);
   async function openScorecard() {
     const close = () => $('#modal').classList.add('hidden');
-    const sc = await api.scorecard.get();
+    const [sc, go] = await Promise.all([api.scorecard.get(), api.guardoverrides.get()]);
     const body = [];
     if (!sc || sc.error || !sc.total) {
       body.push(el('div', { class: 'empty', text: 'Nothing recorded yet. Every time you merge or discard an agent run, one line is added here: which agent, what kind of task, and what you did with the result.' }));
@@ -4897,6 +4923,15 @@
             el('td', { text: scTime(r.medianMs) }),
             el('td', { text: scCost(r.costPerMerged), title: r.local ? 'Runs on your own machine' : 'Everything this agent cost for this kind of task, failed attempts included, divided by the merged runs. From the agent’s own telemetry.' }))))));
       }
+    }
+    // guard-override transparency: counts per rule, so you can see what you have been overriding before you are asked about it again
+    const overrideCounts = Object.entries((go && go.counts) || {}).sort((a, b) => b[1] - a[1]);
+    if (overrideCounts.length) {
+      body.push(el('h4', { class: 'sc-kind', text: 'Guard overrides' }),
+        el('div', { class: 'hint', text: 'How many times you have ticked “merge anyway” past each blocker, across every project. Overriding the same one a few times offers to relax it (Settings → Merge guard).' }),
+        el('table', { class: 'sc-table' },
+          el('thead', null, el('tr', null, el('th', { text: 'Rule' }), el('th', { text: 'Times overridden' }))),
+          el('tbody', null, ...overrideCounts.map(([id, count]) => el('tr', null, el('td', { text: GUARD_LABELS[id] || id }), el('td', { text: String(count) }))))));
     }
     $('#dialog').replaceChildren(el('h3', { text: 'Scorecard' }),
       el('div', { class: 'hint', text: `Counted from what you did with each run (${(sc && sc.total) || 0} so far). “Alone” = merged without a stronger agent taking over. “Lost” = another run of the same task was kept. “Cost per merge” counts failed attempts too; “?” means the agent reported no cost. Rows with fewer than ${(sc && sc.minRuns) || 3} runs are faded: too few to trust.` }),
@@ -5749,12 +5784,18 @@
       const afterClick = scrubber.value;
       document.querySelector('#dialog .line').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
       const afterArrow = scrubber.value;
+      // j/k follow the usual list convention (j = down/forward through the list, k = up/back), not the other way round
+      document.querySelector('#dialog .line').dispatchEvent(new KeyboardEvent('keydown', { key: 'k', bubbles: true }));
+      const afterK = scrubber.value;
+      document.querySelector('#dialog .line').dispatchEvent(new KeyboardEvent('keydown', { key: 'j', bubbles: true }));
+      const afterJ = scrubber.value;
       $('#modal').classList.add('hidden');
       await switchRoot(mainRoot);
       await api.runs.discard(r.run.id, 'skip');
       await refreshRuns();
-      const stepped = Number(afterClick) === Number(before) - 1 && Number(afterArrow) === Number(afterClick) + 1;
-      return stepsShown >= 2 && stepped ? true : JSON.stringify({ stepsShown, before, afterClick, afterArrow });
+      const stepped = Number(afterClick) === Number(before) - 1 && Number(afterArrow) === Number(afterClick) + 1
+        && Number(afterK) === Number(afterArrow) - 1 && Number(afterJ) === Number(afterK) + 1;
+      return stepsShown >= 2 && stepped ? true : JSON.stringify({ stepsShown, before, afterClick, afterArrow, afterK, afterJ });
     });
     await step('adaptive guard rules: overriding the same blocker enough times offers to relax it', async () => {
       const mainRoot = state.project.root;
@@ -6067,12 +6108,17 @@
       await openSettings();
       document.querySelector('#set-tab-agents').click();
       const preset = document.querySelector('#set-preset');
-      const before = [...document.querySelectorAll('#dialog .agent-row')].filter((r) => [...r.querySelectorAll('button')].some((b) => b.textContent === 'Test')).length;
+      // the button is icon + text ("Test"), and the icon span's inline SVG has indentation whitespace text nodes,
+      // so button.textContent is "  Test", not "Test" - trim before comparing.
+      const hasTest = (r) => [...r.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Test');
+      const before = [...document.querySelectorAll('#dialog .agent-row')].filter(hasTest).length;
       preset.value = '2'; preset.dispatchEvent(new Event('change'));
-      const after = [...document.querySelectorAll('#dialog .agent-row')].filter((r) => [...r.querySelectorAll('button')].some((b) => b.textContent === 'Test')).length;
-      const aider = (() => { preset.value = '3'; preset.dispatchEvent(new Event('change')); return [...document.querySelectorAll('#dialog .agent-row')].filter((r) => [...r.querySelectorAll('button')].some((b) => b.textContent === 'Test')).length; })();
+      const after = [...document.querySelectorAll('#dialog .agent-row')].filter(hasTest).length;
+      preset.value = '3'; preset.dispatchEvent(new Event('change'));
+      // aider's row is a new one but adds no Test button of its own - the count should stay exactly at `after`.
+      const aider = [...document.querySelectorAll('#dialog .agent-row')].filter(hasTest).length;
       $('#modal').classList.add('hidden');
-      return passed && closed && failed && errShown && before === 0 && after === 1 && aider === 1 ? true : JSON.stringify({ passed, sawRunning, sawTimer, closed, failed, errShown, before, after, aider });
+      return passed && closed && failed && errShown && before === 0 && after === 1 && aider === after ? true : JSON.stringify({ passed, sawRunning, sawTimer, closed, failed, errShown, before, after, aider });
     });
     await step('settings + session store', async () => {
       await api.settings.save({ autoCheck: true });
@@ -6156,7 +6202,11 @@
       let r;
       try { r = await startRun({ task: 'boxed task', name: 'boxed run', agent: { name: 'Smoke', command: 'echo boxed', taskCommand: 'echo {task}' } }); } finally { await api.settings.save(prev); }
       if (!r || !r.entry) return 'start failed';
-      const text = () => { const b = r.entry.term.buffer.active; return Array.from({ length: b.length }, (_, n) => (b.getLine(n) ? b.getLine(n).translateToString(true) : '')).join('\n'); };
+      // the long docker command line wraps across several buffer rows at this terminal's width while zsh's own line
+      // editor redraws it (not plain terminal auto-wrap, isWrapped doesn't reliably cover it), so joining rows with
+      // '\n' can split a word straddling the wrap - "--network" became "--n\network", taking GIT_DIR=.../bazinga-agent:latest
+      // further along the same logical line down with it. These are presence checks, not structure, so no separator at all.
+      const text = () => { const b = r.entry.term.buffer.active; let out = ''; for (let n = 0; n < b.length; n++) { const line = b.getLine(n); if (line) out += line.translateToString(true); } return out; };
       const typed = await waitFor(() => /docker run --rm -it/.test(text()) && /--cap-drop ALL/.test(text()) && /GIT_DIR=\/gitcommon\/worktrees\//.test(text()) && /bazinga-agent:latest/.test(text()), 6000);
       const marked = r.entry.sandboxed === true && state.project && /🐳/.test(r.entry.title);
       const hasContainer = !!r.entry.container && typeof r.entry.container.classList === 'object'; // regression: a flag named "container" replaced the terminal's DOM element
@@ -6199,13 +6249,16 @@
       await openWorkflows();
       const pickers = !!(await waitFor(() => document.querySelector('#wf-default-agent') && document.querySelectorAll('.wf-step-agent').length > 0 && document.querySelector('#wf-pull'), 3000));
       document.querySelector('#wf-pull').click(); // no Azure DevOps here: the picker explains instead of failing
-      const explained = !!(await waitFor(() => /Pull in a work item/.test($('#dialog').textContent) && /No Azure DevOps project|not installed|Azure|az /.test($('#dialog .hint').textContent), 6000));
+      // this is an IPC round trip (providers, then the list call) on top of ~70 earlier steps' worth of accumulated
+      // terminals/Monaco models, so 6s was too tight under load even though the round trip itself is cheap - give it more room.
+      const explained = !!(await waitFor(() => /Pull in a work item/.test($('#dialog').textContent) && /No Azure DevOps project|not installed|Azure|az /.test($('#dialog .hint').textContent), 12000));
+      const dialogDump = explained ? null : { title: $('#dialog h3') && $('#dialog h3').textContent, hints: [...document.querySelectorAll('#dialog .hint')].map((h) => h.textContent) };
       $('#dialog .actions button').click(); // Back: the workflow dialog again, with its input
       const back = !!(await waitFor(() => /Start a workflow/.test($('#dialog').textContent), 3000));
       $('#modal').classList.add('hidden');
       for (const x of [st, st2]) { state.workflows.delete(x.id); await api.workflow.remove(x.id); }
       renderWorkflows();
-      return builtins && cardGraph && aRunning && waitsForYou && sameRun && finished && stopped && persisted && gateErr && pickers && explained && back ? true : JSON.stringify({ explained, back, builtins, cardGraph, aRunning, waitsForYou, sameRun, finished, stuck, doneBtn, bStatus: wfStepStatus(st, 'b'), stopped, persisted, gateErr, pickers });
+      return builtins && cardGraph && aRunning && waitsForYou && sameRun && finished && stopped && persisted && gateErr && pickers && explained && back ? true : JSON.stringify({ explained, back, builtins, cardGraph, aRunning, waitsForYou, sameRun, finished, stuck, doneBtn, bStatus: wfStepStatus(st, 'b'), stopped, persisted, gateErr, pickers, dialogDump });
     });
     await step('workflow: unattended mode ends with the process, a bad exit code relaunches with the findings, finish: merge stops with a reason', async () => {
       const mk = (name, extra, steps) => ({ name, source: 'project', workflow: { name, description: '', ...extra, steps: steps.map((x) => ({ agent: '', gate: 'none', needs: [], approval: null, retries: 1, allow: '', ...x })) } });
@@ -6311,7 +6364,7 @@
       await sleep(500);
       const emptyTaskError = /task is missing/.test(d.textContent);
       setVal(d.querySelector('.wf-edit-step textarea'), 'Do the thing: {input}');
-      btn('+ Add step').click();
+      btn('Add step').click();
       await sleep(100);
       const steps = d.querySelectorAll('.wf-edit-step');
       const second = steps[1];
@@ -6428,7 +6481,10 @@
         await sleep(200);
         const attrOk = document.documentElement.dataset.theme === name;
         const bgOk = getComputedStyle(document.body).backgroundColor === hexToRgb(bg);
-        const monacoOk = !!document.querySelector(`.monaco-editor.${MONACO_THEMES[name]}`);
+        // Monaco applies the custom theme's base type class (vs/vs-dark/hc-black/hc-light) to .monaco-editor, never
+        // the custom theme id itself - so check the editor's actual rendered background color instead.
+        const monacoBg = (document.querySelector('.monaco-editor-background') || {});
+        const monacoOk = !!monacoBg.nodeType && getComputedStyle(monacoBg).backgroundColor === hexToRgb(bg);
         const terms = [...state.terms.values()];
         const termOk = terms.length > 0 && terms.every((t) => t.term.options.theme.background === TERM_THEMES[name].background);
         const saved = (await api.settings.get()).settings.theme === name;

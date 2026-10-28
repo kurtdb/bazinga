@@ -15,12 +15,14 @@ const DEFAULT_CONFIG = {
   agents: [
     { name: 'Claude', command: 'claude', taskCommand: 'claude {task}' },
     { name: 'Copilot', command: 'copilot', taskCommand: 'copilot -i {task}' },
+    { name: 'Codex', command: 'codex', taskCommand: 'codex {task}', resumeCommand: 'codex resume --last' },
+    { name: 'Gemini', command: 'gemini', taskCommand: 'gemini -i {task}', resumeCommand: 'gemini --resume latest' },
   ],
   // Automatic fix loop: when an agent in a watched terminal goes quiet, the gates run and their findings go back to the agent (up to maxRounds times).
   fixLoop: { enabled: false, maxRounds: 3, idleSeconds: 8, tier: 'fast', include: 'error', relatedTests: false, testTimeoutSec: 120, escalate: { agent: '', after: 2 } }, // escalate.agent: the name of a stronger agent that takes over after `after` failed rounds (empty = never)
   // Auto-merge: once the fix loop settles on a clean merge guard, merge without asking - but only for an (agent, kind of task) with enough
   // scorecard history and a high enough win rate. Off by default: this skips the review queue, so it is an explicit opt-in.
-  autoMerge: { enabled: false, minWinRate: 0.8 },
+  autoMerge: { enabled: false, minWinRate: 0.8, dryRun: false }, // dryRun: log what would have merged (and why) without merging, to build trust before enabling for real
   // Human-in-the-loop level: 'autonomous' | 'supervised' | 'guided' | 'stepwise' (see core/oversight.js). Unset = the individual settings below. Settable in the IDE settings and in .ide/config.json (the project wins).
   oversight: null,
   taskPrefix: '',         // text put in front of every agent task (set by the guided levels)

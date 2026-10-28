@@ -16,7 +16,7 @@ const { FixLoop, asPaste, relevantFindings, buildEscalationPrompt } = require('.
 const scorecard = require('../core/scorecard');
 const guardoverrides = require('../core/guardoverrides');
 const replay = require('../core/replay');
-const automerge = require('../core/automerge');
+const verdict = require('../core/verdict');
 const semanticdiff = require('../core/semanticdiff');
 const compare = require('../core/compare');
 const prstatus = require('../core/prstatus');
@@ -956,7 +956,7 @@ function registerIpc() {
     const cfg = loadConfigSafe(base);
     const eff = require('../core/ciguard').effectivePolicy(base, { mergeGuard: cfg.mergeGuard, protectedPaths: cfg.protectedPaths });
     const store = guardoverrides.load(userFile('guardoverrides.json'));
-    return { suggestions: guardoverrides.suggestions(store, eff.policy) };
+    return { suggestions: guardoverrides.suggestions(store, eff.policy), counts: store.counts };
   }));
   ipcMain.handle('guardoverrides:dismiss', (_e, ruleId) => safe(() => guardoverrides.dismiss(userFile('guardoverrides.json'), ruleId)));
   ipcMain.handle('guardoverrides:relax', (_e, ruleId) => safe(() => {
@@ -1059,6 +1059,30 @@ function registerIpc() {
     return { name: who.name };
   }));
   ipcMain.handle('jira:forget', () => safe(async () => { secrets().delete('jira'); return true; }));
+  // semantic diff, summed across every changed text file of a run (not just the one open in the editor) - for the
+  // merge dialog's "N symbol changes" line. findSymbols()/treesitter return [] for a language they don't know, so
+  // nothing here needs to guess which files are "code"; a file that errors or is too large just contributes 0.
+  async function symbolChangesForRun(root, files) {
+    const cfgSym = loadConfigSafe(root).symbolParser;
+    const symbolsOf = async (rel, content) => (cfgSym === 'regex' ? null : await treesitter.symbols(rel, content)) || symbols.findSymbols(rel, content);
+    let total = 0;
+    for (const f of files) {
+      if (f.status === 'D' || f.status === 'U') continue;
+      let modified;
+      try {
+        const abs = path.join(root, f.path);
+        if (fs.statSync(abs).size > 2 * 1024 * 1024) continue;
+        modified = fs.readFileSync(abs, 'utf8');
+      } catch { continue; }
+      if (modified.includes('\u0000')) continue; // binary
+      const original = await G.headContent(root, f.path);
+      try {
+        const [oldSymbols, newSymbols] = await Promise.all([symbolsOf(f.path, original), symbolsOf(f.path, modified)]);
+        total += semanticdiff.diffSymbols(original, modified, oldSymbols, newSymbols).length;
+      } catch { /* one file's parser hiccup should not sink the whole count */ }
+    }
+    return total;
+  }
   // merge guard: gates + scope analysis of one run, judged by the project's policy
   async function guardForRun(base, run, opts = {}) {
     await runs.prepareReview(base, run.id);
@@ -1075,7 +1099,12 @@ function registerIpc() {
     const policy = opts.unattended ? { ...eff.policy, unreviewed: 'off', summary: 'off' } : eff.policy;
     const guard = evaluateMerge({ result: gateError ? null : res, gateError, scope: analysis, reviewed: opts.reviewed || [], policy, task: run.task, branch: run.branch, protectedGlobs: eff.protectedGlobs });
     runs.journalEvent(run.root, { kind: 'guard', text: guard.clean ? 'clean' : `${guard.blockers} blocker(s), ${guard.warnings} warning(s): ${guard.items.map((i) => i.id).join(', ')}` });
-    return { guard, counts: gateError ? null : res.counts, files: analysis.files.length, changed };
+    // the same fused judgment auto-merge uses, shown whether or not auto-merge itself is on or qualifies - see verdict.js
+    const kind = (await jevCore.kindOf(run.task, cfg.jev, { key: jevKey() })).kind;
+    const scorecardRows = scorecard.summarize(scorecard.load(userFile('scorecard.json')));
+    const mergeVerdict = verdict.mergeVerdict({ guard, scorecardRows, agent: run.agent || 'agent', kind, autoMergeCfg: withDefaults(cfg, 'autoMerge') });
+    const symbolChanges = await symbolChangesForRun(run.root, analysis.files);
+    return { guard, counts: gateError ? null : res.counts, files: analysis.files.length, changed, verdict: mergeVerdict, symbolChanges };
   }
   // auto-merge: called when the fix loop's gates come back clean (see setupFixLoop's `onDone`). Off unless the project opted
   // in, and even then only for an (agent, kind of task) pairing with enough scorecard history at a high win rate - see automerge.js.
@@ -1087,15 +1116,20 @@ function registerIpc() {
       if (!run) return;
       const cfg = withDefaults(loadConfigSafe(run.root), 'autoMerge');
       if (!cfg.enabled) return;
-      const { guard } = await guardForRun(base, run, { unattended: true });
-      const kind = (await jevCore.kindOf(run.task, loadConfigSafe(run.root).jev, { key: jevKey() })).kind;
-      const rows = scorecard.summarize(scorecard.load(userFile('scorecard.json')));
-      const elig = automerge.autoMergeEligible({ guard, scorecardRows: rows, agent: run.agent || 'agent', kind, cfg });
-      if (!elig.eligible) { dbg('automerge', `${run.name}: not auto-merged (${elig.reason})`); return; }
+      // guardForRun already computes the exact same guard+scorecard verdict (forced "as if enabled" there, which is
+      // moot here since cfg.enabled is already real-true) - reuse it instead of asking the scorecard twice.
+      const { verdict: v } = await guardForRun(base, run, { unattended: true });
+      if (!v.autoMergeEligible) { dbg('automerge', `${run.name}: not auto-merged (${v.detail})`); return; }
+      if (cfg.dryRun) {
+        runs.journalEvent(run.root, { kind: 'automerge-dryrun', text: `Would auto-merge: ${v.detail}` });
+        dbg('automerge', `${run.name}: dry run, not actually merged (${v.detail})`);
+        notify('fixloop', `Dry run: “${run.name}” would be auto-merged`, `${v.detail}. Not merged - auto-merge dry run is on.`);
+        return;
+      }
       const result = await runs.mergeRun(base, run.id, { message: `Auto-merged: ${run.name}`, squash: true });
       await recordOutcome(run, 'merged');
-      dbg('automerge', `${run.name}: auto-merged into ${result.into} - ${elig.reason}`);
-      notify('fixloop', `Auto-merged “${run.name}”`, `${elig.reason}. Merged into ${result.into}. You can undo this from the run list.`);
+      dbg('automerge', `${run.name}: auto-merged into ${result.into} - ${v.detail}`);
+      notify('fixloop', `Auto-merged “${run.name}”`, `${v.detail}. Merged into ${result.into}. You can undo this from the run list.`);
       send('run:automerged', { id: run.id, name: run.name, root: run.root, mainRoot: main.root, into: result.into });
     } catch (err) { dbg('automerge', `failed: ${err.message}`); }
   }
