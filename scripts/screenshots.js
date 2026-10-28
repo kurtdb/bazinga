@@ -207,7 +207,10 @@ const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], env: { ...pr
 let out = '';
 child.stdout.on('data', (d) => { out += d; if (process.env.SHOTS_LOG) fs.appendFileSync(process.env.SHOTS_LOG, d); });
 child.stderr.on('data', (d) => { out += d; if (process.env.SHOTS_LOG) fs.appendFileSync(process.env.SHOTS_LOG, d); });
-const timer = setTimeout(() => { console.error('Timed out after 180s\nOutput so far:\n' + out.slice(-2500)); child.kill('SIGKILL'); }, 180000);
+// 300s: scenarios 16-19 (session replay, adaptive guard rules, semantic diff, auto-merge) added several more
+// runs and real merges on top of the original 15, so 180s started clipping healthy runs.
+const SCREENSHOTS_TIMEOUT_MS = 300000;
+const timer = setTimeout(() => { console.error(`Timed out after ${SCREENSHOTS_TIMEOUT_MS / 1000}s\nOutput so far:\n` + out.slice(-2500)); child.kill('SIGKILL'); }, SCREENSHOTS_TIMEOUT_MS);
 child.on('close', (code) => {
   clearTimeout(timer);
   const line = out.split('\n').find((l) => l.startsWith('SMOKE_RESULT '));

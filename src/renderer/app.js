@@ -5153,6 +5153,8 @@
     const c = await startRun({ task: 'Refactor the format utils: one currency formatter, no duplicated rounding code', name: 'format utils refactor', agent: demoAgent('Claude'), allow: 'src/utils/**' });
     await api.fs.write('src/utils/format.js', "export const currency = (cents, locale = 'nl-BE') =>\n  new Intl.NumberFormat(locale, { style: 'currency', currency: 'EUR' }).format(cents / 100);\n\nexport const percent = (ratio) => `${Math.round(ratio * 100)}%`;\n");
     await commitAll('Refactor format utils');
+    await api.fs.write('src/utils/format.test.js', "import { describe, it, expect } from 'vitest';\nimport { currency, percent } from './format';\n\ndescribe('currency', () => {\n  it('formats euro cents', () => {\n    expect(currency(1050)).toBe('€10,50');\n  });\n});\n");
+    await commitAll('Add tests for format utils'); // a second step, so the replay screenshot has more than one row
     await sleep(1500);
     // run B: finished, clean result
     const b = await startRun({ task: 'Add Belgian postcode validation to AddressForm, with tests', name: 'address validation', agent: demoAgent('Claude'), allow: 'src/forms/**' });
@@ -5276,6 +5278,67 @@
       showDebug(); await sleep(1500);
       await shot('15-debug-log', 500);
     }
+
+    // 16. session replay: scrub through a finished run's journal events and the commits it made
+    await switchRoot(mainRoot);
+    setSideTab('agents'); await refreshRuns();
+    const runC = state.runs.runs.find((r) => r.id === c.run.id) || c.run;
+    await openReplay(runC);
+    await shot('16-session-replay', 600);
+    $('#modal').classList.add('hidden');
+
+    // 17. adaptive guard rules: override the same protected-file blocker three times, then see the suggestion on a fourth
+    // main must be clean before any of these merges (mergeRun refuses a dirty main) - the folder-roles step above
+    // (12) wrote the "src" mark straight into the tracked .ide/config.json without committing it.
+    await switchRoot(mainRoot);
+    await refreshChanges();
+    if (state.changes.length) await commitAll('Mark src as source');
+    for (let i = 0; i < 3; i++) {
+      const r = await startRun({ task: `tweak the CI config ${i}`, name: `ci tweak ${i}`, agent: demoAgent('Claude'), allow: '**' });
+      await api.fs.write('.env', `API_KEY_${i}=secret\n`);
+      await refreshChanges();
+      await switchRoot(mainRoot); // step away before merging: it removes the run's worktree, which must not still be the active root
+      const g = await api.runs.guard({ id: r.run.id });
+      const blockers = ((g.guard && g.guard.items) || []).filter((it) => it.level === 'block').map((it) => it.id);
+      const mres = await api.runs.merge({ id: r.run.id, message: `ci tweak ${i}`, squash: true, overriddenItems: blockers });
+      if (mres.error) throw new Error(`ci tweak ${i} merge failed: ${mres.error}`);
+    }
+    const r4 = await startRun({ task: 'tweak the CI config again', name: 'ci tweak again', agent: demoAgent('Claude'), allow: '**' });
+    await api.fs.write('.env', 'API_KEY_4=secret\n');
+    await refreshChanges();
+    await refreshRuns();
+    const run4 = state.runs.runs.find((x) => x.id === r4.run.id);
+    await mergeRunDialog(run4);
+    await shot('17-guard-suggestion', 600);
+    $('#modal').classList.add('hidden');
+    await switchRoot(mainRoot);
+    await api.runs.discard(r4.run.id, 'skip').catch(() => {});
+
+    // 18. semantic diff: the symbol-changes button on a renamed function, not raw line noise
+    await switchRoot(mainRoot);
+    await api.fs.write('src/utils/discount.js', "export function applyDiscount(total) {\n  return total * 0.9;\n}\n\nexport function checkout(total) {\n  return applyDiscount(total);\n}\n");
+    await commitAll('Add discount helper');
+    await api.fs.write('src/utils/discount.js', "export function applyPromo(total) {\n  return total * 0.9;\n}\n\nexport function checkout(total) {\n  return applyPromo(total);\n}\n");
+    await refreshChanges();
+    await openDiff('src/utils/discount.js');
+    const symBtn = $('#d-symbols');
+    for (let i = 0; i < 40 && symBtn.classList.contains('hidden'); i++) await sleep(100);
+    if (!symBtn.classList.contains('hidden')) symBtn.click();
+    await shot('18-symbol-diff', 300);
+    document.querySelectorAll('.ctx-menu').forEach((m) => m.remove());
+    await api.git.revert('src/utils/discount.js');
+
+    // 19. auto-merge: the oversight setting that merges on its own once an agent has a strong track record
+    await loadProject(); await refreshChanges();
+    await openSettings();
+    document.querySelector('#set-tab-oversight').click();
+    const amField = [...document.querySelectorAll('#dialog .field')].find((f) => /Merge automatically/.test(f.textContent));
+    const amCheckbox = amField && amField.querySelector('input[type="checkbox"]');
+    if (amCheckbox) { amCheckbox.checked = true; amCheckbox.dispatchEvent(new Event('change')); }
+    if (amField) amField.scrollIntoView({ block: 'center' });
+    await shot('19-auto-merge-setting', 400);
+    $('#modal').classList.add('hidden');
+
     api.smokeDone({ ok: true, errors, steps: { screenshots: 'ok' } });
     } catch (err) { api.smokeDone({ ok: false, errors: [...errors, String((err && err.stack) || err)], steps: { screenshots: 'failed' } }); }
     return;

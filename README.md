@@ -68,7 +68,9 @@ Real UI against a demo project (dark below; light versions in `docs/screenshots/
 | ![Lenses](docs/screenshots/9-code-lenses.png) **Lenses**: usages and last change above each function | ![Compare](docs/screenshots/10-compare-runs.png) **Compare** two agent runs |
 | ![Environment](docs/screenshots/11-environment-check.png) **Environment check**: what is installed, what is missing | ![Folders](docs/screenshots/12-folder-roles.png) **Folder roles**: mark source and test folders |
 | ![Workflow](docs/screenshots/13-start-workflow.png) **Workflow**: steps, a model per step | ![Self-check](docs/screenshots/14-workflow-selfcheck.png) **Workflow self-check**: does chaining work with your agent? |
-| ![Debug](docs/screenshots/15-debug-log.png) **Debug log**: what the workflow and the agents are doing | |
+| ![Debug](docs/screenshots/15-debug-log.png) **Debug log**: what the workflow and the agents are doing | ![Session replay](docs/screenshots/16-session-replay.png) **Session replay**: scrub through a run's events and commits |
+| ![Guard suggestion](docs/screenshots/17-guard-suggestion.png) **Adaptive guard rules**: offers to relax a rule you keep overriding | ![Semantic diff](docs/screenshots/18-symbol-diff.png) **Semantic diff**: renamed/added/removed symbols, not line noise |
+| ![Auto-merge](docs/screenshots/19-auto-merge-setting.png) **Auto-merge**: merges on its own once the gates are clean and the track record is strong | |
 
 Language servers are opt-in (see the full docs); there is no extension host and no indexer. Memory use has not been measured, but with nothing running in the background it should idle well below IntelliJ, and nothing can hang the way a project re-index does. The gates (compile, tests) are the heavy part, and they run as separate processes you can cancel.
 

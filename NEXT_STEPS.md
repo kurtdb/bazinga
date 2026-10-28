@@ -89,7 +89,19 @@ why it's in your queue").
 ## Smaller polish ideas
 
 - A changelog entry for this batch of four features (`CHANGELOG.md` wasn't touched).
-- Screenshots in `docs/screenshots/` don't yet show any of the four new surfaces (replay, symbol-diff button,
-  guard suggestion, auto-merge setting) — `npm run screenshots` would need updated scenarios.
+- ~~**Screenshots didn't show the four new surfaces, and were never actually committed.**~~ Done, and it was two
+  separate bugs: `.gitignore`'s `screenshots/` pattern was unanchored, so it matched `docs/screenshots/` too —
+  every image the README embeds was gitignored and had never once been committed (404 on GitHub since the repo
+  existed); fixed to `/screenshots/` (root-only; that's the real scratch output dir `npm run screenshots` writes
+  to with no destination argument). Added scenarios 16-19 (session replay, adaptive guard rules, semantic diff,
+  auto-merge) to the screenshot driver in `app.js`; scenario 17 surfaced a real ordering bug of its own - step 12
+  (folder roles) writes the "src" mark straight into the tracked `.ide/config.json` without committing it, which
+  left main dirty and made every later `api.runs.merge` call in the new scenario fail silently (`{error}`, not
+  thrown) for lack of a `.error` check, so the three scripted overrides never got recorded and the suggestion
+  never appeared - fixed by committing that change first and by checking `mres.error` so a future failure here
+  fails loudly instead of quietly producing a wrong screenshot. Regenerated all 19 dark and light screenshots via
+  `npm run screenshots` / `BAZINGA_THEME=light npm run screenshots -- docs/screenshots/light`; README table and
+  `scripts/screenshots.js`'s 180s timeout (now 300s - the new scenarios add several more runs and real merges)
+  updated to match.
 - `recordOutcome(base, run, outcome)`'s `base` parameter is unused in its body (pre-existing oddity, noticed while
   reading around it for auto-merge) — harmless, but worth a look next time that function is touched anyway.

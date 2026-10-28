@@ -20,5 +20,6 @@ Thumbs.db
 .env
 .env.*
 
-# generated screenshots
-screenshots/
+# generated screenshots (scratch output of `npm run screenshots` with no destination argument; the committed
+# copies the README embeds live in docs/screenshots/ and must stay tracked, so this is anchored to the root)
+/screenshots/
