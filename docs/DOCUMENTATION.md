@@ -462,10 +462,10 @@ bin/ide-check.js
 
 ## Theme and fonts
 
-- **Six themes**: System, Light, Dark, **High contrast** (low vision — pure black/white, thicker borders, the whole UI scaled up 20%), **Night** (late work — warm, dim, no blue in the palette) and **Nerd** (green phosphor terminal, monospace UI, a faint CRT scanline texture). Click the theme button in the toolbar for the picker, or set it in Settings → General. Monaco, the diff editor and the terminals switch with it.
+- **Seven themes**: System, Light, Dark, **High contrast** dark and **High contrast, light** (low vision — pure black/white either way, thicker borders, the whole UI scaled up 20%), **Night** (late work — warm, dim, no blue in the palette) and **Nerd** (green phosphor terminal, monospace UI, a faint CRT scanline texture). The theme button in the toolbar is a quick light/dark toggle, not a picker: it flips a theme to its light/dark twin where one exists (Light ↔ Dark, High contrast ↔ High contrast light); Night and Nerd are deliberately dark-only (that's the point of both), so toggling away from either lands on plain Light instead. The full list of all seven is in Settings → General → Theme. Monaco, the diff editor and the terminals switch with it.
 - **Roboto** is the UI font and **Roboto Mono** the editor/terminal font (the Nerd theme uses Roboto Mono for the whole UI, not just code). Both are bundled (`@fontsource`), so nothing is fetched at runtime and it works offline and in the packaged app.
 - Colours live in one palette per theme (`:root` plus one `:root[data-theme="..."]` block per extra theme in `styles.css`). `test/theme.test.js` discovers every theme block automatically and checks that each defines the same variables as the base palette, that no colour is hard-coded elsewhere, and that text keeps at least 4.5:1 contrast.
-- Screenshots in another theme: `BAZINGA_THEME=<light|high-contrast|night|nerd> npm run screenshots -- docs/screenshots/<name>`.
+- Screenshots in another theme: `BAZINGA_THEME=<light|high-contrast|high-contrast-light|night|nerd> npm run screenshots -- docs/screenshots/<name>`.
 
 ## Icons
 

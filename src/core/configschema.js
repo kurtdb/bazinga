@@ -16,7 +16,7 @@ const SCHEMA = {
   type: 'object',
   properties: {
     shell: nullable(str), shellArgs: nullable(strList),
-    theme: { enum: ['system', 'light', 'dark', 'high-contrast', 'night', 'nerd'] },
+    theme: { enum: ['system', 'light', 'dark', 'high-contrast', 'high-contrast-light', 'night', 'nerd'] },
     autoCheck: bool, autoCheckpoint: bool, agentHooks: bool, notifications: bool,
     agents: { type: 'array', items: { type: 'object', required: ['name', 'command'], properties: { name: str, command: str, taskCommand: str, protocol: { enum: ['pty', 'acp'] }, api: { enum: ['anthropic', 'openai'] }, context: { type: 'number', minimum: 0 }, policy: { enum: ['ask', 'allow', 'reject'] }, hint: str, env: { type: 'object', additionalProperties: str } } } },
     fixLoop: { type: 'object', properties: { enabled: bool, maxRounds: { type: 'integer', minimum: 1, maximum: 20 }, idleSeconds: { type: 'number', minimum: 1 }, tier: str, include: str, relatedTests: bool, testTimeoutSec: { type: 'number', minimum: 1 }, escalate: { type: 'object', properties: { agent: str, after: { type: 'integer', minimum: 1, maximum: 10 } } } } },

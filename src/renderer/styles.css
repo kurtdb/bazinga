@@ -71,8 +71,33 @@
   --overlay: rgba(0, 0, 0, .7);
   --shadow: rgba(0, 0, 0, .8);
 }
-:root[data-theme="high-contrast"] button, :root[data-theme="high-contrast"] input, :root[data-theme="high-contrast"] select, :root[data-theme="high-contrast"] textarea { border-width: 2px; }
-:root[data-theme="high-contrast"] *:focus-visible { outline: 3px solid var(--accent); outline-offset: 1px; }
+/* the light counterpart: some low-vision users need black-on-white, not white-on-black. Same scale, same thick borders. */
+:root[data-theme="high-contrast-light"] {
+  color-scheme: light;
+  zoom: 1.2;
+  --bg: #ffffff;
+  --bg-2: #f2f2f2;
+  --bg-3: #dedede;
+  --line: #000000;
+  --fg: #000000;
+  --muted: #3a3a3a;
+  --faint: #595959;
+  --accent: #0046ab;
+  --err: #b30000;
+  --warn: #6b4b00;
+  --info: #0046ab;
+  --ok: #006400;
+  --accent-bg: #cfe0ff;
+  --accent-line: #0046ab;
+  --danger-line: #b30000;
+  --err-bg: #ffd6d6; --warn-bg: #fff0b3; --ok-bg: #d2f5d2; --info-bg: #d6e6ff;
+  --g0: #0046ab; --g1: #006400; --g2: #6b4b00; --g3: #6a0dad; --g4: #b30000; --g5: #006666;
+  --overlay: rgba(0, 0, 0, .4);
+  --shadow: rgba(0, 0, 0, .3);
+}
+:root[data-theme="high-contrast"] button, :root[data-theme="high-contrast"] input, :root[data-theme="high-contrast"] select, :root[data-theme="high-contrast"] textarea,
+:root[data-theme="high-contrast-light"] button, :root[data-theme="high-contrast-light"] input, :root[data-theme="high-contrast-light"] select, :root[data-theme="high-contrast-light"] textarea { border-width: 2px; }
+:root[data-theme="high-contrast"] *:focus-visible, :root[data-theme="high-contrast-light"] *:focus-visible { outline: 3px solid var(--accent); outline-offset: 1px; }
 /* night: for working late — warm, dim, no blue in the palette so it is easier on tired eyes */
 :root[data-theme="night"] {
   color-scheme: dark;

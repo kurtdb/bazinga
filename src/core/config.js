@@ -8,7 +8,7 @@ const oversight = require('./oversight');
 const DEFAULT_CONFIG = {
   shell: null,            // null = PowerShell on Windows, $SHELL elsewhere
   shellArgs: null,
-  theme: 'system',        // 'system' (follow the OS), 'light', 'dark', 'high-contrast' (low vision), 'night' (late work, low blue light) or 'nerd' (phosphor terminal)
+  theme: 'system',        // 'system' (follow the OS), 'light', 'dark', 'high-contrast' or 'high-contrast-light' (low vision), 'night' (late work, low blue light) or 'nerd' (phosphor terminal)
   autoCheck: false,       // run fast checks whenever files change on disk
   autoCheckpoint: true,   // snapshot the working tree before an agent terminal starts
   // taskCommand is used for agent runs; {task} becomes the task text. env: extra environment variables for that agent (e.g. a local model endpoint).

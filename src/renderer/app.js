@@ -49,6 +49,11 @@
       black: '#000000', red: '#ff6b6b', green: '#5ee079', yellow: '#ffd43b', blue: '#5ec2ff', magenta: '#ff8cff', cyan: '#4dffe8', white: '#ffffff',
       brightBlack: '#6e6e6e', brightRed: '#ff9b9b', brightGreen: '#9bffb0', brightYellow: '#ffe48c', brightBlue: '#9bdaff', brightMagenta: '#ffc2ff', brightCyan: '#9bfff2', brightWhite: '#ffffff',
     },
+    'high-contrast-light': {
+      background: '#ffffff', foreground: '#000000', cursor: '#000000', cursorAccent: '#ffffff', selectionBackground: '#cfe0ff',
+      black: '#000000', red: '#b30000', green: '#006400', yellow: '#6b4b00', blue: '#0046ab', magenta: '#6a0dad', cyan: '#006666', white: '#3a3a3a',
+      brightBlack: '#595959', brightRed: '#d60000', brightGreen: '#008000', brightYellow: '#8a6300', brightBlue: '#0058d6', brightMagenta: '#8a12d6', brightCyan: '#008080', brightWhite: '#000000',
+    },
     night: {
       background: '#1a130d', foreground: '#ecd9bb', cursor: '#ecd9bb', cursorAccent: '#1a130d', selectionBackground: '#4a331a',
       black: '#1a130d', red: '#e8714f', green: '#b7b24a', yellow: '#dcb04a', blue: '#e8a259', magenta: '#c98a6e', cyan: '#a68a4a', white: '#ecd9bb',
@@ -60,14 +65,24 @@
       brightBlack: '#1f7a3a', brightRed: '#ff8c8c', brightGreen: '#9bffb5', brightYellow: '#f7ff9b', brightBlue: '#9be8ff', brightMagenta: '#c9ff9b', brightCyan: '#9bfff2', brightWhite: '#e2ffe8',
     },
   };
-  const MONACO_THEMES = { light: 'vs', dark: 'vs-dark', 'high-contrast': 'bazinga-hc', night: 'bazinga-night', nerd: 'bazinga-nerd' };
+  const MONACO_THEMES = { light: 'vs', dark: 'vs-dark', 'high-contrast': 'bazinga-hc', 'high-contrast-light': 'bazinga-hc-light', night: 'bazinga-night', nerd: 'bazinga-nerd' };
   const THEME_META = {
     system: { label: 'System', icon: 'settings' },
     light: { label: 'Light', icon: 'sun' },
     dark: { label: 'Dark', icon: 'moon' },
-    'high-contrast': { label: 'High contrast (low vision)', icon: 'eye' },
+    'high-contrast': { label: 'High contrast, dark (low vision)', icon: 'eye' },
+    'high-contrast-light': { label: 'High contrast, light (low vision)', icon: 'eye' },
     night: { label: 'Night (late work, low blue light)', icon: 'moon' },
     nerd: { label: 'Nerd (phosphor terminal)', icon: 'terminal' },
+  };
+  // the toolbar button is a quick light/dark toggle, not the full picker (that lives in Settings -> General -> Theme):
+  // a theme with a light/dark sibling (the base pair, high-contrast) flips to it; one without (night, nerd - both
+  // deliberately dark-only by design, see styles.css) falls back to plain light, same as a first click away from system.
+  const THEME_TOGGLE = {
+    system: () => (darkQuery.matches ? 'light' : 'dark'),
+    light: 'dark', dark: 'light',
+    'high-contrast': 'high-contrast-light', 'high-contrast-light': 'high-contrast',
+    night: 'light', nerd: 'light',
   };
   let themeSetting = 'system';
   const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
@@ -119,13 +134,14 @@
     } catch { /* fall back to the system fonts */ }
   }
 
+  const themeToggleTarget = () => { const t = THEME_TOGGLE[themeSetting]; return typeof t === 'function' ? t() : t; };
   function applyTheme() {
     const t = resolvedTheme();
     document.documentElement.dataset.theme = t;
     if (window.monaco) window.monaco.editor.setTheme(MONACO_THEMES[t]);
     for (const entry of state.terms.values()) entry.term.options.theme = TERM_THEMES[t];
     const b = document.getElementById('btn-theme');
-    if (b) { b.replaceChildren(ic(THEME_META[themeSetting].icon)); b.title = `Theme: ${THEME_META[themeSetting].label} — click to change`; }
+    if (b) { b.replaceChildren(ic(THEME_META[themeSetting].icon)); b.title = `Theme: ${THEME_META[themeSetting].label} — click for ${THEME_META[themeToggleTarget()].label} (every theme is in Settings → General)`; }
   }
   darkQuery.addEventListener('change', () => { if (themeSetting === 'system') applyTheme(); });
 
@@ -183,6 +199,11 @@
       'editor.background': '#000000', 'editor.foreground': '#ffffff',
       'editorCursor.foreground': '#ffffff', 'editor.selectionBackground': '#003a5c',
       'editorLineNumber.foreground': '#a3a3a3', 'editorLineNumber.activeForeground': '#ffffff',
+    } });
+    monaco.editor.defineTheme('bazinga-hc-light', { base: 'hc-light', inherit: true, rules: [], colors: {
+      'editor.background': '#ffffff', 'editor.foreground': '#000000',
+      'editorCursor.foreground': '#000000', 'editor.selectionBackground': '#cfe0ff',
+      'editorLineNumber.foreground': '#595959', 'editorLineNumber.activeForeground': '#000000',
     } });
     monaco.editor.defineTheme('bazinga-night', { base: 'vs-dark', inherit: true, rules: [], colors: {
       'editor.background': '#1a130d', 'editor.foreground': '#ecd9bb', 'editor.lineHighlightBackground': '#2e2114',
@@ -4991,10 +5012,8 @@
     themeSetting = next;
     applyTheme();
   }
-  $('#btn-theme').addEventListener('click', (e) => {
-    const r = e.currentTarget.getBoundingClientRect();
-    popupMenu(r.left, r.bottom + 4, Object.keys(THEME_META).map((name) => ({ label: THEME_META[name].label, checked: themeSetting === name, onclick: () => setThemeSetting(name) })));
-  });
+  // a quick light/dark toggle, not a picker - the full list of themes lives in Settings -> General -> Theme
+  $('#btn-theme').addEventListener('click', () => setThemeSetting(themeToggleTarget()));
   $('#btn-settings').addEventListener('click', openSettings);
   $('#auto').addEventListener('change', (e) => { state.autoCheck = e.target.checked; scheduleSessionSave(); });
   $('#btn-refresh').addEventListener('click', async () => { await renderTree(); await refreshChanges(); await refreshCheckpoints(); await reloadFromDisk(); });
@@ -6401,10 +6420,10 @@
       return ok ? true : JSON.stringify({ fontsLoaded, usesRoboto, attrLight, bgLight, monacoLight, termLight, saved, bgDark, monacoDark });
     });
 
-    await step('extra themes (high-contrast, night, nerd) apply to the shell, Monaco and the terminal', async () => {
+    await step('extra themes (high-contrast x2, night, nerd) apply to the shell, Monaco and the terminal', async () => {
       const hexToRgb = (hex) => `rgb(${[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(', ')})`;
       const bad = [];
-      for (const [name, bg] of [['high-contrast', '#000000'], ['night', '#1a130d'], ['nerd', '#000000']]) {
+      for (const [name, bg] of [['high-contrast', '#000000'], ['high-contrast-light', '#ffffff'], ['night', '#1a130d'], ['nerd', '#000000']]) {
         await setThemeSetting(name);
         await sleep(200);
         const attrOk = document.documentElement.dataset.theme === name;
@@ -6414,6 +6433,20 @@
         const termOk = terms.length > 0 && terms.every((t) => t.term.options.theme.background === TERM_THEMES[name].background);
         const saved = (await api.settings.get()).settings.theme === name;
         if (!(attrOk && bgOk && monacoOk && termOk && saved)) bad.push({ name, attrOk, bgOk, monacoOk, termOk, saved });
+      }
+      await setThemeSetting('dark');
+      return bad.length ? JSON.stringify(bad) : true;
+    });
+
+    await step('theme button: a quick light/dark toggle, not a picker - high-contrast flips to its light twin, night/nerd fall back to plain light', async () => {
+      const clickAndGet = async () => { $('#btn-theme').click(); await sleep(200); return (await api.settings.get()).settings.theme; };
+      const bad = [];
+      const cases = [['dark', 'light'], ['light', 'dark'], ['high-contrast', 'high-contrast-light'], ['high-contrast-light', 'high-contrast'], ['night', 'light'], ['nerd', 'light']];
+      for (const [from, expected] of cases) {
+        await setThemeSetting(from);
+        await sleep(100);
+        const got = await clickAndGet();
+        if (got !== expected) bad.push({ from, expected, got });
       }
       await setThemeSetting('dark');
       return bad.length ? JSON.stringify(bad) : true;
