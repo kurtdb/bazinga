@@ -147,6 +147,59 @@
   --scanline: rgba(57, 255, 106, .035);
 }
 :root[data-theme="nerd"] body { background-image: repeating-linear-gradient(0deg, var(--scanline) 0px, var(--scanline) 1px, transparent 1px, transparent 2px); }
+/* tron: black, electric cyan on the Grid, amber for anything that needs to stand out */
+:root[data-theme="tron"] {
+  color-scheme: dark;
+  --bg: #000000;
+  --bg-2: #04121c;
+  --bg-3: #081c2c;
+  --line: #0d3a4d;
+  --fg: #7df9ff;
+  --muted: #4a93a8;
+  --faint: #2d5c6b;
+  --accent: #00e5ff;
+  --err: #ff2d55;
+  --warn: #ffaa00;
+  --info: #00e5ff;
+  --ok: #00ffc3;
+  --accent-bg: #063a4a;
+  --accent-line: #00b8d9;
+  --danger-line: #7a1f2e;
+  --err-bg: #330a14; --warn-bg: #3a2600; --ok-bg: #00321f; --info-bg: #042a38;
+  --g0: #00e5ff; --g1: #00ffc3; --g2: #ffaa00; --g3: #ff6ec7; --g4: #ff2d55; --g5: #4fc3f7;
+  --overlay: rgba(0, 10, 20, .6);
+  --shadow: rgba(0, 20, 30, .7);
+  --gridline: rgba(0, 229, 255, .05);
+}
+:root[data-theme="tron"] body {
+  background-image: repeating-linear-gradient(0deg, var(--gridline) 0px, var(--gridline) 1px, transparent 1px, transparent 32px),
+                     repeating-linear-gradient(90deg, var(--gridline) 0px, var(--gridline) 1px, transparent 1px, transparent 32px);
+}
+/* wargames: amber CRT phosphor, the WOPR terminal - "Shall we play a game?" */
+:root[data-theme="wargames"] {
+  color-scheme: dark;
+  --bg: #000000;
+  --bg-2: #170f04;
+  --bg-3: #241a08;
+  --line: #4d3a14;
+  --fg: #ffb000;
+  --muted: #b8860b;
+  --faint: #7a5c14;
+  --accent: #ffcc33;
+  --err: #ff3333;
+  --warn: #ff8800;
+  --info: #ffcc33;
+  --ok: #39d353;
+  --accent-bg: #4d3a0a;
+  --accent-line: #b8860b;
+  --danger-line: #6b1f1f;
+  --err-bg: #3d1414; --warn-bg: #3d2e0a; --ok-bg: #0f3d14; --info-bg: #3d3414;
+  --g0: #ffcc33; --g1: #39d353; --g2: #ff8800; --g3: #5ec2ff; --g4: #ff3333; --g5: #b8860b;
+  --overlay: rgba(10, 6, 0, .6);
+  --shadow: rgba(15, 9, 0, .7);
+  --scanline: rgba(255, 176, 0, .035);
+}
+:root[data-theme="wargames"] body { letter-spacing: .2px; background-image: repeating-linear-gradient(0deg, var(--scanline) 0px, var(--scanline) 1px, transparent 1px, transparent 2px); }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font-family: var(--font-ui); overflow: hidden; }
 button { font: inherit; color: var(--fg); background: var(--bg-3); border: 1px solid var(--line); border-radius: 4px; padding: 3px 9px; cursor: pointer; white-space: nowrap; }

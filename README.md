@@ -43,7 +43,7 @@ Full documentation (every feature, configuration, CI integration, known limits..
 
 **Platform**
 - Electron desktop app, Windows/macOS/Linux, packaged with electron-builder, CI builds on every push
-- Seven themes including high-contrast in both polarities (low vision) and a night (low blue light) mode; everything else — notifications, undo, local history, environment check and more — in the full docs
+- Nine themes including high-contrast in both polarities (low vision), a night (low blue light) mode, and Tron/WarGames for fun; everything else — notifications, undo, local history, environment check and more — in the full docs
 
 ## Quick start
 

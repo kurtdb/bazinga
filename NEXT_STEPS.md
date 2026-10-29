@@ -46,17 +46,47 @@ replay, auto-merge and semantic diff. Nothing here is committed to — it's a me
     `workitems:list`) that runs after ~70 earlier steps' worth of accumulated terminals/Monaco models, and 6s was
     occasionally too tight for that round trip under load - confirmed by watching the dialog title over time and
     seeing it eventually flip past the old 6s budget. Raised the wait to 12s.
-  - Not reproduced as failures in several repeated full runs during this pass (so left alone for now):
-    `review comments on diff lines`, `workflow: a step over its time limit`.
-  - A flake not on the original list turned up repeatedly across several more rounds of full runs (done while
-    verifying the five fixes above, and again while adding Codex/Gemini/Aider support below): `spring awareness:
-    route lens, implementations lens, overview` and `symbol lenses: usages + last change above functions and
-    classes`, never both in the same run, each failing differently each time (`shownRoute: null` one run,
-    `shownImpl: null` another, `symbol lenses` returning a bare `FAILED` with no detail another) and otherwise
-    passing cleanly. Given these two were already linked to one shared root cause before (see above - the
-    "replace in files" cleanup bug), this looks like the same pairing resurfacing as a timing-sensitive race
-    rather than two new independent bugs, but that is a hypothesis, not confirmed - worth its own real pass
-    (reproduce it enough times to see the actual corrupted state, don't guess).
+  - ~~**Not reproduced as failures in several repeated full runs during this pass (so left alone for now):
+    `review comments on diff lines`, `workflow: a step over its time limit`.**~~ Given another real pass: 25
+    full smoke runs across this round of investigation, zero failures for either step. Whatever was destabilizing
+    them is gone (most likely the same `.ide/config.json`/`checks.yaml` corruption and worktree-canonicalization
+    bugs already fixed above - both steps depend on state those bugs could plausibly have clobbered). Leaving
+    them as ordinary steps; no further changes made.
+  - ~~**`spring awareness: route lens, implementations lens, overview` and `symbol lenses: usages + last change
+    above functions and classes`, a timing-sensitive race, not confirmed.**~~ Confirmed, root-caused, partially
+    fixed. Across ~28 repeated full runs: both steps fail only on the *editor-rendered-codelens* assertion
+    (`shownImpl`/`shown` timing out), never on the data itself - the exact same `api.symbols.info()` call the
+    step also makes directly (bypassing the editor) always returned the right answer first. So the computation is
+    fine; what's unreliable is Monaco ever calling our `provideCodeLenses` and rendering the result for that
+    model. Two real findings, one fixed, one still open:
+    - **Fixed, and a real app bug, not just a test one:** the symbol-lens provider (`registerSymbolLenses` in
+      `src/renderer/app.js`) had no `onDidChange` emitter, so if its one call to `api.symbols.info()` ever threw
+      or came back with `.error` (main process busy with something else at that instant), Monaco would render
+      zero lenses for that file and - since nothing told it to try again - never recompute until some unrelated
+      edit happened. A real user hitting this even once would see the lenses for a file silently stay empty for
+      the rest of that session, with no error anywhere. Added an `onDidChange` emitter the provider fires (with
+      backoff, capped at 3 tries) after a failed attempt, plus `console.error` on every failure and a rolling
+      `state.lensDebug` trace of the last 50 `provideCodeLenses` calls, so a real occurrence is now debuggable
+      from DevTools instead of invisible. Also raised the editor-assertion waits in both steps from 8s to 15s
+      (same reasoning as the `#wf-pull` fix above: Monaco's own codelens scheduling, not our code, is what's slow
+      under load).
+    - **Still open:** under genuinely heavy system load (confirmed via `top`/`vm_stat` during this investigation
+      - load average 5-7, under 100MB free physical memory, a long-uptime machine with a lot else running), the
+      fix above was not sufficient to make the flake disappear entirely - it still reproduced twice in the same
+      batch of runs that pushed the machine hardest. The retry path's own diagnostic (`state.lensDebug`) came back
+      `undefined` on that occurrence, meaning `provideCodeLenses` was never invoked for *any* file that whole
+      run, not just util.py - pointing at Monaco's own CodeLens scheduling (or the `registerCodeLensProvider`
+      call itself) occasionally not engaging at all under extreme load, upstream of anything this app controls.
+      Not reproducible on a normal-load machine in the runs done here (0 failures in 19 of 28 runs, including a
+      clean batch run right after the fix). Needs its own pass with `state.lensDebug` watched live if it's worth
+      chasing further; for now the two mitigations above are a real improvement and the residual flakiness is a
+      load-dependent edge case, not a correctness bug.
+    - Noticed in passing, not investigated (outside this pass's scope, no code touched): `auto-merge dry run:
+      logs what would have merged...` started failing in the same high-load batch (3 of the last 6 runs), with a
+      stuck `events: ["checking", "done"]` / `verdictReady: false` pattern consistent with the same root cause
+      (it waits on a real idle-detection → fix-loop → verdict cycle, `waitFor(..., 20000)` plus a fixed `sleep`).
+      No change was made to auto-merge or verdict code during this pass; flagging it here rather than chasing it,
+      since it reproduced only once the machine was already under self-inflicted heavy load from ~25 prior runs.
 - ~~**No smoke-test coverage yet for the four new features themselves.**~~ Done: real end-to-end steps for session
   replay (scrubber + keyboard), adaptive guard rules (3 real overrides of a protected-path blocker via the API,
   then a 4th through the real merge dialog expecting the relax-it suggestion), semantic diff (rename detection
@@ -76,6 +106,27 @@ replay, auto-merge and semantic diff. Nothing here is committed to — it's a me
     `echo`-style stand-in agent exits (or stays silent) well under that, so the fix loop's idle → gates → merge
     path can never fire for one. Worth remembering for any future test (or real low-output agent) that expects
     the fix loop to notice it went quiet.
+- ~~**No smoke-test coverage yet for the second batch either (unified verdict, guard-overrides panel, auto-merge
+  dry run, the merge-dialog symbol-change count, the replay commit-snapshot fix).**~~ Done: five real end-to-end
+  checks added, each reusing an existing step's fixture rather than standing up new agent runs from scratch:
+  - Session replay: the existing step's two real commits are now also checked *after* a `runs:guard` call (what
+    a real Review/Merge open triggers) folds them away - replay must still show both, now as non-interactive
+    `commit-snapshot` rows sourced from the journal, proving the fold-survival fix actually works end to end.
+  - Adaptive guard rules: the existing 4th-run mergeRunDialog check (already open to see the relax-it suggestion)
+    now also asserts the fused verdict calls the same run "Blocked" (`.guard-row.verdict.block`), not just the
+    raw guard list.
+  - New step: renames a function inside a dedicated run's worktree and checks the merge dialog's muted
+    "N symbol changes" row, proving the run-wide count (not just the per-file diff viewer's own button) is wired
+    up.
+  - New step, right after the real auto-merge step: the same clean docs-task run with `autoMerge.dryRun: true`
+    instead - confirms it is never actually merged, that an `automerge-dryrun` journal event is written, and
+    that the merge dialog still calls it "Safe to merge". Needed one real fix to the *test*, not the app: the
+    merge dialog's own guard check is interactive (not `unattended`), so the usual "mark it reviewed" nudge
+    correctly holds the verdict at "caution" even for a run about to auto-merge unattended - that is intentional
+    (see verdict.js), so the step turns the `unreviewed` rule off for itself rather than fighting it.
+  - Scorecard: the existing step's `openScorecard()` check (already open for the per-kind tables) now also
+    confirms the "Guard overrides" table shows `protectedPaths` with count 3 - the exact count the adaptive
+    guard rules step above already produces via real merge-API overrides, so no new fixture was needed.
 
 ## Adaptive guard rules
 

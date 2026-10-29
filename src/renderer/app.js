@@ -64,8 +64,18 @@
       black: '#000000', red: '#ff4d4d', green: '#39ff6a', yellow: '#f0ff4d', blue: '#39d4ff', magenta: '#a0ff39', cyan: '#39ffe0', white: '#9be8ad',
       brightBlack: '#1f7a3a', brightRed: '#ff8c8c', brightGreen: '#9bffb5', brightYellow: '#f7ff9b', brightBlue: '#9be8ff', brightMagenta: '#c9ff9b', brightCyan: '#9bfff2', brightWhite: '#e2ffe8',
     },
+    tron: {
+      background: '#000000', foreground: '#7df9ff', cursor: '#00e5ff', cursorAccent: '#000000', selectionBackground: '#063a4a',
+      black: '#000000', red: '#ff2d55', green: '#00ffc3', yellow: '#ffaa00', blue: '#00b8d9', magenta: '#ff6ec7', cyan: '#00e5ff', white: '#9fe8f5',
+      brightBlack: '#2d5c6b', brightRed: '#ff7a95', brightGreen: '#7affdf', brightYellow: '#ffd27a', brightBlue: '#4fc3f7', brightMagenta: '#ffa3dd', brightCyan: '#aef5ff', brightWhite: '#e8fbff',
+    },
+    wargames: {
+      background: '#000000', foreground: '#ffb000', cursor: '#ffcc33', cursorAccent: '#000000', selectionBackground: '#4d3a0a',
+      black: '#000000', red: '#ff3333', green: '#39d353', yellow: '#ff8800', blue: '#5ec2ff', magenta: '#b8860b', cyan: '#ffcc33', white: '#e8c07a',
+      brightBlack: '#7a5c14', brightRed: '#ff7a7a', brightGreen: '#8ef09e', brightYellow: '#ffb84d', brightBlue: '#9bdaff', brightMagenta: '#d9ac4f', brightCyan: '#ffdb7a', brightWhite: '#fff0cc',
+    },
   };
-  const MONACO_THEMES = { light: 'vs', dark: 'vs-dark', 'high-contrast': 'bazinga-hc', 'high-contrast-light': 'bazinga-hc-light', night: 'bazinga-night', nerd: 'bazinga-nerd' };
+  const MONACO_THEMES = { light: 'vs', dark: 'vs-dark', 'high-contrast': 'bazinga-hc', 'high-contrast-light': 'bazinga-hc-light', night: 'bazinga-night', nerd: 'bazinga-nerd', tron: 'bazinga-tron', wargames: 'bazinga-wargames' };
   const GUARD_LABELS = { errors: 'Gate errors in the changes', tests: 'Tests deleted or weakened', scope: 'Files outside the task scope', unreviewed: 'Files not marked reviewed', summary: 'Files missing from the agent’s summary', gatesNotRun: 'Gates could not be run', protectedPaths: 'Protected files changed (.env, CI workflows, keys…)', bugfixTest: 'Bugfix without a new or changed test', dependencies: 'Dependency files changed', testsImmutable: 'Existing unit/integration tests modified (immutable tests)' };
   const THEME_META = {
     system: { label: 'System', icon: 'settings' },
@@ -75,15 +85,18 @@
     'high-contrast-light': { label: 'High contrast, light (low vision)', icon: 'eye' },
     night: { label: 'Night (late work, low blue light)', icon: 'moon' },
     nerd: { label: 'Nerd (phosphor terminal)', icon: 'terminal' },
+    tron: { label: 'Tron (the Grid)', icon: 'cpu' },
+    wargames: { label: 'WarGames (WOPR terminal)', icon: 'play-circle' },
   };
   // the toolbar button is a quick light/dark toggle, not the full picker (that lives in Settings -> General -> Theme):
-  // a theme with a light/dark sibling (the base pair, high-contrast) flips to it; one without (night, nerd - both
-  // deliberately dark-only by design, see styles.css) falls back to plain light, same as a first click away from system.
+  // a theme with a light/dark sibling (the base pair, high-contrast) flips to it; one without (night, nerd, tron,
+  // wargames - all deliberately dark-only by design, see styles.css) falls back to plain light, same as a first
+  // click away from system.
   const THEME_TOGGLE = {
     system: () => (darkQuery.matches ? 'light' : 'dark'),
     light: 'dark', dark: 'light',
     'high-contrast': 'high-contrast-light', 'high-contrast-light': 'high-contrast',
-    night: 'light', nerd: 'light',
+    night: 'light', nerd: 'light', tron: 'light', wargames: 'light',
   };
   let themeSetting = 'system';
   const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
@@ -215,6 +228,16 @@
       'editor.background': '#000000', 'editor.foreground': '#39ff6a', 'editor.lineHighlightBackground': '#0f1f0f',
       'editorCursor.foreground': '#39ff6a', 'editor.selectionBackground': '#0a3d35',
       'editorLineNumber.foreground': '#2fae52', 'editorLineNumber.activeForeground': '#39ff6a',
+    } });
+    monaco.editor.defineTheme('bazinga-tron', { base: 'vs-dark', inherit: true, rules: [], colors: {
+      'editor.background': '#000000', 'editor.foreground': '#7df9ff', 'editor.lineHighlightBackground': '#081c2c',
+      'editorCursor.foreground': '#00e5ff', 'editor.selectionBackground': '#063a4a',
+      'editorLineNumber.foreground': '#2d5c6b', 'editorLineNumber.activeForeground': '#7df9ff',
+    } });
+    monaco.editor.defineTheme('bazinga-wargames', { base: 'vs-dark', inherit: true, rules: [], colors: {
+      'editor.background': '#000000', 'editor.foreground': '#ffb000', 'editor.lineHighlightBackground': '#241a08',
+      'editorCursor.foreground': '#ffcc33', 'editor.selectionBackground': '#4d3a0a',
+      'editorLineNumber.foreground': '#7a5c14', 'editorLineNumber.activeForeground': '#ffb000',
     } });
     const common = {
       theme: MONACO_THEMES[resolvedTheme()], automaticLayout: true, minimap: { enabled: false }, fontSize: 13,
@@ -974,16 +997,31 @@
       $('#modal').classList.remove('hidden');
     });
     monaco.editor.registerCommand('bazinga.symbolCommit', async (_accessor, sha) => { setSideTab('history'); await toggleCommit(sha); });
+    // Monaco computes CodeLenses once when a model is attached and otherwise only on content changes, with no
+    // retry of its own - a single transient failure of api.symbols.info() (main process busy with something
+    // else at that exact moment) would otherwise blank the lenses for the rest of that file's open session.
+    // onDidChange lets a failed attempt ask Monaco to try again shortly, bounded so a persistent failure settles
+    // into silence instead of retrying forever.
+    const lensRetryEmitter = new monaco.Emitter();
+    const lensRetries = new Map(); // rel -> attempt count, cleared on success
     const provider = {
+      onDidChange: lensRetryEmitter.event,
       async provideCodeLenses(model) {
         const none = { lenses: [], dispose() {} };
+        const log = (outcome) => { (state.lensDebug || (state.lensDebug = [])).push({ t: Date.now(), rel: model.uri.path, outcome }); if (state.lensDebug.length > 50) state.lensDebug.shift(); };
         const cfg = (state.project && state.project.config && state.project.config.symbolLenses) || {};
-        if (model.uri.scheme !== 'file' || !state.project || !state.project.root || (cfg.usages === false && cfg.blame === false && cfg.spring === false)) return none;
+        if (model.uri.scheme !== 'file' || !state.project || !state.project.root || (cfg.usages === false && cfg.blame === false && cfg.spring === false)) { log('skipped (not a file, no project, or lenses off)'); return none; }
         const rel = model.uri.path.replace(/^\//, '');
         const m = state.models.get(rel);
+        const retry = () => {
+          const n = (lensRetries.get(rel) || 0) + 1;
+          lensRetries.set(rel, n);
+          if (n <= 3) setTimeout(() => lensRetryEmitter.fire(), 400 * n);
+        };
         let res;
-        try { res = await api.symbols.info(rel, model.getValue(), { dirty: !!(m && m.dirty) }); } catch { return none; }
-        if (!res || res.error) return none;
+        try { res = await api.symbols.info(rel, model.getValue(), { dirty: !!(m && m.dirty) }); } catch (err) { console.error(`symbol lenses: ${rel}`, err); log(`threw: ${err && err.message}`); retry(); return none; }
+        if (!res || res.error) { console.error(`symbol lenses: ${rel}: ${(res && res.error) || 'no result'}`); log(`error: ${(res && res.error) || 'no result'}`); retry(); return none; }
+        lensRetries.delete(rel);
         const lenses = [];
         for (const s of res.symbols) {
           const range = { startLineNumber: s.line, startColumn: 1, endLineNumber: s.line, endColumn: 1 };
@@ -1008,6 +1046,7 @@
             lenses.push({ range, command: b.sha ? { id: 'bazinga.symbolCommit', title, tooltip: tip, arguments: [b.sha] } : { id: '', title, tooltip: tip } });
           }
         }
+        log(`ok: ${lenses.length} lenses from ${res.symbols.length} symbols`);
         return { lenses, dispose() {} };
       },
     };
@@ -5576,19 +5615,26 @@
       const by = Object.fromEntries((res.symbols || []).map((s) => [s.name, s]));
       report.symbolInfo = res.symbols;
       // helper: declared once, used in calls.py (import + 2 calls) and in Box.open
-      if (!(by.helper && by.helper.usages === 4 && by.helper.blame && by.helper.blame.sha && by.helper.blame.summary === 'init')) return false;
-      if (!(by.Box && by.Box.kind === 'class' && by.open && by.open.kind === 'method')) return false;
+      if (!(by.helper && by.helper.usages === 4 && by.helper.blame && by.helper.blame.sha && by.helper.blame.summary === 'init')) return JSON.stringify({ text, helper: by.helper });
+      if (!(by.Box && by.Box.kind === 'class' && by.open && by.open.kind === 'method')) return JSON.stringify({ Box: by.Box, open: by.open });
       const dirty = await api.symbols.info('util.py', text, { dirty: true });
       if (dirty.symbols.some((s) => s.blame)) return 'blame must be left out for unsaved buffers';
       // the real editor shows them
       await openFile('util.py');
-      const shown = await waitFor(() => [...document.querySelectorAll('#editor .codelens-decoration')].some((n) => /usages?/.test(n.textContent)) && [...document.querySelectorAll('#editor .codelens-decoration')].some((n) => /\bt, (just now|\d+ \S+ ago)$/.test(n.textContent.trim())), 8000);
+      // Monaco schedules its own CodeLens recompute after a model is attached; the lens data itself was already
+      // proven correct above via the direct api.symbols.info() call, so a slow render here is a timing issue, not
+      // a data one - 8s occasionally wasn't enough even this early in the suite (spring awareness hit the same
+      // "codelens never rendered in time" pattern a few steps later), raised to 15s.
+      const shown = await waitFor(() => [...document.querySelectorAll('#editor .codelens-decoration')].some((n) => /usages?/.test(n.textContent)) && [...document.querySelectorAll('#editor .codelens-decoration')].some((n) => /\bt, (just now|\d+ \S+ ago)$/.test(n.textContent.trim())), 15000);
       report.lensText = [...document.querySelectorAll('#editor .codelens-decoration')].map((n) => n.textContent.trim()).slice(0, 6);
       // the commit message must NOT be in the lens text, only in the hover (title) of the lens link
       const lensTexts = [...document.querySelectorAll('#editor .codelens-decoration')].map((n) => n.textContent);
       const tips = [...document.querySelectorAll('#editor .codelens-decoration a')].map((a) => a.title || '');
       report.lensTips = tips.slice(0, 4);
-      if (!(shown && !lensTexts.some((t) => /init/.test(t)) && tips.some((t) => /init/.test(t)))) return false;
+      if (!(shown && !lensTexts.some((t) => /init/.test(t)) && tips.some((t) => /init/.test(t)))) {
+        const m = editor.getModel();
+        return JSON.stringify({ shown, lensTexts, tips, editorHidden: $('#editor').classList.contains('hidden'), activeTab: state.activeTab, modelUri: m && m.uri.toString(), modalHidden: $('#modal').classList.contains('hidden'), viewLines: document.querySelectorAll('#editor .view-line').length, lensDebug: state.lensDebug });
+      }
       // exact usages: the fake language server answers 1 for every symbol; files without a server keep the count by name
       if (by.helper.exactUsages !== 1) return JSON.stringify({ exact: by.helper.exactUsages });
       const java = await api.symbols.info('svc/src/main/java/be/acme/Greeter.java', (await api.fs.read('svc/src/main/java/be/acme/Greeter.java')).content, {});
@@ -5613,15 +5659,17 @@
       if (!(hello && hello.endpoints.length === 1 && hello.endpoints[0].path === '/api/hello/{name}' && hello.endpoints[0].method === 'GET')) return JSON.stringify({ ctrl: ctrl.symbols || ctrl });
       if (!(g && g.impls && g.impls.total === 2 && g.impls.list.map((x) => x.name).join() === 'LoudGreeter,QuietGreeter')) return JSON.stringify({ iface: iface.symbols || iface });
       await openFile(`${base}Greeter.java`);
-      const shownImpl = await waitFor(() => [...document.querySelectorAll('#editor .codelens-decoration')].some((n) => /2 implementations/.test(n.textContent)), 8000);
+      // same timing issue as the symbol-lenses step above: the impls/route data was already proven correct via
+      // the direct api.symbols.info() calls further up, so a miss here is Monaco's own CodeLens render lagging.
+      const shownImpl = await waitFor(() => [...document.querySelectorAll('#editor .codelens-decoration')].some((n) => /2 implementations/.test(n.textContent)), 15000);
       await openFile(`${base}HelloController.java`);
-      const shownRoute = await waitFor(() => [...document.querySelectorAll('#editor .codelens-decoration')].some((n) => /GET \/api\/hello\/\{name\}/.test(n.textContent)), 8000);
+      const shownRoute = await waitFor(() => [...document.querySelectorAll('#editor .codelens-decoration')].some((n) => /GET \/api\/hello\/\{name\}/.test(n.textContent)), 15000);
       await openSpringOverview();
       await waitFor(() => document.querySelector('#dialog .spring-ov .lh-row'));
       const ovText = $('#dialog').textContent;
       $('#modal').classList.add('hidden');
       const ov = /GET \/api\/hello\/\{name\}/.test(ovText) && /@Bean greeter/.test(ovText) && /@RestController HelloController/.test(ovText) && !/null|undefined/.test(ovText);
-      return !!shownImpl && !!shownRoute && ov ? true : JSON.stringify({ shownImpl, shownRoute, ov, ovText: ovText.slice(0, 200) });
+      return !!shownImpl && !!shownRoute && ov ? true : JSON.stringify({ shownImpl, shownRoute, ov, ovText: ovText.slice(0, 200), lensDebug: state.lensDebug });
     });
     await step('saved run configurations: save, list in the Scripts tab, command with debug port, delete', async () => {
       const saved = await api.runConfigs.save({ name: 'Svc dev debug', dir: 'svc', profile: 'dev', env: 'A=1', jvmArgs: '-Xmx256m', debugPort: 5005 });
@@ -5790,12 +5838,19 @@
       document.querySelector('#dialog .line').dispatchEvent(new KeyboardEvent('keydown', { key: 'j', bubbles: true }));
       const afterJ = scrubber.value;
       $('#modal').classList.add('hidden');
+      // prepareReview (run via the guard check a real Review/Merge open triggers) folds these two commits into staged
+      // changes - git itself forgets them, so replay must now be getting both from the journal's commit-snapshot
+      // entries written just before the fold, not from git log.
+      await api.runs.guard({ id: r.run.id });
+      const replayed = await api.runs.replay(r.run.id);
+      const snaps = (replayed.steps || []).filter((s) => s.kind === 'commit-snapshot');
+      const foldedOk = snaps.length === 2 && snaps.every((s) => /first step|second step/.test(s.text));
       await switchRoot(mainRoot);
       await api.runs.discard(r.run.id, 'skip');
       await refreshRuns();
       const stepped = Number(afterClick) === Number(before) - 1 && Number(afterArrow) === Number(afterClick) + 1
         && Number(afterK) === Number(afterArrow) - 1 && Number(afterJ) === Number(afterK) + 1;
-      return stepsShown >= 2 && stepped ? true : JSON.stringify({ stepsShown, before, afterClick, afterArrow, afterK, afterJ });
+      return stepsShown >= 2 && stepped && foldedOk ? true : JSON.stringify({ stepsShown, before, afterClick, afterArrow, afterK, afterJ, foldedOk, snaps });
     });
     await step('adaptive guard rules: overriding the same blocker enough times offers to relax it', async () => {
       const mainRoot = state.project.root;
@@ -5829,13 +5884,15 @@
       await refreshChanges();
       await mergeRunDialog(r4.run);
       const suggested = !!document.querySelector('#dialog .guard-suggestion');
+      // the unified safe-to-merge verdict (verdict.js) must call this one "Blocked", not just the raw guard list
+      const verdictBlocked = !!document.querySelector('#dialog .guard-row.verdict.block');
       const text = $('#dialog').textContent;
       $('#modal').classList.add('hidden');
       await switchRoot(mainRoot);
       await api.runs.discard(r4.run.id, 'skip');
       await refreshRuns();
       await restore();
-      return suggested && /overridden/.test(text) ? true : `no suggestion after 3 overrides: ${text.slice(0, 300)}`;
+      return suggested && verdictBlocked && /overridden/.test(text) && /Blocked/.test(text) ? true : `no suggestion after 3 overrides: ${JSON.stringify({ verdictBlocked })} ${text.slice(0, 300)}`;
     });
     await step('semantic diff: the symbol-changes button summarises added/removed/renamed functions and classes', async () => {
       const before = (await api.fs.read('util.py')).content;
@@ -5852,6 +5909,22 @@
       await api.git.revert('util.py');
       await loadProject(); await refreshChanges();
       return shown && /renamed/i.test(text) && /helper/.test(text) ? true : JSON.stringify({ shown: !!shown, label, text: text.slice(0, 300) });
+    });
+    await step('semantic diff: the symbol-change count also shows in the merge dialog, summed across the whole run', async () => {
+      const mainRoot = state.project.root;
+      const r = await startRun({ task: 'rename helper', name: 'symbol count run', agent: { name: 'Smoke', command: 'echo smoke' }, allow: '**' });
+      await switchRoot(r.run.root);
+      const before = (await api.fs.read('util.py')).content;
+      await api.fs.write('util.py', before.replace('def helper(x):', 'def helper2(x):').replace('helper(1)', 'helper2(1)'));
+      await switchRoot(mainRoot);
+      await mergeRunDialog(r.run);
+      const row = document.querySelector('#dialog .guard-row.ok.muted');
+      const text = row ? row.textContent : '';
+      $('#modal').classList.add('hidden');
+      await switchRoot(mainRoot);
+      await api.runs.discard(r.run.id, 'skip');
+      await refreshRuns();
+      return /\d+ symbol changes? across this run/.test(text) ? true : JSON.stringify({ text });
     });
     await step('two agents, same task, compared', async () => {
       const mainRoot = state.project.root;
@@ -6473,10 +6546,10 @@
       return ok ? true : JSON.stringify({ fontsLoaded, usesRoboto, attrLight, bgLight, monacoLight, termLight, saved, bgDark, monacoDark });
     });
 
-    await step('extra themes (high-contrast x2, night, nerd) apply to the shell, Monaco and the terminal', async () => {
+    await step('extra themes (high-contrast x2, night, nerd, tron, wargames) apply to the shell, Monaco and the terminal', async () => {
       const hexToRgb = (hex) => `rgb(${[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(', ')})`;
       const bad = [];
-      for (const [name, bg] of [['high-contrast', '#000000'], ['high-contrast-light', '#ffffff'], ['night', '#1a130d'], ['nerd', '#000000']]) {
+      for (const [name, bg] of [['high-contrast', '#000000'], ['high-contrast-light', '#ffffff'], ['night', '#1a130d'], ['nerd', '#000000'], ['tron', '#000000'], ['wargames', '#000000']]) {
         await setThemeSetting(name);
         await sleep(200);
         const attrOk = document.documentElement.dataset.theme === name;
@@ -6494,10 +6567,10 @@
       return bad.length ? JSON.stringify(bad) : true;
     });
 
-    await step('theme button: a quick light/dark toggle, not a picker - high-contrast flips to its light twin, night/nerd fall back to plain light', async () => {
+    await step('theme button: a quick light/dark toggle, not a picker - high-contrast flips to its light twin, night/nerd/tron/wargames fall back to plain light', async () => {
       const clickAndGet = async () => { $('#btn-theme').click(); await sleep(200); return (await api.settings.get()).settings.theme; };
       const bad = [];
-      const cases = [['dark', 'light'], ['light', 'dark'], ['high-contrast', 'high-contrast-light'], ['high-contrast-light', 'high-contrast'], ['night', 'light'], ['nerd', 'light']];
+      const cases = [['dark', 'light'], ['light', 'dark'], ['high-contrast', 'high-contrast-light'], ['high-contrast-light', 'high-contrast'], ['night', 'light'], ['nerd', 'light'], ['tron', 'light'], ['wargames', 'light']];
       for (const [from, expected] of cases) {
         await setThemeSetting(from);
         await sleep(100);
@@ -6808,6 +6881,53 @@
       return merged && merged.id === r.run.id ? true : JSON.stringify({ events, merged });
     });
 
+    await step('auto-merge dry run: logs what would have merged (and the merge dialog agrees it is "Safe to merge"), but never actually merges', async () => {
+      const mainRoot = state.project.root;
+      await refreshChanges();
+      const stashed = await Promise.all(state.changes.map(async (c) => ({ path: c.path, content: (await api.fs.read(c.path)).content })));
+      for (const f of stashed) await api.git.revert(f.path);
+      const restore = async () => { for (const f of stashed) await api.fs.write(f.path, f.content); await refreshChanges(); };
+      const cur = await api.settings.get();
+      const prevSettings = cur.settings;
+      // 'unreviewed' is deliberately off here, not just for autoMerge's own unattended guard check: the merge
+      // dialog's own guard call is interactive (not unattended), so without this a human-facing "mark it reviewed"
+      // nudge would correctly hold the verdict at "caution" even for a run tryAutoMerge is about to wave through -
+      // that is real, intentional behaviour (see verdict.js), not something this step should be fighting to get
+      // around just to see the "ready" case; turning the one rule off here is the honest way to test it instead.
+      await api.settings.save({ ...prevSettings, fixLoop: { enabled: true, maxRounds: 3, idleSeconds: 2, tier: 'fast', include: 'error' }, autoMerge: { enabled: true, dryRun: true, minWinRate: 0.8 }, mergeGuard: { unreviewed: 'off' } });
+      await loadProject();
+      const events = [];
+      const offStatus = api.fixloop.onStatus((e) => events.push(e.state));
+      let merged = null;
+      const offMerged = api.runs.onAutoMerged((e) => { merged = e; });
+      const r = await startRun({ task: 'update the docs for this module once more', name: 'automerge dry run', agent: { name: 'Smoke', command: "node -e \"console.log('smoke '.repeat(80)); process.stdin.resume();\"" }, allow: '**' });
+      if (!r) { offStatus(); offMerged(); await api.settings.save(prevSettings); await restore(); return 'start failed'; }
+      await api.fs.write('automerge-dryrun-notes.md', '# notes\n'); // not .py: stays clean of the demo gate, same reasoning as the real auto-merge step above
+      await refreshChanges();
+      let verdictReady = false; let stillThere = false;
+      if (r.entry && r.entry.id !== null) {
+        await waitFor(() => events.includes('done'), 20000);
+        await sleep(500); // tryAutoMerge runs right after 'done'; dry run logs instead of merging, give it a moment
+        await refreshRuns();
+        stillThere = state.runs.runs.some((x) => x.id === r.run.id);
+        if (stillThere) {
+          await mergeRunDialog(r.run);
+          verdictReady = !!document.querySelector('#dialog .guard-row.verdict.ok');
+          $('#modal').classList.add('hidden');
+        }
+      }
+      offStatus(); offMerged();
+      const replayed = stillThere ? await api.runs.replay(r.run.id) : { steps: [] };
+      const dryRunLogged = (replayed.steps || []).some((s) => s.kind === 'automerge-dryrun');
+      await switchRoot(mainRoot);
+      if (stillThere) await api.runs.discard(r.run.id, 'skip');
+      await api.settings.save(prevSettings);
+      await loadProject(); await refreshChanges(); await refreshRuns();
+      await restore();
+      if (!r.entry || r.entry.id === null) return 'pty unavailable';
+      return !merged && stillThere && verdictReady && dryRunLogged ? true : JSON.stringify({ merged, stillThere, verdictReady, dryRunLogged, events });
+    });
+
     await step('switching project with a diff open does not throw (regression: TextModel disposed before DiffEditorWidget model reset)', async () => {
       await openDiff('a.py');
       await openFile('b.py');
@@ -6910,6 +7030,12 @@
       const row = (data.rows || []).find((r) => r.agent === 'Echo' && r.kind === 'tests');
       await openScorecard();
       const shown = !!document.querySelector('#dialog .sc-table') && /Tests/.test($('#dialog').textContent) && /Echo/.test($('#dialog').textContent) && /Cost per merge/.test($('#dialog').textContent);
+      // "adaptive guard rules" above recorded 3 real protectedPaths overrides via the merge API - the scorecard
+      // screen's "Guard overrides" table should be showing that count by now, fed from the same guardoverrides.json
+      // the suggestion logic already tracks (no separate persistence to test).
+      const ovTable = [...document.querySelectorAll('#dialog .sc-table')].find((t) => /Times overridden/.test(t.querySelector('thead').textContent));
+      const ovRow = ovTable && [...ovTable.querySelectorAll('tbody tr')].find((tr) => /Protected files changed/.test(tr.textContent));
+      const overridesShown = !!ovRow && /\b3\b/.test(ovRow.textContent);
       $('#modal').classList.add('hidden');
       const kindOk = (await api.scorecard.kind('Fix the NullPointerException in the login')) === 'bugfix';
       // hand-over: the window starts the named agent inside the same run
@@ -6924,7 +7050,7 @@
       await api.runs.discard(run.id, 'skip');
       await refreshRuns();
       await api.scorecard.clear();
-      return !m.error && row && row.runs === 2 && row.failed === 1 && row.lost === 1 && data.total === 2 && shown && kindOk && started ? true : JSON.stringify({ m: m.error, row, total: data.total, shown, kindOk, started });
+      return !m.error && row && row.runs === 2 && row.failed === 1 && row.lost === 1 && data.total === 2 && shown && overridesShown && kindOk && started ? true : JSON.stringify({ m: m.error, row, total: data.total, shown, overridesShown, kindOk, started });
     });
 
     await step('CLI-adjacent features in the window: Claude Code version status, container setup state, per-run container checkbox', async () => {

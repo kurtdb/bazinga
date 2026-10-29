@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- **Two new themes:** Tron (black, electric cyan on the Grid, amber where something needs to stand out, a faint grid-line texture) and WarGames (amber CRT phosphor, the WOPR terminal — "Shall we play a game?"). Both dark-only, same as Night and Nerd.
 - **Safe-to-merge verdict:** the merge dialog shows one line — “Safe to merge”, “Needs a look” or “Blocked” — fusing the merge guard, the scorecard's track record for this agent and kind of task, and the auto-merge win-rate bar. Shown even when auto-merge itself is off, so you can see why a run would (or wouldn't) qualify before ever turning it on.
 - **Auto-merge dry run:** a checkbox that logs what would have been auto-merged, and why, without actually merging — a way to build trust in the feature before switching it on for real.
 - **Guard overrides, visible:** the scorecard screen lists how many times you've overridden each merge-guard blocker across every project, so the pattern behind “offers to relax it” (see Adaptive guard rules, below) is no longer a mystery.
