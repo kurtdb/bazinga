@@ -1,7 +1,8 @@
 'use strict';
 /**
  * Opt-in language intelligence (hover, go to definition, find references, completion, signature help, diagnostics) through any
- * Language Server Protocol server over stdio: jdtls for Java, pyright for Python, typescript-language-server for TS/JS...
+ * Language Server Protocol server over stdio: jdtls for Java, pyright for Python, typescript-language-server for TS/JS,
+ * gopls for Go, rust-analyzer for Rust, csharp-ls for C#...
  * Nothing is bundled or started unless you enable it (settings or .ide/config.json: { "lsp": { "enabled": true } }) and the server is installed.
  * Documents are synchronised with full-text changes (simple and robust; the renderer debounces them).
  */
@@ -18,6 +19,9 @@ const DEFAULT_SERVERS = {
   java: { command: 'jdtls', args: ['-data', '{workspace}'], extensions: ['java'] },
   python: { command: 'pyright-langserver', args: ['--stdio'], extensions: ['py'] },
   typescript: { command: 'typescript-language-server', args: ['--stdio'], extensions: ['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs'] },
+  go: { command: 'gopls', args: [], extensions: ['go'] },
+  rust: { command: 'rust-analyzer', args: [], extensions: ['rs'] },
+  csharp: { command: 'csharp-ls', args: [], extensions: ['cs'] },
 };
 const LSP_LANGUAGE_ID = { py: 'python', java: 'java', ts: 'typescript', tsx: 'typescriptreact', js: 'javascript', jsx: 'javascriptreact', mjs: 'javascript', cjs: 'javascript', kt: 'kotlin', go: 'go', rs: 'rust', cs: 'csharp', yml: 'yaml', yaml: 'yaml' };
 /** The Monaco language id for an extension (what the editor registers its providers for). */

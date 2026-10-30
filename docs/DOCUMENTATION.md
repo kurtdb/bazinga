@@ -298,12 +298,19 @@ Built in, each skipped automatically when its tool is not installed (you see *sk
 | Maven compile / Maven test | slow | `pom.xml` + `mvn` on PATH |
 | pytest | slow | `pytest` on PATH |
 | Vitest | slow | `vitest` in `node_modules` |
+| Go vet | fast | `go.mod` + `go` on PATH |
+| Go build / Go test | slow | `go.mod` + `go` on PATH |
+| Cargo check / Cargo clippy | fast | `Cargo.toml` + `cargo` / `cargo-clippy` on PATH |
+| Cargo test | slow | `Cargo.toml` + `cargo` on PATH |
+| .NET build / .NET test | slow | `dotnet` on PATH |
 
 Gates run only on **changed files** (staged, unstaged and untracked), in chunks that stay under the Windows command-line limit, one after the other so a modest CPU is never saturated.
 
 Java gates read real reports instead of scraping console output: Surefire/JUnit XML (failing tests with file and line), and Checkstyle, SpotBugs and PMD XML. In a multi-module repo `{modules}` expands to `-pl <changed modules> -am` (and builds everything when the root pom changed); `{modules-only}` omits `-am`. Gates can declare `reports:` globs and `reportFormat:` (`junit`, `spotbugs`, `pmd`, `checkstyle`, `sarif`); only reports written during the run are used.
 
-Customise with `.ide/checks.yaml` (see `examples/.ide/checks.yaml`): add gates, override a built-in by name, disable some, or set `useDefaults: false`. Output parsers available: `eslint`, `ruff`, `pyright`, `shellcheck`, `yamllint`, `tsc`, `mypy`, `maven`, `sarif` (Semgrep, Trivy, Gitleaks, CodeQL...), `regex` (your own pattern with named groups `file line column severity message rule`) and `exitcode` (pass/fail, shows the output tail).
+Go and Rust compile/lint gates (`go vet`/`go build`, `cargo check`/`cargo clippy`) read file and line from the tool's own output (plain text for Go, `--message-format=json` for Cargo) the same way Maven does for `javac`. `Go test`, `Cargo test` and `.NET test` just report pass/fail with the output tail (`exitcode`), the same level of detail Vitest gets - none of the three has an always-installed structured test report the way Surefire/JUnit does.
+
+Customise with `.ide/checks.yaml` (see `examples/.ide/checks.yaml`): add gates, override a built-in by name, disable some, or set `useDefaults: false`. Output parsers available: `eslint`, `ruff`, `pyright`, `shellcheck`, `yamllint`, `tsc`, `mypy`, `maven`, `cargo` (`cargo check`/`cargo clippy --message-format=json`), `sarif` (Semgrep, Trivy, Gitleaks, CodeQL...), `regex` (your own pattern with named groups `file line column severity message rule`) and `exitcode` (pass/fail, shows the output tail).
 
 > YAML note: a command containing `: ` (colon + space) must be quoted, e.g. `run: "node -e \"...\""`. Invalid YAML is reported in the status bar.
 
@@ -428,13 +435,14 @@ The smoke test is a real Electron run and was occasionally red for no visible re
 - **Environment check**: `npm run doctor`, or *Check environment…* in the palette, shows which tools are present and which are too old (node, git, the agents, Java/Maven/Gradle, `gh`/`az`, ripgrep, language servers) with a hint for each missing one.
 - **Run statistics**: each agent run card shows how long the agent actually worked (time its terminal was producing output, not your reading time) and how many fix-loop rounds it needed, e.g. `worked 12m · 2 fix rounds`. Only runs whose terminal the IDE started are measured, and idle detection is a heuristic.
 - **Terminal restore**: after a restart the plain terminals and agent terminals reopen in the same folders. Claude Code and Copilot CLI are resumed with `--continue`, Codex with `codex resume --last`, Gemini with `gemini --resume latest`; for any other agent (Aider included - it has no resume command) add `"resumeCommand"` to its entry in the settings or `.ide/config.json` (otherwise it only reopens the folder and says so). The IDE stores titles and folders only, never terminal content, and ignores folders outside the project.
-- **Language servers (opt-in)**: hover, go to definition, references, completion and diagnostics. Off by default; enable in `.ide/config.json`:
+- **Language servers (opt-in)**: hover, go to definition, references, completion and diagnostics. Off by default; enable in Settings → Editor or `.ide/config.json`. Built-in default commands exist for Java (`jdtls`), Python (`pyright-langserver`), TypeScript/JS (`typescript-language-server`), Go (`gopls`), Rust (`rust-analyzer`) and C# (`csharp-ls`) - nothing is bundled, so each is only used once installed and found on your PATH:
 
 ```json
 { "lsp": { "enabled": true, "servers": {
   "python": { "command": "pyright-langserver", "args": ["--stdio"], "extensions": ["py"] },
   "java": { "command": "jdtls", "extensions": ["java"] },
-  "typescript": { "command": "typescript-language-server", "args": ["--stdio"], "extensions": ["ts","tsx","js"] }
+  "typescript": { "command": "typescript-language-server", "args": ["--stdio"], "extensions": ["ts","tsx","js"] },
+  "go": { "command": "gopls", "extensions": ["go"] }
 } } }
 ```
 

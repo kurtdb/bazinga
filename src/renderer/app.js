@@ -2503,7 +2503,7 @@
     const lensSpring = el('input', { type: 'checkbox' }); lensSpring.checked = lensCur.spring !== false;
     const lspCur = settings.lsp || {};
     const lspOn = el('input', { type: 'checkbox' }); lspOn.checked = !!lspCur.enabled;
-    const LSP_DEFAULTS = { java: 'jdtls', python: 'pyright-langserver', typescript: 'typescript-language-server' };
+    const LSP_DEFAULTS = { java: 'jdtls', python: 'pyright-langserver', typescript: 'typescript-language-server', go: 'gopls', rust: 'rust-analyzer', csharp: 'csharp-ls' };
     const lspCmd = {};
     for (const [name, dflt] of Object.entries(LSP_DEFAULTS)) {
       lspCmd[name] = el('input', { type: 'text', placeholder: `default: ${dflt}`, value: (lspCur.servers && lspCur.servers[name] && lspCur.servers[name].command) || '', spellcheck: 'false' });
@@ -2708,7 +2708,7 @@
       languageServers: el('div', { class: 'field' }, el('div', { class: 'agent-head', text: 'Language servers (optional)' }),
         el('label', { class: 'check' }, lspOn, ' Hover, go to definition, find references, completion and diagnostics from installed language servers'),
         ...Object.entries(lspCmd).map(([name, input]) => el('div', { class: 'line' }, el('span', { class: 'lsp-name', text: name }), input)),
-        el('div', { class: 'hint', text: 'Nothing is bundled: install the server (e.g. jdtls for Java, pyright for Python, typescript-language-server for TS/JS) and it is found on your PATH. Leave a field empty for the default command.' })),
+        el('div', { class: 'hint', text: 'Nothing is bundled: install the server (e.g. jdtls for Java, pyright for Python, typescript-language-server for TS/JS, gopls for Go, rust-analyzer for Rust, csharp-ls for C#) and it is found on your PATH. Leave a field empty for the default command.' })),
       codeLenses: el('div', { class: 'field' }, el('div', { class: 'agent-head', text: 'Above classes and methods' }),
         el('label', { class: 'check' }, lensUsages, ' Show how often the name is used in the project'),
         el('label', { class: 'check' }, lensBlame, ' Show who changed it last (git blame of its lines); click opens the commit'),

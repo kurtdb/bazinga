@@ -268,3 +268,34 @@ Verified by extending `test/theme.test.js` (each font linked in `index.html` and
 `node_modules/@fontsource/`, and the schema enum matches) plus a new smoke step that switches the font via the
 real Settings dialog and checks the editor, every open terminal and `--font-mono` all picked it up together, and
 that it survives a reload.
+
+## Go, Rust and C# - quality gates and language servers (first slice)
+
+Started on request. Before this, the three languages already had real support in several places - tree-sitter
+symbols/outline (`treesitter.js`, wasm grammars already vendored), usages/blame lenses, guard-rule file patterns,
+duplicate-code matching, folder-role detection, and `LSP_LANGUAGE_ID`/`MONACO_LANGUAGE` mappings in `lsp.js` - but
+two pieces were genuinely missing, matching Java/Python's level of support:
+
+- **Quality gates** (`src/core/defaults.js`): `Go vet` (fast - built into the toolchain, so no extra install),
+  `Go build`/`Go test` (slow); `Cargo check`/`Cargo clippy` (fast - clippy via its own `cargo-clippy` binary,
+  installed by `rustup component add clippy`), `Cargo test` (slow); `.NET build`/`.NET test` (slow). `Go
+  vet`/`Go build` and `.NET build` parse real file/line from the tool's own output via the existing `regex`
+  parser (no new parser code, just a pattern); Cargo's two needed a new `cargo` parser (`src/core/parsers.js`) for
+  its `--message-format=json` newline-delimited JSON stream. `Go test`/`Cargo test`/`.NET test` report pass/fail
+  with the output tail only (`exitcode`), the same level of detail Vitest already gets - none of the three has
+  an always-installed structured test report the way Maven Surefire does, and chasing one (a TRX logger for
+  dotnet, `cargo-nextest` for junit XML, Go's own `-json` test stream) felt like a separate, optional step rather
+  than part of a first slice. Decided against shipping `golangci-lint` as a default gate: its JSON output format
+  changed between v1 and v2, `go vet` already gives a real, zero-install fast gate, and Semgrep (now also matched
+  against `*.go`/`*.rs`/`*.cs`, previously JS/Python/Java/shell/YAML only) covers generic cross-language rules for
+  the three anyway. Verified end to end with a throwaway repo containing a `go.mod`+`.go`, `Cargo.toml`+`.rs` and
+  `.csproj`+`.cs` file (none of the three toolchains is installed on this machine) - all eight gates reported
+  `skipped: <tool> is not installed` cleanly, same as a missing Maven/Pyright does, instead of throwing.
+- **Language servers** (`src/core/lsp.js`'s `DEFAULT_SERVERS`, mirrored in Settings → Editor's `LSP_DEFAULTS` in
+  `app.js`): `gopls`, `rust-analyzer`, `csharp-ls` alongside the existing jdtls/pyright/typescript-language-server
+  presets. Nothing bundled, same as the other three - opt-in, found on PATH.
+
+Not done yet, and a reasonable next slice: the "Run this test" / "Run all tests in this file" code lenses
+(`src/core/testcmd.js`) only know Java/JUnit, JS (Vitest/Jest/node:test) and pytest - Go (`go test -run
+'^Name$'`), Rust (`cargo test name`) and C# (`dotnet test --filter FullyQualifiedName~Name`) would need their own
+test-boundary line patterns and command-building branches there, separate from the quality-gate work above.

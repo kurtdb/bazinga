@@ -9,8 +9,8 @@ Full documentation (every feature, configuration, CI integration, known limits..
 **Core IDE**
 - Real terminals for Claude Code, GitHub Copilot CLI, OpenAI Codex CLI, Google Gemini CLI and Aider (pty via xterm.js + node-pty), plus any other CLI or ACP agent
 - Monaco diff viewer over whatever the agent changed, editable, with per-hunk stage/revert, and an optional semantic-diff summary (renamed/moved/added/removed classes, methods and functions, not just changed lines)
-- Quality gates (lint, types, tests, security scans, duplicate-code/duplicate-component detection) on changed files — a Problems panel plus editor squiggles
-- Script runner for your own commands, file tree with new/rename/duplicate/delete and source/test folder marking, project search with replace-all across files, quick open, commit graph/stash/blame, no bundler, no language server by default (opt-in)
+- Quality gates (lint, types, tests, security scans, duplicate-code/duplicate-component detection) on changed files, covering JS/TS, Python, Java, Go, Rust and C# out of the box — a Problems panel plus editor squiggles
+- Script runner for your own commands, file tree with new/rename/duplicate/delete and source/test folder marking, project search with replace-all across files, quick open, commit graph/stash/blame, no bundler, no language server by default (opt-in; presets for Java, Python, TS/JS, Go, Rust and C#)
 
 **Agent runs**
 - Parallel agents, each in its own git worktree and branch — review, merge (squash or merge commit) or discard independently

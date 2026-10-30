@@ -1,6 +1,6 @@
 'use strict';
 
-const CODE = ['*.js', '*.jsx', '*.ts', '*.tsx', '*.mjs', '*.cjs', '*.py', '*.java', '*.sh', '*.bash', '*.yml', '*.yaml'];
+const CODE = ['*.js', '*.jsx', '*.ts', '*.tsx', '*.mjs', '*.cjs', '*.py', '*.java', '*.go', '*.rs', '*.cs', '*.sh', '*.bash', '*.yml', '*.yaml'];
 
 /**
  * Built-in quality gates. A check is skipped (not failed) when its tool is not installed,
@@ -52,7 +52,7 @@ module.exports = [
   },
   {
     // Copy-paste detection across the whole project (npm i -g jscpd, version 5+; literals are ignored so a copied component with other text/classes still counts). Only clones that touch files/lines you changed are reported.
-    name: 'Duplicate code', tier: 'slow', scope: 'project', match: ['*.js', '*.jsx', '*.ts', '*.tsx', '*.py', '*.java', '*.vue', '*.svelte', '*.kt', '*.go', '*.cs'],
+    name: 'Duplicate code', tier: 'slow', scope: 'project', match: ['*.js', '*.jsx', '*.ts', '*.tsx', '*.py', '*.java', '*.vue', '*.svelte', '*.kt', '*.go', '*.rs', '*.cs'],
     requiresBin: 'jscpd', onlyChangedFiles: true, timeoutSec: 300,
     run: 'jscpd . --silent --ignore-literals --min-lines 8 --min-tokens 70 --reporters json --output {tmpdir} --ignore "**/node_modules/**,**/target/**,**/dist/**,**/build/**,**/*.min.js,**/*.test.*,**/*.spec.*,**/test/**,**/tests/**,**/__tests__/**"',
     tmpReport: 'jscpd-report.json', reportFormat: 'jscpd',
@@ -87,5 +87,48 @@ module.exports = [
     name: 'Vitest', tier: 'slow', scope: 'project', match: ['*.js', '*.jsx', '*.ts', '*.tsx'],
     requiresFile: ['node_modules/.bin/vitest'],
     run: 'npx --no-install vitest run', parser: 'exitcode', timeoutSec: 600,
+  },
+  {
+    // Built into the Go toolchain, so this is always available once `go` itself is - no extra install, no version drift.
+    name: 'Go vet', tier: 'fast', scope: 'project', match: ['*.go'],
+    requiresFile: ['go.mod'], requiresBin: 'go',
+    run: 'go vet ./...', parser: 'regex', pattern: '^(?<file>\\S+\\.go):(?<line>\\d+)(?::(?<column>\\d+))?:\\s*(?<message>.+)$',
+  },
+  {
+    name: 'Go build', tier: 'slow', scope: 'project', match: ['*.go', 'go.mod'],
+    requiresFile: ['go.mod'], requiresBin: 'go',
+    run: 'go build ./...', parser: 'regex', pattern: '^(?<file>\\S+\\.go):(?<line>\\d+)(?::(?<column>\\d+))?:\\s*(?<message>.+)$', timeoutSec: 600,
+  },
+  {
+    name: 'Go test', tier: 'slow', scope: 'project', match: ['*.go', 'go.mod'],
+    requiresFile: ['go.mod'], requiresBin: 'go',
+    run: 'go test ./...', parser: 'exitcode', timeoutSec: 600,
+  },
+  {
+    name: 'Cargo check', tier: 'fast', scope: 'project', match: ['*.rs', 'Cargo.toml'],
+    requiresFile: ['Cargo.toml'], requiresBin: 'cargo',
+    run: 'cargo check --message-format=json', parser: 'cargo',
+  },
+  {
+    // The `clippy` rustup component (`rustup component add clippy`) installs this as its own `cargo-clippy` binary,
+    // the same way cargo itself discovers any `cargo-X` subcommand on PATH.
+    name: 'Cargo clippy', tier: 'fast', scope: 'project', match: ['*.rs', 'Cargo.toml'],
+    requiresFile: ['Cargo.toml'], requiresBin: 'cargo-clippy',
+    run: 'cargo clippy --message-format=json', parser: 'cargo',
+  },
+  {
+    name: 'Cargo test', tier: 'slow', scope: 'project', match: ['*.rs', 'Cargo.toml'],
+    requiresFile: ['Cargo.toml'], requiresBin: 'cargo',
+    run: 'cargo test', parser: 'exitcode', timeoutSec: 600,
+  },
+  {
+    name: '.NET build', tier: 'slow', scope: 'project', match: ['*.cs', '*.csproj', '*.sln'],
+    requiresBin: 'dotnet',
+    run: 'dotnet build -nologo', parser: 'regex', pattern: '^(?<file>.+?)\\((?<line>\\d+),(?<column>\\d+)\\):\\s*(?<severity>error|warning)\\s+(?<rule>[A-Z]+\\d+):\\s*(?<message>.+?)(?:\\s*\\[.*\\])?$', timeoutSec: 600,
+  },
+  {
+    name: '.NET test', tier: 'slow', scope: 'project', match: ['*.cs', '*.csproj', '*.sln'],
+    requiresBin: 'dotnet',
+    run: 'dotnet test --nologo', parser: 'exitcode', timeoutSec: 900,
   },
 ];

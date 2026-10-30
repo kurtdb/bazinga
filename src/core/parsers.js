@@ -110,6 +110,23 @@ function maven(stdout) {
   return out;
 }
 
+/** `cargo check`/`cargo clippy --message-format=json`: one JSON object per line, most of them not diagnostics at all. */
+function cargo(stdout) {
+  const out = [];
+  for (const line of String(stdout).split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t.startsWith('{')) continue;
+    let obj;
+    try { obj = JSON.parse(t); } catch { continue; }
+    const msg = obj.reason === 'compiler-message' && obj.message;
+    if (!msg || (msg.level !== 'error' && msg.level !== 'warning')) continue;
+    const spans = msg.spans || [];
+    const span = spans.find((s) => s.is_primary) || spans[0] || {};
+    out.push({ file: span.file_name, line: span.line_start, column: span.column_start, severity: msg.level, message: msg.message, rule: msg.code && msg.code.code });
+  }
+  return out;
+}
+
 function sarifUri(uri) {
   if (!uri) return undefined;
   if (uri.startsWith('file://')) { try { return fileURLToPath(uri); } catch { return uri; } }
@@ -163,7 +180,7 @@ function regex(stdout, check) {
 /** Findings come only from the exit code (handled by the runner). */
 function exitcode() { return []; }
 
-module.exports = { tryJson, eslint, ruff, pyright, shellcheck, yamllint, tsc, mypy, maven, sarif, regex, exitcode };
+module.exports = { tryJson, eslint, ruff, pyright, shellcheck, yamllint, tsc, mypy, maven, cargo, sarif, regex, exitcode };
 
 // ---------------------------------------------------------------------------------------------
 // Report parsers: tools that write an XML/SARIF report file instead of (or besides) console output.

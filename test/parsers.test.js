@@ -69,14 +69,39 @@ test('sarif (semgrep style)', () => {
   assert.deepEqual([f[0].file, f[0].line, f[0].severity, f[0].rule], ['src/app.py', 7, 'error', 'python.lang.eval']);
 });
 
+test('cargo check/clippy JSON stream: only error/warning compiler-messages become findings', () => {
+  const lines = [
+    JSON.stringify({ reason: 'compiler-artifact', package_id: 'x 0.1.0' }),
+    JSON.stringify({ reason: 'compiler-message', message: { level: 'error', message: "mismatched types", code: { code: 'E0308' }, spans: [{ file_name: 'src/main.rs', line_start: 3, column_start: 5, is_primary: true }] } }),
+    JSON.stringify({ reason: 'compiler-message', message: { level: 'note', message: 'expected due to this', spans: [] } }),
+    JSON.stringify({ reason: 'compiler-message', message: { level: 'warning', message: 'unused variable: `x`', code: { code: 'unused_variables' }, spans: [{ file_name: 'src/lib.rs', line_start: 10, column_start: 9, is_primary: true }] } }),
+    JSON.stringify({ reason: 'build-finished', success: false }),
+  ].join('\n');
+  const f = p.cargo(lines);
+  assert.equal(f.length, 2);
+  assert.deepEqual([f[0].file, f[0].line, f[0].column, f[0].severity, f[0].rule], ['src/main.rs', 3, 5, 'error', 'E0308']);
+  assert.equal(f[1].severity, 'warning');
+});
+
 test('regex parser with named groups', () => {
   const f = p.regex('src/a.c:4:2: warning: unused variable', { pattern: '^(?<file>.+?):(?<line>\\d+):(?<column>\\d+): (?<severity>\\w+): (?<message>.*)$' });
   assert.equal(f.length, 1);
   assert.equal(f[0].severity, 'warning');
 });
 
+test("the built-in Go and .NET gates' regex patterns match real tool output", () => {
+  const defaults = require('../src/core/defaults');
+  const byName = Object.fromEntries(defaults.map((d) => [d.name, d]));
+  const vet = p.regex('./main.go:12:2: Printf call has arguments but no formatting directives', byName['Go vet']);
+  assert.deepEqual([vet[0].file, vet[0].line, vet[0].column], ['./main.go', 12, 2]);
+  const build = p.regex('./main.go:7: undefined: fmt', byName['Go build']); // some compiler errors have no column
+  assert.deepEqual([build[0].file, build[0].line, build[0].column], ['./main.go', 7, undefined]);
+  const net = p.regex("/p/Program.cs(10,13): error CS0103: The name 'Foo' does not exist in the current context [/p/Project.csproj]", byName['.NET build']);
+  assert.deepEqual([net[0].file, net[0].line, net[0].column, net[0].severity, net[0].rule, net[0].message], ['/p/Program.cs', 10, 13, 'error', 'CS0103', "The name 'Foo' does not exist in the current context"]);
+});
+
 test('garbage input never throws', () => {
-  for (const name of ['eslint', 'ruff', 'pyright', 'shellcheck', 'sarif', 'tsc', 'mypy', 'maven', 'yamllint']) {
+  for (const name of ['eslint', 'ruff', 'pyright', 'shellcheck', 'sarif', 'tsc', 'mypy', 'maven', 'yamllint', 'cargo']) {
     assert.deepEqual(p[name]('not json, not a finding'), []);
     assert.deepEqual(p[name](''), []);
   }
