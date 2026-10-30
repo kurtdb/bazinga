@@ -1,6 +1,6 @@
 'use strict';
 /**
- * Turns the output of a test run (node --test, pytest, vitest, jest, Maven, Gradle) into one honest verdict.
+ * Turns the output of a test run (node --test, pytest, vitest, jest, Maven, Gradle, go test, cargo test, dotnet test) into one honest verdict.
  * The important rule: "exit code 0 but zero tests ran" is NOT a pass, because that is what a mistyped name filter looks like.
  */
 const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
@@ -40,6 +40,29 @@ function parseCounts(text) {
     const get = (w) => num(new RegExp(`(\\d+) ${w}`).exec(line));
     const failed = get('failed') + get('errors?'); const passed = get('passed'); const skipped = get('skipped');
     return { total: failed + passed + skipped, passed, failed, skipped };
+  }
+  // go test -v: "--- PASS: Test" / "--- FAIL: Test" / "--- SKIP: Test" per test; a -run filter matching nothing
+  // still exits 0 with no such lines at all, flagged instead by its own "[no tests to run]" marker.
+  const goLines = [...text.matchAll(/^--- (PASS|FAIL|SKIP): /gm)];
+  if (goLines.length) {
+    const passed = goLines.filter((m) => m[1] === 'PASS').length;
+    const failed = goLines.filter((m) => m[1] === 'FAIL').length;
+    const skipped = goLines.filter((m) => m[1] === 'SKIP').length;
+    return { total: passed + failed + skipped, passed, failed, skipped };
+  }
+  if (/\[no tests to run\]/.test(text)) return { total: 0, passed: 0, failed: 0, skipped: 0 };
+  // cargo test: last "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; ..."
+  const cargo = [...text.matchAll(/test result: \w+\. (\d+) passed; (\d+) failed; (\d+) ignored; \d+ measured; \d+ filtered out/g)];
+  if (cargo.length) {
+    const l = cargo[cargo.length - 1];
+    const passed = num(l, 1); const failed = num(l, 2); const skipped = num(l, 3);
+    return { total: passed + failed + skipped, passed, failed, skipped };
+  }
+  // dotnet test (VSTest console runner): last "Failed: 0, Passed: 3, Skipped: 0, Total: 3, Duration: ..."
+  const net = [...text.matchAll(/Failed:\s*(\d+),\s*Passed:\s*(\d+),\s*Skipped:\s*(\d+),\s*Total:\s*(\d+)/g)];
+  if (net.length) {
+    const l = net[net.length - 1];
+    return { failed: num(l, 1), passed: num(l, 2), skipped: num(l, 3), total: num(l, 4) };
   }
   if (/no tests ran/i.test(text)) return { total: 0, passed: 0, failed: 0, skipped: 0 };
   return null;

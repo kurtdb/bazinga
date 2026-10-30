@@ -299,3 +299,35 @@ Not done yet, and a reasonable next slice: the "Run this test" / "Run all tests 
 (`src/core/testcmd.js`) only know Java/JUnit, JS (Vitest/Jest/node:test) and pytest - Go (`go test -run
 '^Name$'`), Rust (`cargo test name`) and C# (`dotnet test --filter FullyQualifiedName~Name`) would need their own
 test-boundary line patterns and command-building branches there, separate from the quality-gate work above.
+
+## ~~"Run this test" for Go, Rust and C#~~
+
+Done, the slice called out above. `testcmd.js`'s `findTests()` now recognises `func TestXxx(t *testing.T)` (Go,
+flat - no class/suite concept), `#[test]` above a `fn` (Rust, attributes can stack like `#[test]`/`#[should_panic]`
+across two lines), and `[Fact]`/`[Theory]`/`[Test]`/`[TestMethod]` above a method inside a class (C#, same
+suite-from-filename pattern Java already uses).
+
+Three real differences from the existing four languages, each handled rather than papered over:
+- **Go** has no per-file scope at all in its own test model - a package IS the unit - so both the single-test and
+  whole-file commands are scoped to the file's *package* (`go test -run '^Name$' -v ./pkg`, stripped to `go test
+  -v ./pkg` for "all"), which is the closest honest equivalent.
+- **Rust** genuinely cannot scope "just this file" for a `#[test]` module inlined under `src/` - cargo selects by
+  binary/library target or by test name, never by source file, for anything other than its own file-per-binary
+  integration tests under `tests/`. Giving the inline case a `fileTestCommand` would have meant either lying
+  (claiming file-scope while silently running the whole crate) or, worse, cargo's own name-substring matching
+  silently picking up tests from OTHER files that happen to share a word in their name - so it returns `null`
+  there and only the single-test lens shows; a `tests/foo.rs` integration file, which genuinely is its own `cargo
+  test --test foo` target, gets both lenses like every other language does. Individual test selection is a bare
+  substring match on the function name (no attempt to reconstruct its enclosing `mod` path for an exact match),
+  same imprecision Vitest/Jest's `-t name` already has and the same tradeoff already accepted there.
+- None of the three has a simple "wait for a debugger" flag the way Java gets `-Dmaven.surefire.debug`/
+  `--debug-jvm` (a JVM thing) or node gets `--inspect-brk` (built into node itself) - `dlv`/`rust-gdb`/VS's own
+  test debugger all need a separate tool wired up outside a single CLI flag, which is a bigger, separate piece of
+  work, not a one-line addition like Java/Python/node got. `canDebug()` stays false for all three, matching the
+  existing "Vitest/Jest: nothing reliable to offer" precedent rather than inventing one.
+
+`testrun.js`'s `parseCounts()` (used for the "run it inside the app, not a terminal" verdict lens: Passed/Failed/No
+test ran/Runner missing) learned three more summary-line formats: `go test -v`'s `--- PASS:`/`--- FAIL:`/`---
+SKIP:` lines (plus its own "name filter matched nothing" tell, `[no tests to run]`, distinct from the generic "no
+tests ran" phrase the other runners use), cargo's `test result: ok. N passed; N failed; ...`, and dotnet's VSTest
+console summary `Failed: N, Passed: N, Skipped: N, Total: N`.

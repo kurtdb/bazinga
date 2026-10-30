@@ -1418,7 +1418,7 @@ function registerIpc() {
       : opts.all
         ? testcmd.fileTestCommand(r, opts.rel, { shellKind, content: opts.content })
         : testcmd.testCommand(r, opts.rel, { name: opts.name, kind: opts.kind, suite: opts.suite }, { shellKind, content: opts.content });
-    if (!c) throw new Error(opts.debug ? 'Debugging from here works for pytest, JUnit (Maven/Gradle) and node:test. For Vitest or Jest, use your IDE’s debugger.' : 'No test runner found for this file (looked for Maven, Gradle, Vitest, Jest, node:test and pytest).');
+    if (!c) throw new Error(opts.debug ? 'Debugging from here works for pytest, JUnit (Maven/Gradle) and node:test. For Vitest, Jest, go test, cargo test or dotnet test, use your IDE’s debugger.' : 'No test runner found for this file (looked for Maven, Gradle, Vitest, Jest, node:test, pytest, go test, cargo test and dotnet test).');
     return { command: c.command, label: c.label, cwd: path.join(r, c.cwd || ''), note: c.note || '' };
   }));
   // run the test inside the app (not in a terminal) and report one verdict: passed / failed / nothing ran / runner missing
@@ -1429,7 +1429,7 @@ function registerIpc() {
     const c = opts.all
       ? testcmd.fileTestCommand(r, opts.rel, { shellKind, content: opts.content })
       : testcmd.testCommand(r, opts.rel, { name: opts.name, kind: opts.kind, suite: opts.suite }, { shellKind, content: opts.content });
-    if (!c) throw new Error('No test runner found for this file (looked for Maven, Gradle, Vitest, Jest, node:test and pytest).');
+    if (!c) throw new Error('No test runner found for this file (looked for Maven, Gradle, Vitest, Jest, node:test, pytest, go test, cargo test and dotnet test).');
     const res = await runShell(c.command, { cwd: path.join(r, c.cwd || ''), timeoutMs: 5 * 60 * 1000 });
     const v = testrun.summarize(res);
     return { ...v, output: v.output.slice(-60000), command: c.command, label: c.label, cwd: path.join(r, c.cwd || ''), durationMs: res.durationMs };

@@ -1,14 +1,15 @@
 'use strict';
 /**
- * "Run this test" for the editor: find tests in a file (Java/JUnit, JS/TS: vitest, jest, node:test, Python: pytest)
- * and build the shell command that runs just that test. Commands are typed into a terminal, so arguments are quoted for its shell.
+ * "Run this test" for the editor: find tests in a file (Java/JUnit, JS/TS: vitest, jest, node:test, Python: pytest,
+ * Go: go test, Rust: cargo test, C#: xUnit/NUnit/MSTest via dotnet test) and build the shell command that runs just
+ * that test. Commands are typed into a terminal, so arguments are quoted for its shell.
  */
 const fs = require('node:fs');
 const path = require('node:path');
 const { toPosix } = require('./util');
 
 const ext = (rel) => path.posix.extname(toPosix(rel)).toLowerCase();
-const LANG = { '.java': 'java', '.kt': 'java', '.js': 'js', '.jsx': 'js', '.mjs': 'js', '.cjs': 'js', '.ts': 'js', '.tsx': 'js', '.py': 'py' };
+const LANG = { '.java': 'java', '.kt': 'java', '.js': 'js', '.jsx': 'js', '.mjs': 'js', '.cjs': 'js', '.ts': 'js', '.tsx': 'js', '.py': 'py', '.go': 'go', '.rs': 'rust', '.cs': 'csharp' };
 
 /** @returns {Array<{line:number, name:string, kind:'test'|'suite', suite?:string}>} 1-based lines */
 function findTests(rel, content) {
@@ -43,6 +44,30 @@ function findTests(rel, content) {
         out.push({ line: i + 1, name: f[2], kind: 'test', suite: cls || undefined });
       } else if (cls && /^\S/.test(l) && !/^\s*(#|$)/.test(l)) cls = null;
     });
+  } else if (lang === 'go') {
+    const re = /^func\s+(Test\w+)\s*\(\s*\w+\s*\*testing\.T\s*\)/;
+    lines.forEach((l, i) => { const m = re.exec(l); if (m) out.push({ line: i + 1, name: m[1], kind: 'test' }); });
+  } else if (lang === 'rust') {
+    let pending = false;
+    lines.forEach((l, i) => {
+      if (/^\s*#\[test\]\s*$/.test(l)) { pending = true; return; }
+      if (pending && /^\s*#\[/.test(l)) return; // another attribute stacked on its own line, e.g. #[should_panic]
+      const m = /^\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)\s*\(/.exec(l);
+      if (pending && m) out.push({ line: i + 1, name: m[1], kind: 'test' });
+      if (pending) pending = false;
+    });
+  } else if (lang === 'csharp') {
+    const cls = path.posix.basename(toPosix(rel)).replace(/\.[^.]+$/, '');
+    let pending = false;
+    lines.forEach((l, i) => {
+      if (/^\s*\[(Fact|Theory|Test|TestMethod)\b/.test(l)) { pending = true; return; }
+      if (pending && /^\s*\[/.test(l)) return; // a stacked attribute, e.g. [InlineData(1)]
+      const m = /^\s*(?:public\s+|private\s+|internal\s+|protected\s+|static\s+|async\s+)*(?:void|Task)\s+(\w+)\s*\(/.exec(l);
+      if (pending && m) out.push({ line: i + 1, name: m[1], kind: 'test', suite: cls });
+      if (pending) pending = false;
+    });
+    const c = lines.findIndex((l) => new RegExp(`\\bclass\\s+${cls}\\b`).test(l));
+    if (out.length && c >= 0) out.unshift({ line: c + 1, name: cls, kind: 'suite', suite: cls });
   }
   return out;
 }
@@ -63,6 +88,26 @@ function nearestUp(root, rel, names) {
     if (dir === '.' || dir === '') return null;
     dir = path.posix.dirname(dir);
   }
+}
+
+/** Like nearestUp, but for a *.csproj whose name is not known up front (every project names its own differently). */
+function nearestCsproj(root, rel) {
+  let dir = path.posix.dirname(toPosix(rel));
+  for (;;) {
+    let entries = [];
+    try { entries = fs.readdirSync(path.join(root, dir === '.' ? '' : dir)); } catch { /* unreadable */ }
+    const file = entries.find((f) => f.endsWith('.csproj'));
+    if (file) return { dir: dir === '.' ? '' : dir, file };
+    if (dir === '.' || dir === '') return null;
+    dir = path.posix.dirname(dir);
+  }
+}
+
+/** The package directory of a Go file, relative to its module root (as `go test` wants it: "." or "./sub/dir"). */
+function goPackageDir(rel, modDir) {
+  const dir = path.posix.dirname(rel);
+  const sub = modDir ? (dir === modDir ? '' : dir.slice(modDir.length + 1)) : dir === '.' ? '' : dir;
+  return sub ? `./${sub}` : '.';
 }
 
 /**
@@ -103,6 +148,30 @@ function testCommand(root, rel, test, { shellKind = 'posix', content = '' } = {}
     const id = test.kind === 'suite' ? `${file}::${test.name}` : `${file}::${test.suite ? `${test.suite}::` : ''}${test.name}`;
     return { cwd, label: `pytest ${id}`, command: `python -m pytest ${q(id)}` };
   }
+  if (lang === 'go') {
+    const mod = nearestUp(root, rel, ['go.mod']);
+    const cwd = mod ? mod.dir : '';
+    const pkg = goPackageDir(rel, cwd);
+    const name = escapeRegex(test.name);
+    return { cwd, label: `go test ${test.name}`, command: `go test -run ${q(`^${name}$`)} -v ${pkg}` };
+  }
+  if (lang === 'rust') {
+    const manifest = nearestUp(root, rel, ['Cargo.toml']);
+    const cwd = manifest ? manifest.dir : '';
+    const dir = path.posix.dirname(rel);
+    const relDir = cwd ? (dir === cwd ? '' : dir.slice(cwd.length + 1)) : (dir === '.' ? '' : dir);
+    const isIntegration = relDir === 'tests' || relDir.startsWith('tests/');
+    const target = isIntegration ? `--test ${q(path.posix.basename(rel, '.rs'))} ` : '';
+    // Substring match on the bare function name, like Vitest/Jest's -t above: cargo has no concept of "this file",
+    // and tracking each test's enclosing `mod` path (to get an exact, unambiguous name) is not worth it for this.
+    return { cwd, label: `cargo test ${test.name}`, command: `cargo test ${target}${q(test.name)}` };
+  }
+  if (lang === 'csharp') {
+    const proj = nearestCsproj(root, rel);
+    const cwd = proj ? proj.dir : '';
+    const sel = test.kind === 'suite' ? test.name : `${test.suite}.${test.name}`;
+    return { cwd, label: `dotnet test ${sel}`, command: `dotnet test --filter ${q(`FullyQualifiedName~${sel}`)}` };
+  }
   return null;
 }
 
@@ -111,11 +180,26 @@ function fileTestCommand(root, rel, opts = {}) {
   const lang = LANG[ext(rel)];
   const tests = findTests(rel, opts.content || '');
   if (!tests.length) return null;
-  if (lang === 'java') { const s = tests.find((t) => t.kind === 'suite'); return s ? testCommand(root, rel, s, opts) : null; }
+  if (lang === 'java' || lang === 'csharp') { const s = tests.find((t) => t.kind === 'suite'); return s ? testCommand(root, rel, s, opts) : null; }
   if (lang === 'py') {
     const proj = nearestUp(root, rel, ['pytest.ini', 'pyproject.toml', 'setup.cfg', 'tox.ini']);
     const cwd = proj ? proj.dir : '';
     return { cwd, label: `pytest ${rel}`, command: `python -m pytest ${quote(opts.shellKind || 'posix', cwd ? rel.slice(cwd.length + 1) : rel)}` };
+  }
+  if (lang === 'go') {
+    const mod = nearestUp(root, rel, ['go.mod']);
+    const cwd = mod ? mod.dir : '';
+    return { cwd, label: `all tests in ${path.posix.basename(rel)}`, command: `go test -v ${goPackageDir(rel, cwd)}` };
+  }
+  if (lang === 'rust') {
+    const manifest = nearestUp(root, rel, ['Cargo.toml']);
+    const cwd = manifest ? manifest.dir : '';
+    const dir = path.posix.dirname(rel);
+    const relDir = cwd ? (dir === cwd ? '' : dir.slice(cwd.length + 1)) : (dir === '.' ? '' : dir);
+    // Only an integration test file (its own binary under tests/) can be scoped to "just this file" - a unit-test
+    // module inlined in a src/ file cannot, since cargo has no per-source-file selector for the lib/bin target.
+    if (relDir !== 'tests' && !relDir.startsWith('tests/')) return null;
+    return { cwd, label: `all tests in ${path.posix.basename(rel)}`, command: `cargo test --test ${quote(opts.shellKind || 'posix', path.posix.basename(rel, '.rs'))}` };
   }
   const first = tests.find((t) => t.kind === 'test') || tests[0];
   const c = testCommand(root, rel, first, opts);

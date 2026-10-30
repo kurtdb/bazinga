@@ -25,6 +25,19 @@ test('pytest, jest, vitest, maven counts', () => {
   assert.deepStrictEqual(parseCounts(mvn), { total: 5, failed: 2, skipped: 1, passed: 2 });
   assert.strictEqual(run(mvn, 1).status, 'failed');
 });
+test('go test -v, cargo test, dotnet test counts', () => {
+  const go = '=== RUN   TestFoo\n--- PASS: TestFoo (0.00s)\n=== RUN   TestBar\n--- FAIL: TestBar (0.00s)\nFAIL\nexit status 1\nFAIL\tx\t0.004s';
+  assert.deepStrictEqual(parseCounts(go), { total: 2, passed: 1, failed: 1, skipped: 0 });
+  assert.strictEqual(run(go, 1).status, 'failed');
+  assert.strictEqual(run('ok  \tx\t0.004s [no tests to run]').status, 'notfound');
+  const cargo = 'running 2 tests\ntest tests::foo ... ok\ntest tests::bar ... FAILED\n\ntest result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s';
+  assert.deepStrictEqual(parseCounts(cargo), { total: 2, passed: 1, failed: 1, skipped: 0 });
+  assert.strictEqual(run(cargo, 1).status, 'failed');
+  const net = 'Failed!  - Failed:     1, Passed:     2, Skipped:     0, Total:     3, Duration: 15 ms - MyTests.dll';
+  assert.deepStrictEqual(parseCounts(net), { failed: 1, passed: 2, skipped: 0, total: 3 });
+  assert.strictEqual(run(net, 1).status, 'failed');
+  assert.strictEqual(run('Passed!  - Failed:     0, Passed:     3, Skipped:     0, Total:     3, Duration: 12 ms - MyTests.dll').status, 'passed');
+});
 test('a runner that is not installed is reported as such, not as a failing test', () => {
   assert.strictEqual(run('sh: 1: mvn: not found', 127).status, 'unavailable');
   assert.strictEqual(run("'mvn' is not recognized as an internal or external command", 1).status, 'unavailable');
