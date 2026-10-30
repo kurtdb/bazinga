@@ -36,14 +36,14 @@ Full documentation (every feature, configuration, CI integration, known limits..
 
 **Integrations**
 - Work items from Jira or Azure Boards, skills (skills.sh-compatible, searchable, shared across agents), Jev task classification (opt-in, off by default)
-- Claude Code hooks (done/permission signals), version watch, OpenTelemetry cost tracking, an MCP server, ACP agent support, GitHub Copilot usage link, SonarCloud/dependency/coverage checks, opt-in auto-update
+- Claude Code hooks (done/permission signals), version watch, OpenTelemetry cost tracking, an MCP server, ACP agent support, GitHub Copilot usage link, SonarCloud/dependency/coverage checks, auto-update (checks by default, never downloads or installs without a click)
 
 **Command line (no window needed)**
 - `bazinga check` (quality gates, also a Claude Code hook), `bazinga guard` (merge guard, with PR comments), `bazinga hook install` (git pre-push hook), `bazinga proxy` (the local-model helper standalone)
 
 **Platform**
 - Electron desktop app, Windows/macOS/Linux, packaged with electron-builder, CI builds on every push
-- Nine themes including high-contrast in both polarities (low vision), a night (low blue light) mode, and Tron/WarGames for fun — or build your own from three seed colours, with contrast guaranteed; everything else — notifications, undo, local history, environment check and more — in the full docs
+- Nine themes including high-contrast in both polarities (low vision), a night (low blue light) mode, and Tron/WarGames for fun — or build your own from three seed colours, with contrast guaranteed; pick your coding font too (JetBrains Mono, Fira Code, Cascadia Code, Source Code Pro, IBM Plex Mono, or the Roboto Mono default); everything else — notifications, undo, local history, environment check and more — in the full docs
 
 ## Quick start
 

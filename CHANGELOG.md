@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+- **Coding font picker:** Settings → General → Font switches the editor, every open terminal and every other monospace spot in the UI between Roboto Mono (default), JetBrains Mono, Fira Code, Cascadia Code, Source Code Pro and IBM Plex Mono — all OFL-1.1 and bundled, so it works offline and in the packaged app.
+- **Auto-update checks by default:** `updates.check` is now on unless turned off (still never downloads or installs without a click, and still needs a real release feed - see docs). CI now also notarizes a signed macOS build automatically when `APPLE_ID`/`APPLE_APP_SPECIFIC_PASSWORD`/`APPLE_TEAM_ID` secrets are set alongside the existing certificate secrets, so an auto-update can actually install on macOS instead of just being signed.
 - **Custom themes:** Settings → General → “Create custom theme…” takes three seed colours (background, text, accent) and derives the rest of the palette automatically, nudging every text colour until it clears the same 4.5:1 contrast bar the built-in themes are held to. An expandable section lets you override any generated colour by hand. Selectable right alongside the nine built-in themes.
 - **Two new themes:** Tron (black, electric cyan on the Grid, amber where something needs to stand out, a faint grid-line texture) and WarGames (amber CRT phosphor, the WOPR terminal — "Shall we play a game?"). Both dark-only, same as Night and Nerd.
 - **Safe-to-merge verdict:** the merge dialog shows one line — “Safe to merge”, “Needs a look” or “Blocked” — fusing the merge guard, the scorecard's track record for this agent and kind of task, and the auto-merge win-rate bar. Shown even when auto-merge itself is off, so you can see why a run would (or wouldn't) qualify before ever turning it on.

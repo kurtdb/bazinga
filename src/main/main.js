@@ -1349,7 +1349,7 @@ function registerIpc() {
   ipcMain.handle('agent:testCancel', () => { if (modelTestJob) modelTestJob.cancel(); return true; });
   ipcMain.handle('ollama:list', async (_e, baseUrl) => ollama.status(baseUrl || ollama.DEFAULT_URL));
   ipcMain.handle('ollama:warm', async (_e, { baseUrl, model, keepAlive } = {}) => { try { await ollama.warm(baseUrl || ollama.DEFAULT_URL, String(model || ''), String(keepAlive || '15m'), 60000); return { ok: true }; } catch (err) { return { ok: false, error: err.message }; } });
-  // updates (electron-updater), opt-in: check, then download on request, then restart to install
+  // updates (electron-updater): checks by default, then download on request, then restart to install - never automatic past the check
   let autoUpdater = null;
   const updateState = { status: 'idle', info: null };
   const sendUpdate = (ev, info) => { updateState.status = ev; updateState.info = info || null; send('updates:event', ev, info || {}, updatesCore.describe(ev, info)); };

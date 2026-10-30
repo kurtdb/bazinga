@@ -124,7 +124,7 @@
 /* nerd: green phosphor terminal, monospace everywhere, a faint CRT scanline texture behind empty panels */
 :root[data-theme="nerd"] {
   color-scheme: dark;
-  --font-ui: 'Roboto Mono', 'Cascadia Code', Consolas, Menlo, monospace;
+  --font-ui: var(--font-mono);
   --bg: #000000;
   --bg-2: #060f06;
   --bg-3: #0f1f0f;

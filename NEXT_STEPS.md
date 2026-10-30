@@ -245,3 +245,26 @@ Verified with `test/custompalette.test.js` (a spread of dark/light/saturated/des
 colours) plus a new smoke step that builds a theme via the real `api.theme.derive` + `api.settings.save` path
 (no UI automation) and checks it actually paints the shell, Monaco and the terminal, and leaves nothing behind
 once you switch to a built-in theme afterwards.
+
+## ~~Coding font picker~~
+
+Done. Settings → General → Font, next to the existing editor/terminal size fields. Five alternatives alongside
+the existing default (Roboto Mono): JetBrains Mono, Fira Code, Cascadia Code, Source Code Pro, IBM Plex Mono —
+all OFL-1.1, all on `@fontsource` with the same `latin-400`/`latin-700` weight-file split Roboto Mono already
+used, so each adds only two small linked CSS files (confirmed via `npm pack`, tens of KB per font).
+
+The one thing worth a new design was making `MONO` (`app.js`) a mutable `let` instead of a `const`: Monaco's and
+xterm's creation-time options already reference it by variable name, so once `applyFonts()` (renamed from
+`applyFontSizes()`, which it now also is) reassigns it and sets `--font-mono`, every editor and terminal created
+afterwards picks up the new font with no extra special-casing, and every one already open gets its `fontFamily`
+option and `--font-mono` updated directly, including re-fitting each terminal (`entry.fit.fit()`) since cell
+width changes per font. `loadFonts()` preloads all six fonts' weights upfront (it runs before the saved setting
+is even read), which costs nothing since they're all bundled already.
+
+Also pointed the Nerd theme's `--font-ui` (its whole "monospace everywhere" identity) at `var(--font-mono)`
+instead of a hardcoded Roboto-Mono-flavoured stack, so it now follows whichever font is picked.
+
+Verified by extending `test/theme.test.js` (each font linked in `index.html` and installed under
+`node_modules/@fontsource/`, and the schema enum matches) plus a new smoke step that switches the font via the
+real Settings dialog and checks the editor, every open terminal and `--font-mono` all picked it up together, and
+that it survives a reload.

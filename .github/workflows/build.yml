@@ -65,16 +65,26 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         env:
-          # Optional: add these repository secrets for a properly signed build (see README). Without them the app is ad-hoc signed.
+          # Optional: add these repository secrets for a properly signed + notarized build (see README). Without
+          # them the app is ad-hoc signed, which Gatekeeper blocks on first launch and which auto-update cannot install.
           CSC_LINK: ${{ secrets.MAC_CERT_P12 }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          # Notarization (needs a real Developer ID signature, i.e. CSC_LINK above, to mean anything): electron-builder
+          # calls @electron/notarize automatically once all three of these are set - no extra config, see
+          # app-builder-lib's MacTargetHelper.getNotarizeOptions(). An app-specific password, not your Apple ID password:
+          # generate one at appleid.apple.com -> Sign-In and Security -> App-Specific Passwords.
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper
           EXTRA=""
           # A repository secret that is not set still arrives here as CSC_LINK="" (empty, not unset): electron-builder
           # treats that as "load a cert from this path", resolves "" to the project folder and fails with "not a file".
           # Unset it so the subprocess sees no CSC_LINK at all, matching the no-cert / ad-hoc-signing path below.
-          if [ -z "$CSC_LINK" ]; then unset CSC_LINK CSC_KEY_PASSWORD; EXTRA="-c.mac.identity=- -c.mac.hardenedRuntime=false"; fi
+          # Notarization needs a real signature, so its credentials go with it - partial Apple secrets with no cert
+          # would otherwise fail loudly for no reason instead of just falling back to ad-hoc signing.
+          if [ -z "$CSC_LINK" ]; then unset CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; EXTRA="-c.mac.identity=- -c.mac.hardenedRuntime=false"; fi
           npx electron-builder --mac --publish never $EXTRA
 
       - uses: actions/upload-artifact@v4

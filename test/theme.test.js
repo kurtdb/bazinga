@@ -55,6 +55,21 @@ test('Roboto is bundled, linked and first in the font stacks', () => {
   assert.match(html, /font-src 'self' data:/);
 });
 
+test('the alternative coding fonts are bundled, linked and match the picker setting', () => {
+  const { SCHEMA } = require('../src/core/configschema');
+  const ids = SCHEMA.properties.monoFont.enum;
+  assert.strictEqual(require('../src/core/config').DEFAULT_CONFIG.monoFont, 'roboto-mono');
+  assert.ok(ids.includes('roboto-mono') && ids.length >= 6, `expected several fonts, found: ${ids.join(', ')}`);
+  for (const id of ids) {
+    if (id === 'roboto-mono') continue; // covered by the Roboto test above
+    for (const weight of ['latin-400', 'latin-700']) {
+      const f = `${id}/${weight}`;
+      assert.ok(html.includes(`${f}.css`), `${f} not linked`);
+      assert.ok(fs.existsSync(path.join(__dirname, '../node_modules/@fontsource', `${f}.css`)), `${f} not installed`);
+    }
+  }
+});
+
 test('the theme toggle exists and the default setting is system', () => {
   assert.match(html, /id="btn-theme"/);
   assert.strictEqual(require('../src/core/config').DEFAULT_CONFIG.theme, 'system');

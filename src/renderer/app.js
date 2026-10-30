@@ -36,7 +36,19 @@
   }
 
   // ---------------------------------------------------------------- theme (system / light / dark / high-contrast / night / nerd) and fonts
-  const MONO = "'Roboto Mono', 'Cascadia Code', Consolas, Menlo, monospace";
+  // Alternative coding fonts (Settings -> General -> Font), all bundled via @fontsource and OFL-1.1 licensed, same
+  // as Roboto Mono itself. `family` is the full CSS font-family fallback chain, consumed by Monaco, xterm and
+  // every other --font-mono use in styles.css (set at runtime by applyFonts() below).
+  const MONO_FONTS = {
+    'roboto-mono': { label: 'Roboto Mono (default)', family: "'Roboto Mono', 'Cascadia Code', Consolas, Menlo, monospace" },
+    'jetbrains-mono': { label: 'JetBrains Mono', family: "'JetBrains Mono', 'Cascadia Code', Consolas, Menlo, monospace" },
+    'fira-code': { label: 'Fira Code', family: "'Fira Code', 'Cascadia Code', Consolas, Menlo, monospace" },
+    'cascadia-code': { label: 'Cascadia Code', family: "'Cascadia Code', Consolas, Menlo, monospace" },
+    'source-code-pro': { label: 'Source Code Pro', family: "'Source Code Pro', 'Cascadia Code', Consolas, Menlo, monospace" },
+    'ibm-plex-mono': { label: 'IBM Plex Mono', family: "'IBM Plex Mono', 'Cascadia Code', Consolas, Menlo, monospace" },
+  };
+  const monoFontId = () => { const v = state.project && state.project.config && state.project.config.monoFont; return MONO_FONTS[v] ? v : 'roboto-mono'; };
+  let MONO = MONO_FONTS['roboto-mono'].family;
   const TERM_THEMES = {
     dark: { background: '#14161a', foreground: '#d7dae0', cursor: '#d7dae0', selectionBackground: '#33466b' },
     light: {
@@ -172,11 +184,13 @@
 
   const cfgNum = (key, dflt) => { const v = Number(state.project && state.project.config && state.project.config[key]); return v >= 8 && v <= 32 ? v : dflt; };
   const scrollbackSetting = () => { const v = Math.round(Number(state.project && state.project.config && state.project.config.terminalScrollback)); return v >= 200 && v <= 50000 ? v : 2000; };
-  function applyFontSizes() {
+  function applyFonts() {
+    MONO = MONO_FONTS[monoFontId()].family;
+    document.documentElement.style.setProperty('--font-mono', MONO);
     const e = cfgNum('editorFontSize', 13); const t = cfgNum('terminalFontSize', 13);
-    if (editor) editor.updateOptions({ fontSize: e });
-    if (diffEditor) diffEditor.updateOptions({ fontSize: e });
-    for (const entry of state.terms.values()) { entry.term.options.scrollback = scrollbackSetting(); entry.term.options.fontSize = t; try { entry.fit.fit(); } catch { /* hidden */ } }
+    if (editor) editor.updateOptions({ fontSize: e, fontFamily: MONO });
+    if (diffEditor) diffEditor.updateOptions({ fontSize: e, fontFamily: MONO });
+    for (const entry of state.terms.values()) { entry.term.options.scrollback = scrollbackSetting(); entry.term.options.fontSize = t; entry.term.options.fontFamily = MONO; try { entry.fit.fit(); } catch { /* hidden */ } }
   }
   async function changeFontSize(delta) {
     const cur = await api.settings.get();
@@ -189,8 +203,15 @@
 
   /** Fonts must be loaded before Monaco/xterm measure characters, otherwise cursor and selection are misplaced. */
   async function loadFonts() {
+    // every mono font is preloaded here, not just the one currently chosen: the config holding monoFont is not
+    // loaded yet at this point in startup (initEditors() runs before loadProject()), and these are all small,
+    // bundled, local files - loading the handful not actually in use costs nothing worth branching for.
+    const monoNames = ['Roboto Mono', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Source Code Pro', 'IBM Plex Mono'];
     try {
-      await Promise.all(['400 13px Roboto', '500 13px Roboto', '700 13px Roboto', '400 13px "Roboto Mono"', '700 13px "Roboto Mono"'].map((f) => document.fonts.load(f)));
+      await Promise.all([
+        '400 13px Roboto', '500 13px Roboto', '700 13px Roboto',
+        ...monoNames.flatMap((n) => [`400 13px "${n}"`, `700 13px "${n}"`]),
+      ].map((f) => document.fonts.load(f)));
     } catch { /* fall back to the system fonts */ }
   }
 
@@ -2439,6 +2460,8 @@
     const notif = el('input', { type: 'checkbox' }); notif.checked = settings.notifications !== undefined ? !!settings.notifications : defaults.notifications !== false;
     const edFont = num(settings.editorFontSize, 13, 8, 32);
     const termFont = num(settings.terminalFontSize, 13, 8, 32);
+    const fontFam = el('select', { id: 'set-font-family', title: 'Used for the editor, terminals, and every monospace spot in the UI (review output, journal, code in markdown...)' }, ...Object.entries(MONO_FONTS).map(([id, v]) => el('option', { value: id, text: v.label })));
+    fontFam.value = MONO_FONTS[settings.monoFont] ? settings.monoFont : (defaults.monoFont || 'roboto-mono');
     const scrollback = num(settings.terminalScrollback || defaults.terminalScrollback, 2000, 200, 50000);
     const guardCur = { ...defaults.mergeGuardDefaults, ...(settings.mergeGuard || {}) };
     const guardSel = {};
@@ -2536,6 +2559,7 @@
       next.lsp = { ...lspCur, enabled: lspOn.checked, servers };
       next.editorFontSize = Math.min(32, Math.max(8, Number(edFont.value) || 13));
       next.terminalFontSize = Math.min(32, Math.max(8, Number(termFont.value) || 13));
+      next.monoFont = fontFam.value;
       next.terminalScrollback = Math.min(50000, Math.max(200, Math.round(Number(scrollback.value)) || 2000));
       next.mergeGuard = Object.fromEntries(Object.entries(guardSel).map(([k, sel]) => [k, sel.value]));
       next.autoMerge = { enabled: amOn.checked, minWinRate: Math.min(1, Math.max(0.5, (Number(amRate.value) || 80) / 100)), dryRun: amDry.checked };
@@ -2690,7 +2714,7 @@
         el('label', { class: 'check' }, lensBlame, ' Show who changed it last (git blame of its lines); click opens the commit'),
         el('label', { class: 'check' }, lensSpring, ' Java/Kotlin: show the HTTP route above Spring handlers and “N implementations” above interfaces')),
       notifications: el('div', { class: 'field' }, el('label', { class: 'check' }, notif, ' Notify me (OS notification) when an agent needs me and the IDE is in the background')),
-      fontSize: el('div', { class: 'field' }, el('label', { text: 'Font size (px): editor / terminal' }), el('div', { class: 'line' }, edFont, termFont)),
+      fontSize: el('div', { class: 'field' }, el('label', { text: 'Font' }), el('div', { class: 'line' }, fontFam), el('label', { text: 'Font size (px): editor / terminal' }), el('div', { class: 'line' }, edFont, termFont)),
       scrollback: el('div', { class: 'field' }, el('label', { text: 'Terminal scrollback (lines kept per terminal; each one costs memory)' }), scrollback),
       checkpoint: el('div', { class: 'field' }, el('label', { class: 'check' }, cp, ' Save a checkpoint before an agent terminal starts')),
       footnote: el('div', { class: 'hint', text: 'These are your personal defaults. A project’s .ide/config.json overrides them.' }),
@@ -3096,7 +3120,7 @@
     themeSetting = (p.config && p.config.theme) || 'system';
     applyTheme();
     $('#fixloop').checked = !!(p.config && p.config.fixLoop && p.config.fixLoop.enabled);
-    applyFontSizes();
+    applyFonts();
     initLsp();
     document.title = p.root ? `${p.name} — Bazinga` : 'Bazinga';
     state.quick.stale = true;
@@ -3508,7 +3532,7 @@
         column('review', cols.review.map(card))));
   }
 
-  // ---------------------------------------------------------------- updates (opt-in; the source is set in the settings: updates.github or updates.url)
+  // ---------------------------------------------------------------- updates (checks by default; download/install always need a click; the source, if not the embedded one, is set in the settings: updates.github or updates.url)
   const updateUi = { status: 'idle', text: '', render: null };
   api.updates.on((ev, info, text) => {
     updateUi.status = ev; updateUi.text = text || '';
@@ -3534,7 +3558,7 @@
     };
     updateUi.render = draw;
     $('#dialog').replaceChildren(el('h3', { text: 'Updates' }), msg,
-      el('div', { class: 'hint', text: 'Source: set "updates": { "github": "owner/repo" } or { "url": "https://…" } in the IDE settings (add "check": true to look at every start). Works with the installer version; the portable Windows build and unsigned macOS builds cannot install updates by themselves.' }), act);
+      el('div', { class: 'hint', text: 'Checks at every start by default. A packaged release build already knows where to look; to point it somewhere else (running from source, a fork), set "updates": { "github": "owner/repo" } or { "url": "https://…" } in the IDE settings. Works with the installer version; the portable Windows build and unsigned macOS builds cannot install updates by themselves.' }), act);
     draw();
     $('#modal').classList.remove('hidden');
   }
@@ -6747,6 +6771,25 @@
       }
       await setThemeSetting('dark');
       return bad.length ? JSON.stringify(bad) : true;
+    });
+
+    await step('font picker: Settings -> Font switches the editor, every open terminal and --font-mono together, and the choice persists', async () => {
+      const prev = (await api.settings.get()).settings;
+      await openSettings();
+      const sel = document.querySelector('#set-font-family');
+      sel.value = 'jetbrains-mono'; sel.dispatchEvent(new Event('change'));
+      [...document.querySelectorAll('#dialog button')].find((b) => b.textContent === 'Save').click();
+      await sleep(300);
+      const cssVarOk = /JetBrains Mono/.test(getComputedStyle(document.documentElement).getPropertyValue('--font-mono'));
+      const editorOk = !editor || /JetBrains Mono/.test(editor.getOption(monaco.editor.EditorOption.fontInfo).fontFamily);
+      const terms = [...state.terms.values()];
+      const termOk = terms.length > 0 && terms.every((t) => /JetBrains Mono/.test(t.term.options.fontFamily));
+      const saved = (await api.settings.get()).settings.monoFont === 'jetbrains-mono';
+      await api.settings.save(prev);
+      await loadProject();
+      const restored = /Roboto Mono/.test(getComputedStyle(document.documentElement).getPropertyValue('--font-mono'));
+      const ok = cssVarOk && editorOk && termOk && saved && restored;
+      return ok ? true : JSON.stringify({ cssVarOk, editorOk, termOk, saved, restored });
     });
 
     await step('custom theme: a theme built at runtime from 3 seed colours via api.theme.derive (no CSS block at all, unlike every built-in theme) still paints the shell, Monaco and the terminal, and leaves no inline colours behind once you switch away from it', async () => {

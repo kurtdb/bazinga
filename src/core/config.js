@@ -59,6 +59,16 @@ const DEFAULT_CONFIG = {
   fleet: { staleMinutes: 5, prices: {} },
   agentHooks: true,       // Claude Code reports by itself when it is done or needs permission (hooks); off = Bazinga guesses from the quiet terminal
   notifications: true,    // OS notification when an agent goes idle / the fix loop finishes and the IDE is in the background
+  // Checks for a new release at every start (electron-updater). Never downloads or installs without a click either way.
+  // No feed is hardcoded here on purpose (core/updater.js) - a packaged build picks it up from electron-builder's own
+  // app-update.yml automatically; set "updates": { "github": "owner/repo" } (or "url") to point it somewhere else,
+  // e.g. when running from source or forked under a different repository. "updates" is not deep-merged across config
+  // layers (see oversight.DEEP_KEYS), same as autoMerge/ollama/etc. - a project overriding it replaces the whole
+  // object, so repeat "check": true there too if the override should still check automatically.
+  updates: { check: true },
+  // The monospace font for the editor, terminals and every --font-mono use in the UI (review output, journal, code
+  // in markdown...). All bundled (@fontsource, OFL-1.1) - see MONO_FONTS in app.js for the full list and licensing.
+  monoFont: 'roboto-mono',
   editorFontSize: 13,
   terminalFontSize: 13,
   terminalScrollback: 2000, // lines kept per terminal (200 to 50000); every line costs memory
