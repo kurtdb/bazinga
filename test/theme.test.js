@@ -15,11 +15,7 @@ const themeNames = [...css.matchAll(/:root\[data-theme="([^"]+)"\]\s*\{/g)].map(
 assert.ok(themeNames.includes('light') && themeNames.length >= 4, `expected several themes, found: ${themeNames.join(', ')}`);
 const themes = { dark, ...Object.fromEntries(themeNames.map((name) => [name, { ...dark, ...vars(block(new RegExp(`:root\\[data-theme="${name}"\\]\\s*\\{([^}]*)\\}`))) }])) };
 
-const lum = (hex) => {
-  const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
-  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
-};
-const contrast = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+const { contrast } = require('../src/core/contrast');
 
 test('every themed colour variable is defined for every theme', () => {
   const themed = Object.keys(dark).filter((k) => /^#|^rgba?\(/.test(dark[k]));

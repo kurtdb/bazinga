@@ -221,6 +221,10 @@ contextBridge.exposeInMainWorld('api', {
   memory: () => invoke('app:memory'),
   notify: (n) => invoke('app:notify', n),
   openExternal: (url) => invoke('app:openExternal', url),
+  theme: {
+    derive: (seed) => invoke('theme:derive', seed),
+    contrast: (vars) => invoke('theme:contrast', vars),
+  },
   settings: {
     get: () => invoke('settings:get'),
     save: (settings) => invoke('settings:save', settings),

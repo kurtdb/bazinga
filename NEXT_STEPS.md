@@ -214,3 +214,34 @@ instead of computing eligibility a second time.
   updated to match.
 - `recordOutcome(base, run, outcome)`'s `base` parameter is unused in its body (pre-existing oddity, noticed while
   reading around it for auto-merge) — harmless, but worth a look next time that function is touched anyway.
+
+## ~~Custom themes, generated from three seed colours~~
+
+Done. Considered converting theming wholesale to VS Code's workbench-colour/tokenColors model first, so people
+could load a real VS Code theme; ruled out — no clean 1:1 mapping onto bazinga's own ~20-variable palette and
+chrome, and most of a VS Code theme (tokenColors) only matters for syntax highlighting, which was never the ask.
+Landed the narrower, native version instead: Settings → General → "Create custom theme…" takes background/text/
+accent and derives the rest (surfaces, muted/faint text, err/warn/ok/info, the commit-graph lanes, badge fills)
+via `src/core/custompalette.js`, nudging every text-role colour in lightness only (hue/saturation left alone)
+until it clears the same 4.5:1 bar `test/theme.test.js` holds the built-ins to, or as close as that hue can
+reach — shown in a live summary. An expandable "fine-tune" section overrides any generated variable by hand
+afterwards. `src/core/contrast.js` now holds the WCAG math shared by `theme.test.js` and the new module, instead
+of each having its own copy.
+
+The one real wrinkle: the renderer is fully sandboxed (`contextIsolation: true, nodeIntegration: false`), so it
+can't `require()` `custompalette.js` directly the way a test file can — derivation runs in the main process,
+reached over two new IPC calls (`theme:derive`, `theme:contrast`). Cheap enough to call on every colour-picker
+`input` event behind a ~120ms debounce; felt live in manual testing.
+
+Unlike every built-in theme, a custom one has no `:root[data-theme="..."]` block in `styles.css` at all — its
+~27 variables are set as inline styles on `<html>` at runtime instead (`applyCustomVars()` in `app.js`), which is
+why `applyTheme()` now always clears them first: inline style beats the attribute-selector CSS, so a stale
+override would otherwise leak into whichever built-in theme got picked next. Deliberately never added a
+`:root[data-theme="custom"]` CSS block either, specifically so `theme.test.js`'s CSS-block-discovery-based
+schema-enum-matching test needed no change at all - a custom theme simply never shows up in that discovery.
+Stored IDE-wide in `settings.customThemes` (not project-shareable - a theme is a personal preference), each
+entry keeping both its seed and its resolved `vars` so "Edit" can reopen the picker pre-filled.
+Verified with `test/custompalette.test.js` (a spread of dark/light/saturated/desaturated/already-failing seed
+colours) plus a new smoke step that builds a theme via the real `api.theme.derive` + `api.settings.save` path
+(no UI automation) and checks it actually paints the shell, Monaco and the terminal, and leaves nothing behind
+once you switch to a built-in theme afterwards.

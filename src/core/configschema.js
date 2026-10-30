@@ -19,6 +19,7 @@ const SCHEMA = {
     theme: { enum: ['system', 'light', 'dark', 'high-contrast', 'high-contrast-light', 'night', 'nerd', 'tron', 'wargames'] },
     autoCheck: bool, autoCheckpoint: bool, agentHooks: bool, notifications: bool,
     agents: { type: 'array', items: { type: 'object', required: ['name', 'command'], properties: { name: str, command: str, taskCommand: str, protocol: { enum: ['pty', 'acp'] }, api: { enum: ['anthropic', 'openai'] }, context: { type: 'number', minimum: 0 }, policy: { enum: ['ask', 'allow', 'reject'] }, hint: str, env: { type: 'object', additionalProperties: str } } } },
+    customThemes: { type: 'array', items: { type: 'object', required: ['id', 'label', 'vars'], properties: { id: str, label: str, dark: bool, seed: { type: 'object', properties: { bg: str, fg: str, accent: str } }, vars: { type: 'object' } } } },
     fixLoop: { type: 'object', properties: { enabled: bool, maxRounds: { type: 'integer', minimum: 1, maximum: 20 }, idleSeconds: { type: 'number', minimum: 1 }, tier: str, include: str, relatedTests: bool, testTimeoutSec: { type: 'number', minimum: 1 }, escalate: { type: 'object', properties: { agent: str, after: { type: 'integer', minimum: 1, maximum: 10 } } } } },
     autoMerge: { type: 'object', properties: { enabled: bool, minWinRate: { type: 'number', minimum: 0, maximum: 1 }, dryRun: bool } },
     oversight: nullable({ enum: ['autonomous', 'supervised', 'guided', 'stepwise'] }),

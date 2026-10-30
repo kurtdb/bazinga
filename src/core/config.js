@@ -18,6 +18,9 @@ const DEFAULT_CONFIG = {
     { name: 'Codex', command: 'codex', taskCommand: 'codex {task}', resumeCommand: 'codex resume --last' },
     { name: 'Gemini', command: 'gemini', taskCommand: 'gemini -i {task}', resumeCommand: 'gemini --resume latest' },
   ],
+  // Themes someone built themselves in Settings from three seed colours (see src/core/custompalette.js). IDE-wide only, not project-shareable.
+  customThemes: [], // { id, label, dark, seed: { bg, fg, accent }, vars }
+
   // Automatic fix loop: when an agent in a watched terminal goes quiet, the gates run and their findings go back to the agent (up to maxRounds times).
   fixLoop: { enabled: false, maxRounds: 3, idleSeconds: 8, tier: 'fast', include: 'error', relatedTests: false, testTimeoutSec: 120, escalate: { agent: '', after: 2 } }, // escalate.agent: the name of a stronger agent that takes over after `after` failed rounds (empty = never)
   // Auto-merge: once the fix loop settles on a clean merge guard, merge without asking - but only for an (agent, kind of task) with enough

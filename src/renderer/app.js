@@ -102,6 +102,52 @@
   const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
   const resolvedTheme = () => (themeSetting === 'system' ? (darkQuery.matches ? 'dark' : 'light') : themeSetting);
 
+  // ---- custom themes (Settings -> General -> "Create custom theme…"): built from 3 seed colours via
+  // api.theme.derive (src/core/custompalette.js), stored in settings.customThemes. Unlike the built-in
+  // themes above, they have no :root[data-theme="x"] CSS block, so their ~27 variables are set as inline
+  // styles on <html> instead - which is why applyTheme() always clears them first (inline style beats the
+  // attribute-selector CSS, so a stale override would otherwise leak into the next built-in theme picked).
+  const CUSTOM_VAR_KEYS = ['--bg', '--bg-2', '--bg-3', '--line', '--fg', '--muted', '--faint', '--accent', '--err', '--warn', '--info', '--ok',
+    '--accent-bg', '--accent-line', '--danger-line', '--err-bg', '--warn-bg', '--ok-bg', '--info-bg', '--g0', '--g1', '--g2', '--g3', '--g4', '--g5', '--overlay', '--shadow'];
+  const isCustomId = (id) => typeof id === 'string' && id.startsWith('custom-');
+  const findCustomTheme = (id) => state.customThemes.find((c) => c.id === id);
+  function applyCustomVars(vars) {
+    const s = document.documentElement.style;
+    if (!vars) { for (const k of CUSTOM_VAR_KEYS) s.removeProperty(k); return; }
+    for (const k of CUSTOM_VAR_KEYS) if (vars[k]) s.setProperty(k, vars[k]);
+  }
+  const mixHex = (a, b, t) => {
+    const p = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+    const [ar, ag, ab] = p(a); const [br, bg, bb] = p(b);
+    const h2 = (n) => Math.round(Math.min(255, Math.max(0, n))).toString(16).padStart(2, '0');
+    return `#${h2(ar + (br - ar) * t)}${h2(ag + (bg - ag) * t)}${h2(ab + (bb - ab) * t)}`;
+  };
+  function buildTermTheme(vars) {
+    const lighten = (hex) => mixHex(hex, '#ffffff', 0.3);
+    return {
+      background: vars['--bg'], foreground: vars['--fg'], cursor: vars['--fg'], cursorAccent: vars['--bg'], selectionBackground: vars['--accent-bg'],
+      black: vars['--bg'], red: vars['--err'], green: vars['--ok'], yellow: vars['--warn'], blue: vars['--accent'], magenta: vars['--g3'], cyan: vars['--info'], white: vars['--fg'],
+      brightBlack: vars['--faint'], brightRed: lighten(vars['--err']), brightGreen: lighten(vars['--ok']), brightYellow: lighten(vars['--warn']),
+      brightBlue: lighten(vars['--accent']), brightMagenta: lighten(vars['--g3']), brightCyan: lighten(vars['--info']), brightWhite: '#ffffff',
+    };
+  }
+  /** Monaco happily redefines a theme id in place, which is what every call here relies on: an edited-and-resaved
+   * custom theme keeps the same id, and the live preview below reuses one id on every keystroke - so this is
+   * never cached, unlike the built-ins' one-time defineTheme calls in initEditors(). */
+  function ensureMonacoCustomTheme(id, vars) {
+    const name = `bazinga-custom-${id}`;
+    if (!window.monaco) return name;
+    monaco.editor.defineTheme(name, { base: vars['--bg'] === '#ffffff' || vars['--bg'] === '#fff' ? 'vs' : 'vs-dark', inherit: true, rules: [], colors: {
+      'editor.background': vars['--bg'], 'editor.foreground': vars['--fg'], 'editor.lineHighlightBackground': vars['--bg-3'],
+      'editorCursor.foreground': vars['--fg'], 'editor.selectionBackground': vars['--accent-bg'],
+      'editorLineNumber.foreground': vars['--faint'], 'editorLineNumber.activeForeground': vars['--fg'],
+    } });
+    return name;
+  }
+  const themeLabel = (id) => (THEME_META[id] ? THEME_META[id].label : (findCustomTheme(id) || {}).label || id);
+  const themeIcon = (id) => (THEME_META[id] ? THEME_META[id].icon : 'palette');
+  const allThemeIds = () => [...Object.keys(THEME_META), ...state.customThemes.map((c) => c.id)];
+
   // ---------------------------------------------------------------- icons (inline SVG, see icons.js)
   const ic = (name, cls) => window.icon(name, cls);
   /** Icon + label button content that survives later label updates (they only touch .lbl). */
@@ -148,14 +194,22 @@
     } catch { /* fall back to the system fonts */ }
   }
 
-  const themeToggleTarget = () => { const t = THEME_TOGGLE[themeSetting]; return typeof t === 'function' ? t() : t; };
+  const themeToggleTarget = () => {
+    if (isCustomId(themeSetting)) { const c = findCustomTheme(themeSetting); return c && c.dark === false ? 'dark' : 'light'; }
+    const t = THEME_TOGGLE[themeSetting]; return typeof t === 'function' ? t() : t;
+  };
   function applyTheme() {
-    const t = resolvedTheme();
-    document.documentElement.dataset.theme = t;
-    if (window.monaco) window.monaco.editor.setTheme(MONACO_THEMES[t]);
-    for (const entry of state.terms.values()) entry.term.options.theme = TERM_THEMES[t];
+    let t = resolvedTheme();
+    let custom = isCustomId(t) ? findCustomTheme(t) : null;
+    if (isCustomId(t) && !custom) t = 'dark'; // the selected custom theme was deleted elsewhere
+    document.documentElement.dataset.theme = custom ? 'custom' : t;
+    document.documentElement.style.colorScheme = custom ? (custom.dark === false ? 'light' : 'dark') : '';
+    applyCustomVars(custom ? custom.vars : null);
+    if (window.monaco) window.monaco.editor.setTheme(custom ? ensureMonacoCustomTheme(custom.id, custom.vars) : MONACO_THEMES[t]);
+    const termTheme = custom ? buildTermTheme(custom.vars) : TERM_THEMES[t];
+    for (const entry of state.terms.values()) entry.term.options.theme = termTheme;
     const b = document.getElementById('btn-theme');
-    if (b) { b.replaceChildren(ic(THEME_META[themeSetting].icon)); b.title = `Theme: ${THEME_META[themeSetting].label} — click for ${THEME_META[themeToggleTarget()].label} (every theme is in Settings → General)`; }
+    if (b) { b.replaceChildren(ic(themeIcon(themeSetting))); b.title = `Theme: ${themeLabel(themeSetting)} — click for ${themeLabel(themeToggleTarget())} (every theme is in Settings → General)`; }
   }
   darkQuery.addEventListener('change', () => { if (themeSetting === 'system') applyTheme(); });
 
@@ -187,6 +241,7 @@
     scope: null,
     summaryPrompt: '',
     runs: null,          // { main, runs, current } from the main process
+    customThemes: [],    // [{ id, label, dark, seed: { bg, fg, accent }, vars }], from settings (see src/core/custompalette.js)
   };
   let monaco; let editor; let diffEditor;
   const errors = [];
@@ -1888,7 +1943,7 @@
       ['Git: checkpoint now', 'tag', () => makeCheckpoint('manual')],
       ['Test: run the test at the cursor', 'flask-conical', runTestAtCursor],
       ['Test: run all tests in this file', 'flask-conical', () => { if (tab && tab.kind === 'file') runTestFor(tab.rel, null, true); else setStatus('Open a test file first.'); }],
-      [`Switch theme (now: ${THEME_META[themeSetting].label})`, THEME_META[themeSetting].icon, () => { const names = Object.keys(THEME_META); setThemeSetting(names[(names.indexOf(themeSetting) + 1) % names.length]); }],
+      [`Switch theme (now: ${themeLabel(themeSetting)})`, themeIcon(themeSetting), () => { const names = allThemeIds(); setThemeSetting(names[(names.indexOf(themeSetting) + 1) % names.length]); }],
       ['Font size: larger', 'plus', () => changeFontSize(1)],
       ['Font size: smaller', 'minus', () => changeFontSize(-1)],
       ['Font size: reset', 'refresh-cw', () => changeFontSize(0)],
@@ -2343,8 +2398,26 @@
     const shell = el('input', { type: 'text', placeholder: api.platform === 'win32' ? 'default: powershell.exe  (or cmd.exe, a Git Bash path...)' : 'default: $SHELL', value: settings.shell || '' });
     const shellArgs = el('input', { type: 'text', placeholder: 'optional arguments, space separated', value: (settings.shellArgs || []).join(' ') });
     const review = el('input', { type: 'text', value: settings.reviewCommand || '', placeholder: defaults.reviewCommand });
-    const themeSel = el('select', null, ...Object.entries(THEME_META).map(([value, m]) => el('option', { value, text: value === 'system' ? 'Follow the system' : m.label })));
+    const customThemes = (settings.customThemes || []).map((c) => ({ ...c }));
+    const themeSel = el('select', null,
+      ...Object.entries(THEME_META).map(([value, m]) => el('option', { value, text: value === 'system' ? 'Follow the system' : m.label })),
+      ...customThemes.map((c) => el('option', { value: c.id, text: c.label })));
     themeSel.value = settings.theme || defaults.theme || 'system';
+    const customThemeBox = el('div');
+    const drawCustomThemes = () => customThemeBox.replaceChildren(...customThemes.map((c) => el('div', { class: 'agent-row' },
+      el('span', { style: 'flex:1' }, c.label),
+      el('button', { class: 'icon', title: 'Edit this theme', onclick: () => openThemeEditor(c) }, ic('palette')),
+      el('button', { class: 'icon danger', title: 'Delete this theme', 'aria-label': `Delete ${c.label}`, onclick: async () => {
+        if (!window.confirm(`Delete the theme “${c.label}”?`)) return;
+        const cur = await api.settings.get();
+        const list = (cur.settings.customThemes || []).filter((x) => x.id !== c.id);
+        const nextSettings = { ...cur.settings, customThemes: list };
+        if (cur.settings.theme === c.id) nextSettings.theme = 'system';
+        await api.settings.save(nextSettings);
+        await loadProject();
+        await openSettings();
+      } }, ic('trash-2')))));
+    drawCustomThemes();
     const auto = el('input', { type: 'checkbox' }); auto.checked = settings.autoCheck !== undefined ? !!settings.autoCheck : !!defaults.autoCheck;
     const cp = el('input', { type: 'checkbox' }); cp.checked = settings.autoCheckpoint !== undefined ? !!settings.autoCheckpoint : !!defaults.autoCheckpoint;
     const num = (v, d, min, max) => el('input', { type: 'number', value: String(v ?? d), min: String(min), max: String(max), style: 'width:80px' });
@@ -2543,7 +2616,9 @@
     // so adding one can never silently shift another field into the wrong tab or out of the dialog entirely.
     const f = {
       title: el('h3', { text: 'Settings' }),
-      theme: el('div', { class: 'field' }, el('label', { text: 'Theme' }), themeSel),
+      theme: el('div', { class: 'field' }, el('label', { text: 'Theme' }), themeSel,
+        customThemeBox,
+        el('div', null, el('button', { onclick: () => openThemeEditor(null) }, ic('palette'), 'Create custom theme…'))),
       shell: el('div', { class: 'field' }, el('label', { text: 'Terminal shell' }), shell),
       shellArgs: el('div', { class: 'field' }, el('label', { text: 'Shell arguments' }), shellArgs),
       agentButtons: el('div', { class: 'field' }, el('div', { class: 'agent-head', text: 'Agent buttons (top bar)' }), agentBox,
@@ -2654,6 +2729,98 @@
     $('#dialog').replaceChildren(f.title, tabBar, el('div', { class: 'set-body' }, ...panels.values()), f.footnote, f.actions);
     showTab(tabId);
     $('#modal').classList.remove('hidden');
+  }
+
+  // ---------------------------------------------------------------- custom theme editor (3 seed colours -> a full
+  // palette via api.theme.derive, src/core/custompalette.js). Opened from Settings -> General; Save/Cancel both
+  // return to a freshly reloaded Settings dialog, so any other field mid-edit there is lost - an accepted trade-off
+  // for keeping "create a theme" a small, immediate, independently-saved action (see the plan this was built from).
+  function previewCustomTheme(vars, dark) {
+    document.documentElement.dataset.theme = 'custom';
+    document.documentElement.style.colorScheme = dark === false ? 'light' : 'dark';
+    applyCustomVars(vars);
+    if (window.monaco) { const name = ensureMonacoCustomTheme('preview', vars); window.monaco.editor.setTheme(name); } // Monaco theme names must match /^[a-z0-9-]+$/, no underscores
+    const term = buildTermTheme(vars);
+    for (const entry of state.terms.values()) entry.term.options.theme = term;
+  }
+  async function openThemeEditor(existing) {
+    const seed = existing ? existing.seed || { bg: existing.vars['--bg'], fg: existing.vars['--fg'], accent: existing.vars['--accent'] }
+      : { bg: '#14161a', fg: '#d7dae0', accent: '#4f8cff' };
+    const labelIn = el('input', { type: 'text', value: existing ? existing.label : '', placeholder: 'Name this theme' });
+    const bgIn = el('input', { type: 'color', value: seed.bg });
+    const fgIn = el('input', { type: 'color', value: seed.fg });
+    const accentIn = el('input', { type: 'color', value: seed.accent });
+    const darkChk = el('input', { type: 'checkbox' }); darkChk.checked = existing ? existing.dark !== false : true;
+    let derived = existing ? { dark: existing.dark, vars: { ...existing.vars } } : null;
+    let overrides = {};
+    const effectiveVars = () => (derived ? { ...derived.vars, ...overrides } : {});
+    const reportBox = el('div', { class: 'hint' });
+    const fineBox = el('div', { class: 'hidden' });
+    const fineDetails = el('details', null, el('summary', { text: 'Fine-tune the generated colours' }), fineBox);
+    const FINE_KEYS = ['--bg', '--bg-2', '--bg-3', '--line', '--fg', '--muted', '--faint', '--accent', '--err', '--warn', '--info', '--ok', '--accent-bg', '--accent-line', '--danger-line', '--err-bg', '--warn-bg', '--ok-bg', '--info-bg', '--g0', '--g1', '--g2', '--g3', '--g4', '--g5'];
+    function drawFineTune() {
+      const vars = effectiveVars();
+      fineBox.replaceChildren(...FINE_KEYS.map((k) => {
+        const input = el('input', { type: 'color', value: vars[k] || '#000000' });
+        input.addEventListener('input', () => { overrides[k] = input.value; preview(); });
+        return el('div', { class: 'line' }, el('span', { style: 'width:140px;display:inline-block', text: k.slice(2) }), input);
+      }));
+    }
+    async function refreshContrast() {
+      const vars = effectiveVars();
+      if (!vars['--bg']) { reportBox.textContent = ''; return; }
+      const { allPass, pairs } = await api.theme.contrast(vars);
+      if (allPass) { reportBox.textContent = 'Every text colour clears 4.5:1 contrast on every background.'; return; }
+      const bad = pairs.filter((p) => !p.pass);
+      reportBox.textContent = `${bad.length} pairing${bad.length === 1 ? '' : 's'} below the 4.5:1 contrast bar: ${bad.map((p) => `${p.fg.slice(2)} on ${p.bg.slice(2)} (${p.ratio.toFixed(1)}:1)`).join(', ')}.`;
+    }
+    let debounceTimer = null;
+    function preview() { previewCustomTheme(effectiveVars(), darkChk.checked); refreshContrast(); }
+    function recompute() {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(async () => {
+        derived = await api.theme.derive({ bg: bgIn.value, fg: fgIn.value, accent: accentIn.value, dark: darkChk.checked });
+        overrides = {};
+        drawFineTune();
+        preview();
+      }, 120);
+    }
+    for (const input of [bgIn, fgIn, accentIn]) input.addEventListener('input', recompute);
+    darkChk.addEventListener('change', recompute);
+    const close = async () => { applyTheme(); await openSettings(); };
+    const save = async () => {
+      const label = labelIn.value.trim();
+      if (!label) { reportBox.textContent = 'Give this theme a name first.'; return; }
+      if (!derived) return;
+      const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'theme';
+      const id = existing ? existing.id : `custom-${slug}-${Date.now().toString(36).slice(-4)}`;
+      const theme = { id, label, dark: darkChk.checked, seed: { bg: bgIn.value, fg: fgIn.value, accent: accentIn.value }, vars: effectiveVars() };
+      const cur = await api.settings.get();
+      const list = (cur.settings.customThemes || []).filter((c) => c.id !== id);
+      list.push(theme);
+      await api.settings.save({ ...cur.settings, customThemes: list, theme: id });
+      await loadProject();
+      await openSettings();
+    };
+    if (!existing) recompute(); else { drawFineTune(); refreshContrast(); previewCustomTheme(effectiveVars(), darkChk.checked); }
+    $('#dialog').replaceChildren(
+      el('h3', { text: existing ? 'Edit custom theme' : 'Create custom theme' }),
+      el('div', { class: 'field' }, el('label', { text: 'Name' }), labelIn),
+      el('div', { class: 'field' }, el('label', { text: 'Seed colours' }),
+        el('div', { class: 'line' }, el('span', { text: 'Background' }), bgIn, el('span', { text: 'Text' }), fgIn, el('span', { text: 'Accent' }), accentIn),
+        el('label', { class: 'check' }, darkChk, ' Dark theme (light text on a dark background)'),
+        el('div', { class: 'hint', text: 'Everything else - surfaces, muted text, errors/warnings/success, the commit graph lanes - is generated from these three, and nudged automatically to keep text readable.' })),
+      reportBox,
+      el('div', { class: 'field' }, fineDetails),
+      el('div', { class: 'actions' }, el('button', { onclick: close }, ic('x'), 'Cancel'), el('button', { class: 'primary', onclick: save }, ic('check'), 'Save theme')));
+    $('#modal').classList.remove('hidden');
+    // Save/Cancel both go straight from this dialog's content to Settings' while the modal stays visible, so this
+    // only fires if something else dismisses the modal outright (e.g. a backdrop click) while the preview is live -
+    // otherwise the real theme's vars/monaco/terminal theme would be stuck showing this preview indefinitely.
+    const modalObserver = new MutationObserver(() => {
+      if ($('#modal').classList.contains('hidden')) { applyTheme(); modalObserver.disconnect(); }
+    });
+    modalObserver.observe($('#modal'), { attributes: true, attributeFilter: ['class'] });
   }
 
   // ---------------------------------------------------------------- session (tabs, layout, toggles) + status bar + chrome
@@ -2925,6 +3092,7 @@
     loadWorkflows().catch(() => {});
     showWatcher(p.watching !== false);
     $('#auto').checked = state.autoCheck;
+    state.customThemes = (p.config && p.config.customThemes) || [];
     themeSetting = (p.config && p.config.theme) || 'system';
     applyTheme();
     $('#fixloop').checked = !!(p.config && p.config.fixLoop && p.config.fixLoop.enabled);
@@ -6579,6 +6747,66 @@
       }
       await setThemeSetting('dark');
       return bad.length ? JSON.stringify(bad) : true;
+    });
+
+    await step('custom theme: a theme built at runtime from 3 seed colours via api.theme.derive (no CSS block at all, unlike every built-in theme) still paints the shell, Monaco and the terminal, and leaves no inline colours behind once you switch away from it', async () => {
+      const seed = { bg: '#0a0e14', fg: '#c9d1d9', accent: '#58a6ff' };
+      const derived = await api.theme.derive(seed);
+      const theme = { id: 'custom-smoke-test', label: 'Smoke test theme', dark: derived.dark, seed, vars: derived.vars };
+      const before = await api.settings.get();
+      await api.settings.save({ ...before.settings, customThemes: [...(before.settings.customThemes || []), theme], theme: theme.id });
+      await loadProject();
+      await sleep(200);
+      const hexToRgb = (hex) => `rgb(${[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(', ')})`;
+      const attrOk = document.documentElement.dataset.theme === 'custom';
+      const bgOk = getComputedStyle(document.body).backgroundColor === hexToRgb(theme.vars['--bg']);
+      const monacoBg = (document.querySelector('.monaco-editor-background') || {});
+      const monacoOk = !!monacoBg.nodeType && getComputedStyle(monacoBg).backgroundColor === hexToRgb(theme.vars['--bg']);
+      const terms = [...state.terms.values()];
+      const termOk = terms.length > 0 && terms.every((t) => t.term.options.theme.background === theme.vars['--bg']);
+      await setThemeSetting('dark');
+      await sleep(200);
+      const cleared = getComputedStyle(document.body).backgroundColor === hexToRgb('#14161a') && document.documentElement.dataset.theme === 'dark';
+      const after = await api.settings.get();
+      await api.settings.save({ ...after.settings, customThemes: (after.settings.customThemes || []).filter((c) => c.id !== theme.id) });
+      await loadProject();
+      const ok = attrOk && bgOk && monacoOk && termOk && cleared;
+      return ok ? true : JSON.stringify({ attrOk, bgOk, monacoOk, termOk, cleared });
+    });
+
+    await step('custom theme editor: Settings -> "Create custom theme…" previews live as the seed colours change, the fine-tune section overrides a generated colour, and Save/list/Delete round-trip through Settings', async () => {
+      const hexToRgb = (hex) => `rgb(${[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(', ')})`;
+      await openSettings();
+      [...document.querySelectorAll('#dialog button')].find((b) => b.textContent.includes('Create custom theme')).click();
+      const opened = !!(await waitFor(() => /Create custom theme/.test($('#dialog h3').textContent), 3000));
+      const [bgIn, fgIn, accentIn] = document.querySelectorAll('#dialog input[type=color]');
+      const seed = { bg: '#101820', fg: '#e8e8e8', accent: '#ff6600' };
+      bgIn.value = seed.bg; bgIn.dispatchEvent(new Event('input'));
+      fgIn.value = seed.fg; fgIn.dispatchEvent(new Event('input'));
+      accentIn.value = seed.accent; accentIn.dispatchEvent(new Event('input'));
+      const previewed = !!(await waitFor(() => document.documentElement.dataset.theme === 'custom' && getComputedStyle(document.body).backgroundColor === hexToRgb(seed.bg), 3000));
+      document.querySelector('#dialog details').open = true;
+      const fineInputs = document.querySelectorAll('#dialog details input[type=color]');
+      const fineShown = fineInputs.length >= 20;
+      const overrideBg = '#223344';
+      fineInputs[0].value = overrideBg; fineInputs[0].dispatchEvent(new Event('input'));
+      const overridden = !!(await waitFor(() => getComputedStyle(document.body).backgroundColor === hexToRgb(overrideBg), 3000));
+      document.querySelector('#dialog input[type=text]').value = 'Smoke UI Theme';
+      [...document.querySelectorAll('#dialog .actions button')].find((b) => b.textContent.includes('Save theme')).click();
+      const savedBackInSettings = !!(await waitFor(() => document.querySelector('#set-tab-general'), 3000));
+      const listedInSettings = [...document.querySelectorAll('#dialog .agent-row')].some((r) => r.textContent.includes('Smoke UI Theme'));
+      const cur = await api.settings.get();
+      const savedTheme = (cur.settings.customThemes || []).find((c) => c.label === 'Smoke UI Theme');
+      const persisted = !!savedTheme && savedTheme.vars['--bg'] === overrideBg && cur.settings.theme === savedTheme.id;
+      const origConfirm = window.confirm;
+      window.confirm = () => true; // this is the one window.confirm() in the app a smoke step deliberately drives
+      try { [...document.querySelectorAll('#dialog .agent-row')].find((r) => r.textContent.includes('Smoke UI Theme')).querySelector('button.danger').click(); }
+      finally { window.confirm = origConfirm; }
+      const deleted = !!(await waitFor(async () => !(await api.settings.get()).settings.customThemes.some((c) => c.label === 'Smoke UI Theme'), 3000));
+      $('#modal').classList.add('hidden');
+      await setThemeSetting('dark');
+      const ok = opened && previewed && fineShown && overridden && savedBackInSettings && listedInSettings && persisted && deleted;
+      return ok ? true : JSON.stringify({ opened, previewed, fineShown, fineCount: fineInputs.length, overridden, savedBackInSettings, listedInSettings, persisted, deleted });
     });
 
     await step('icons resolve', async () => {

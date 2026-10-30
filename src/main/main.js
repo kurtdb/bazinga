@@ -112,8 +112,14 @@ function writeJson(name, data) {
 const readState = () => readJson('state.json', { lastRoot: null, trusted: [] });
 const writeState = (s) => writeJson('state.json', s);
 const readSettings = () => readJson('settings.json', {});
-/** 'light' / 'dark' force the window chrome (menus, scrollbars, prefers-color-scheme); 'system' follows the OS; the other themes are all dark-background, so they force dark chrome too. */
-function applyNativeTheme() { const t = readSettings().theme; nativeTheme.themeSource = t === 'light' ? 'light' : t === 'system' ? 'system' : 'dark'; }
+/** 'light' / 'dark' force the window chrome (menus, scrollbars, prefers-color-scheme); 'system' follows the OS; the other built-in themes are all dark-background, so they force dark chrome too. A custom theme carries its own dark/light flag. */
+function applyNativeTheme() {
+  const s = readSettings();
+  const t = s.theme;
+  if (t === 'light' || t === 'system') { nativeTheme.themeSource = t; return; }
+  const custom = (s.customThemes || []).find((c) => c.id === t);
+  nativeTheme.themeSource = custom && custom.dark === false ? 'light' : 'dark';
+}
 
 function pickInitialRoot() {
   const arg = process.argv.slice(app.isPackaged ? 1 : 2).find((a) => !a.startsWith('-'));
@@ -1798,6 +1804,8 @@ function registerIpc() {
       delete settings.taskTemplatesMd;
     }
     writeJson('settings.json', settings); applyNativeTheme(); return true; });
+  ipcMain.handle('theme:derive', (_e, seed) => require('../core/custompalette').deriveTheme(seed || {}));
+  ipcMain.handle('theme:contrast', (_e, vars) => require('../core/custompalette').contrastReport(vars || {}));
   ipcMain.handle('review:anchor', (_e, comments) => {
     const r = root; if (!r) return [];
     return commentanchor.anchorAll(comments, (rel) => fs.readFileSync(resolveInRoot(rel), 'utf8'));

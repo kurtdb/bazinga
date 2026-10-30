@@ -89,7 +89,8 @@
   "skip-back": "<path d=\"M17.971 4.285A2 2 0 0 1 21 6v12a2 2 0 0 1-3.029 1.715l-9.997-5.998a2 2 0 0 1-.003-3.432z\" /> <path d=\"M3 20V4\" />",
   "skip-forward": "<path d=\"M21 4v16\" /> <path d=\"M6.029 4.285A2 2 0 0 0 3 6v12a2 2 0 0 0 3.029 1.715l9.997-5.998a2 2 0 0 0 .003-3.432z\" />",
   "rewind": "<path d=\"M12 6a2 2 0 0 0-3.414-1.414l-6 6a2 2 0 0 0 0 2.828l6 6A2 2 0 0 0 12 18z\" /> <path d=\"M22 6a2 2 0 0 0-3.414-1.414l-6 6a2 2 0 0 0 0 2.828l6 6A2 2 0 0 0 22 18z\" />",
-  "git-compare-arrows": "<circle cx=\"5\" cy=\"6\" r=\"3\" /> <path d=\"M12 6h5a2 2 0 0 1 2 2v7\" /> <path d=\"m15 9-3-3 3-3\" /> <circle cx=\"19\" cy=\"18\" r=\"3\" /> <path d=\"M12 18H7a2 2 0 0 1-2-2V9\" /> <path d=\"m9 15 3 3-3 3\" />"
+  "git-compare-arrows": "<circle cx=\"5\" cy=\"6\" r=\"3\" /> <path d=\"M12 6h5a2 2 0 0 1 2 2v7\" /> <path d=\"m15 9-3-3 3-3\" /> <circle cx=\"19\" cy=\"18\" r=\"3\" /> <path d=\"M12 18H7a2 2 0 0 1-2-2V9\" /> <path d=\"m9 15 3 3-3 3\" />",
+  "palette": "<path d=\"M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z\" /> <circle cx=\"13.5\" cy=\"6.5\" r=\".5\" fill=\"currentColor\" /> <circle cx=\"17.5\" cy=\"10.5\" r=\".5\" fill=\"currentColor\" /> <circle cx=\"6.5\" cy=\"12.5\" r=\".5\" fill=\"currentColor\" /> <circle cx=\"8.5\" cy=\"7.5\" r=\".5\" fill=\"currentColor\" />"
 };
   /** An inline <svg> that inherits the text colour (stroke: currentColor), so it follows the light/dark theme. */
   window.icon = function icon(name, cls) {
