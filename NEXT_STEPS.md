@@ -331,3 +331,17 @@ test ran/Runner missing) learned three more summary-line formats: `go test -v`'s
 SKIP:` lines (plus its own "name filter matched nothing" tell, `[no tests to run]`, distinct from the generic "no
 tests ran" phrase the other runners use), cargo's `test result: ok. N passed; N failed; ...`, and dotnet's VSTest
 console summary `Failed: N, Passed: N, Skipped: N, Total: N`.
+
+**Real bug found and fixed the next day, asked for by name ("fix the run this test issues"):** none of this had
+ever actually been run in the real app, only unit-tested. `registerTestLenses()` in `app.js` registers its own
+Monaco CodeLens provider on a hardcoded list of language ids - `['java', 'javascript', 'typescript', 'python',
+'kotlin']` - a second, separate list from the symbol-usages lens's own registration a few lines above it, which
+*did* already include `'go'`, `'rust'`, `'csharp'` (added earlier, for tree-sitter). Nobody had extended the
+test-lens one to match, so `testcmd.js` finding tests correctly meant nothing in the editor: the `Run test`/`Run
+all tests in this file` lenses above a `func TestXxx`/`#[test]`/`[Fact]` never rendered for `.go`/`.rs`/`.cs`
+files at all - only the command palette's language-agnostic `Run test at cursor` ever worked. Fixed by adding the
+three to that second list too. Added a Go fixture (`goapp/go.mod` + `math_test.go`) to the smoke project and a new
+step that opens it and asserts the lens text is actually in the rendered DOM (`#editor .codelens-decoration`),
+not just that `api.tests.find()` returns the right data - the same kind of real-UI check that would have caught
+this the first time, mirroring how the `symbol lenses` step already checks its own CodeLens rendering rather than
+stopping at the API layer.

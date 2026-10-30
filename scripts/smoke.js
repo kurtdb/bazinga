@@ -25,6 +25,10 @@ fs.mkdirSync(path.join(fixture, 'tests'));
 fs.writeFileSync(path.join(fixture, 'tests', 'test_x.py'), 'def test_x():\n    assert 1 == 1\n');
 fs.writeFileSync(path.join(fixture, 'util.py'), 'def helper(x):\n    return x\n\n\nclass Box:\n    def open(self):\n        return helper(1)\n');
 fs.writeFileSync(path.join(fixture, 'calls.py'), 'from util import helper\nhelper(1)\nhelper(2)\n');
+// a Go module, just enough for the "Run this test" code lens to have something to find (see testcmd.js)
+fs.mkdirSync(path.join(fixture, 'goapp'));
+fs.writeFileSync(path.join(fixture, 'goapp', 'go.mod'), 'module goapp\n\ngo 1.21\n');
+fs.writeFileSync(path.join(fixture, 'goapp', 'math_test.go'), 'package goapp\n\nimport "testing"\n\nfunc TestAdd(t *testing.T) {\n\tif 1+1 != 2 {\n\t\tt.Fatal("bad")\n\t}\n}\n');
 // a Spring Boot module for the Build-and-run section
 fs.mkdirSync(path.join(fixture, 'svc', 'src', 'main', 'java', 'be', 'acme'), { recursive: true });
 fs.mkdirSync(path.join(fixture, 'svc', 'src', 'main', 'resources'), { recursive: true });

@@ -1167,7 +1167,7 @@
         return { lenses, dispose() {} };
       },
     };
-    for (const lang of ['java', 'javascript', 'typescript', 'python', 'kotlin']) monaco.languages.registerCodeLensProvider(lang, provider);
+    for (const lang of ['java', 'javascript', 'typescript', 'python', 'kotlin', 'go', 'rust', 'csharp']) monaco.languages.registerCodeLensProvider(lang, provider);
   }
 
   // ---------------------------------------------------------------- sidebar: history (commit graph, stashes) + read-only commit diffs + line blame
@@ -5841,6 +5841,17 @@
       const dlg = $('#dialog').textContent;
       $('#modal').classList.add('hidden');
       return listed && !/null|undefined/.test(dlg) ? true : JSON.stringify({ dlg: dlg.slice(0, 200) });
+    });
+    await step('"Run this test" lens renders for Go, not just Java/JS/Python/Kotlin (regression: registerTestLenses registered its CodeLens provider for 5 languages, missing the 3 testcmd.js was extended to)', async () => {
+      const found = await api.tests.find('goapp/math_test.go', (await api.fs.read('goapp/math_test.go')).content);
+      if (!(found.length === 1 && found[0].name === 'TestAdd')) return JSON.stringify({ found });
+      await openFile('goapp/math_test.go');
+      const shown = await waitFor(() => {
+        const texts = [...document.querySelectorAll('#editor .codelens-decoration')].map((n) => n.textContent);
+        return texts.some((t) => /Run all tests in this file/.test(t)) && texts.some((t) => /Run test/.test(t));
+      }, 15000);
+      const texts = [...document.querySelectorAll('#editor .codelens-decoration')].map((n) => n.textContent.trim());
+      return shown ? true : JSON.stringify({ shown, texts });
     });
     await step('spring awareness: route lens, implementations lens, overview', async () => {
       const base = 'svc/src/main/java/be/acme/';
