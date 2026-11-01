@@ -215,3 +215,47 @@ checks:
   assert.equal(json.status, 1);
   assert.equal(JSON.parse(json.stdout).counts.error, 1);
 });
+
+// Every test above runs against a synthetic .ide/checks.yaml (useDefaults: false). None of them ever exercises the
+// real, shipped DEFAULT_CHECKS from defaults.js through runChecks() - so a typo in a built-in gate's `match` glob,
+// `pattern` regex or `parser` name would ship unnoticed. These two close that gap.
+const DEFAULT_CHECKS = require('../src/core/defaults');
+const parsers = require('../src/core/parsers');
+
+test('every built-in gate is well-formed: known parser, compilable regex pattern, and (unless it is a native, in-process check) a requiresBin/requiresFile so it degrades to "skipped" instead of throwing', () => {
+  for (const check of DEFAULT_CHECKS) {
+    assert.ok(Array.isArray(check.match) && check.match.length, `${check.name}: no match patterns`);
+    if (check.native) continue; // runs in-process, nothing external to be missing
+    assert.ok(check.run, `${check.name}: no run command`);
+    assert.ok(check.requiresBin || check.requiresFile, `${check.name}: no requiresBin/requiresFile - will throw instead of skip when its tool is absent`);
+    const parserName = check.parser || 'exitcode';
+    assert.ok(typeof parsers[parserName] === 'function', `${check.name}: unknown parser "${parserName}"`);
+    if (parserName === 'regex') {
+      assert.ok(check.pattern, `${check.name}: the regex parser needs a pattern`);
+      assert.doesNotThrow(() => new RegExp(check.pattern), `${check.name}: invalid regex pattern`);
+    }
+  }
+});
+
+test('the Go, Rust and .NET default gates run end to end (against a real go.mod/Cargo.toml/.csproj fixture) without throwing, whatever happens to be installed on this machine', async () => {
+  const root = makeRepo();
+  write(root, 'go.mod', 'module example\n\ngo 1.21\n');
+  write(root, 'main.go', 'package main\n\nfunc main() {}\n');
+  write(root, 'Cargo.toml', '[package]\nname = "example"\nversion = "0.1.0"\nedition = "2021"\n');
+  write(root, 'src/main.rs', 'fn main() {}\n');
+  write(root, 'example.csproj', '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>\n');
+  write(root, 'Program.cs', 'class Program { static void Main() { } }\n');
+  git(root, 'add', '.');
+  git(root, 'commit', '-q', '-m', 'lang fixture');
+  // touch each so changedFiles() (runChecks' default scope) actually sees them
+  write(root, 'main.go', 'package main\n\nfunc main() { println(1) }\n');
+  write(root, 'src/main.rs', 'fn main() { println!("{}", 1); }\n');
+  write(root, 'Program.cs', 'class Program { static void Main() { println(1); } }\n');
+
+  const res = await runChecks(root, { tier: 'all' });
+  const by = Object.fromEntries(res.runs.map((r) => [r.name, r]));
+  for (const name of ['Go vet', 'Go build', 'Go test', 'Cargo check', 'Cargo clippy', 'Cargo test', '.NET build', '.NET test']) {
+    assert.ok(by[name], `${name} did not run at all`);
+    assert.ok(['skipped', 'passed', 'failed', 'findings'].includes(by[name].status), `${name}: unexpected status ${by[name].status}`);
+  }
+});

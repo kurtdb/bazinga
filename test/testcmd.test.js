@@ -191,14 +191,171 @@ test('c#: finds [Fact]/[Theory] methods (stacked attributes, helpers excluded) a
   assert.strictEqual(T.fileTestCommand(root, rel, { content: CSHARP }).command, "dotnet test --filter 'FullyQualifiedName~OrderServiceTests'");
 });
 
-test('go/rust/c# tests cannot be started in debug mode (no reliable "wait for a debugger" flag)', () => {
-  assert.strictEqual(T.canDebug('a_test.go'), false);
+test('rust tests cannot be started in debug mode (no reliable "wait for a debugger" flag); go and c# now can', () => {
+  assert.strictEqual(T.canDebug('a_test.go'), true);
   assert.strictEqual(T.canDebug('lib.rs'), false);
-  assert.strictEqual(T.canDebug('FooTests.cs'), false);
+  assert.strictEqual(T.canDebug('FooTests.cs'), true);
+});
+
+test('go: debug runs under dlv headless on 127.0.0.1:2345, scoped to the package and test name like the plain run', () => {
+  const root = tmp(['go.mod', 'svc/go.mod', 'svc/pkg/foo_test.go']);
+  const rel = 'svc/pkg/foo_test.go';
+  const t = { kind: 'test', name: 'TestFoo' };
+  const c = T.debugCommand(root, rel, t, { shellKind: 'posix' });
+  assert.strictEqual(c.cwd, 'svc');
+  assert.strictEqual(c.command, "dlv test ./pkg --headless --listen=127.0.0.1:2345 --api-version=2 -- -test.run '^TestFoo$' -test.v");
+  assert.match(c.note, /127\.0\.0\.1:2345/);
+});
+
+test('c#: debug sets VSTEST_HOST_DEBUG=1 in front of the same dotnet test --filter, quoted per shell', () => {
+  const root = tmp(['Tests.csproj', 'tests/OrderServiceTests.cs']);
+  const rel = 'tests/OrderServiceTests.cs';
+  const t = { kind: 'test', name: 'CreatesOrder', suite: 'OrderServiceTests' };
+  const posix = T.debugCommand(root, rel, t, { shellKind: 'posix' });
+  assert.strictEqual(posix.command, "env VSTEST_HOST_DEBUG=1 dotnet test --filter 'FullyQualifiedName~OrderServiceTests.CreatesOrder'");
+  const cmd = T.debugCommand(root, rel, t, { shellKind: 'cmd' });
+  assert.strictEqual(cmd.command, 'set "VSTEST_HOST_DEBUG=1" && dotnet test --filter "FullyQualifiedName~OrderServiceTests.CreatesOrder"');
+  const ps = T.debugCommand(root, rel, t, { shellKind: 'powershell' });
+  assert.strictEqual(ps.command, "$env:VSTEST_HOST_DEBUG=1; dotnet test --filter 'FullyQualifiedName~OrderServiceTests.CreatesOrder'");
+  assert.match(posix.note, /Process Id/);
 });
 
 test('quoting cannot be broken out of', () => {
   assert.strictEqual(T.quote('posix', "a'; rm -rf /; '"), `'a'\\''; rm -rf /; '\\'''`);
   assert.strictEqual(T.quote('powershell', "a'; Remove-Item x; '"), "'a''; Remove-Item x; '''");
   assert.strictEqual(T.findTests('README.md', 'it("x", () => {})').length, 0);
+});
+
+const PHP = `<?php
+use PHPUnit\\Framework\\TestCase;
+class OrderServiceTest extends TestCase {
+    public function testCreatesOrder() {}
+
+    #[Test]
+    public function rejectsEmpty() {}
+
+    private function helper() {}
+}
+`;
+
+test('php: finds test*/[#\\[Test\\]] methods (not helpers) and the class, phpunit --filter', () => {
+  const t = T.findTests('tests/OrderServiceTest.php', PHP);
+  assert.deepStrictEqual(t.map((x) => [x.kind, x.name, x.line]), [['suite', 'OrderServiceTest', 3], ['test', 'testCreatesOrder', 4], ['test', 'rejectsEmpty', 7]]);
+  const root = tmp(['composer.json', 'tests/OrderServiceTest.php']);
+  const rel = 'tests/OrderServiceTest.php';
+  const c = T.testCommand(root, rel, t[1], { shellKind: 'posix' });
+  assert.strictEqual(c.command, "php vendor/bin/phpunit --filter 'testCreatesOrder' 'tests/OrderServiceTest.php'");
+  assert.strictEqual(T.fileTestCommand(root, rel, { content: PHP }).command, "php vendor/bin/phpunit --filter 'OrderServiceTest' 'tests/OrderServiceTest.php'");
+  assert.strictEqual(T.canDebug(rel), true);
+  const dbg = T.debugCommand(root, rel, t[1], { shellKind: 'posix' });
+  assert.strictEqual(dbg.command, "env XDEBUG_MODE=debug XDEBUG_TRIGGER=1 php vendor/bin/phpunit --filter 'testCreatesOrder' 'tests/OrderServiceTest.php'");
+  assert.match(dbg.note, /9003/);
+});
+
+const RSPEC = `RSpec.describe Order do
+  it 'creates an order' do
+    expect(1).to eq(1)
+  end
+end
+`;
+const MINITEST = `class OrderTest < Minitest::Test
+  def test_creates_order
+    assert true
+  end
+end
+`;
+
+test('ruby: RSpec describe/it (bare constant or quoted), file:line selector; Minitest class/def test_, -n selector', () => {
+  const rspecTests = T.findTests('spec/order_spec.rb', RSPEC);
+  assert.deepStrictEqual(rspecTests.map((x) => [x.kind, x.name, x.line]), [['suite', 'Order', 1], ['test', 'creates an order', 2]]);
+  const root = tmp(['Gemfile', 'spec/order_spec.rb']);
+  const rel = 'spec/order_spec.rb';
+  const c = T.testCommand(root, rel, rspecTests[1], { shellKind: 'posix', content: RSPEC });
+  assert.strictEqual(c.command, "bundle exec rspec 'spec/order_spec.rb:2'");
+  assert.strictEqual(T.fileTestCommand(root, rel, { content: RSPEC }).command, "bundle exec rspec 'spec/order_spec.rb'");
+  const dbg = T.debugCommand(root, rel, rspecTests[1], { shellKind: 'posix', content: RSPEC });
+  assert.strictEqual(dbg.command, "rdbg --open --port=12345 -c -- bundle exec rspec 'spec/order_spec.rb:2'");
+  assert.match(dbg.note, /12345/);
+
+  const miniTests = T.findTests('test/order_test.rb', MINITEST);
+  assert.deepStrictEqual(miniTests.map((x) => [x.kind, x.name, x.line]), [['suite', 'OrderTest', 1], ['test', 'test_creates_order', 2]]);
+  const root2 = tmp(['Gemfile', 'test/order_test.rb']);
+  const rel2 = 'test/order_test.rb';
+  const c2 = T.testCommand(root2, rel2, miniTests[1], { shellKind: 'posix', content: MINITEST });
+  assert.strictEqual(c2.command, "ruby -Itest 'test/order_test.rb' -n 'test_creates_order'");
+  assert.strictEqual(T.fileTestCommand(root2, rel2, { content: MINITEST }).command, "ruby -Itest 'test/order_test.rb'");
+});
+
+const DART = `import 'package:test/test.dart';
+void main() {
+  group('Order', () {
+    test('creates an order', () {
+      expect(1, 1);
+    });
+  });
+}
+`;
+
+test('dart: group/test (suite/test), --plain-name selector; flutter test when pubspec depends on flutter', () => {
+  const t = T.findTests('test/order_test.dart', DART);
+  assert.deepStrictEqual(t.map((x) => [x.kind, x.name, x.line]), [['suite', 'Order', 3], ['test', 'creates an order', 4]]);
+  const root = tmp(['pubspec.yaml', 'test/order_test.dart']);
+  fs.writeFileSync(path.join(root, 'pubspec.yaml'), 'name: x\ndependencies:\n  test: any\n');
+  const rel = 'test/order_test.dart';
+  const c = T.testCommand(root, rel, t[1], { shellKind: 'posix' });
+  assert.strictEqual(c.command, "dart test --plain-name 'creates an order' 'test/order_test.dart'");
+  assert.strictEqual(T.fileTestCommand(root, rel, { content: DART }).command, "dart test 'test/order_test.dart'");
+  const dbg = T.debugCommand(root, rel, t[1], { shellKind: 'posix' });
+  assert.strictEqual(dbg.command, "dart test --pause-after-load --plain-name 'creates an order' 'test/order_test.dart'");
+
+  const fRoot = tmp(['pubspec.yaml', 'test/widget_test.dart']);
+  fs.writeFileSync(path.join(fRoot, 'pubspec.yaml'), 'name: x\ndependencies:\n  flutter:\n    sdk: flutter\ndev_dependencies:\n  flutter_test:\n    sdk: flutter\n');
+  const fc = T.testCommand(fRoot, 'test/widget_test.dart', t[1], { shellKind: 'posix' });
+  assert.strictEqual(fc.command, "flutter test --plain-name 'creates an order' 'test/widget_test.dart'");
+});
+
+const FSHARP = [
+  'module OrderTests',
+  'open Xunit',
+  '',
+  '[<Fact>]',
+  'let ``creates an order`` () =',
+  '    Assert.True(true)',
+  '',
+  '[<Theory>]',
+  '[<InlineData(1)>]',
+  'let rejectsEmpty x =',
+  '    Assert.True(true)',
+  '',
+].join('\n');
+
+test('f#: [<Fact>]/[<Theory>] let bindings (plain or double-backtick names), same dotnet test --filter/VSTEST_HOST_DEBUG as c#', () => {
+  const t = T.findTests('tests/OrderTests.fs', FSHARP);
+  assert.deepStrictEqual(t.map((x) => [x.kind, x.name, x.line]), [['test', 'creates an order', 5], ['test', 'rejectsEmpty', 10]]);
+  const root = tmp(['Tests.fsproj', 'tests/OrderTests.fs']);
+  const rel = 'tests/OrderTests.fs';
+  const c = T.testCommand(root, rel, t[0], { shellKind: 'posix' });
+  assert.strictEqual(c.command, "dotnet test --filter 'FullyQualifiedName~creates an order'");
+  assert.strictEqual(T.fileTestCommand(root, rel, { content: FSHARP }).command, "dotnet test --filter 'FullyQualifiedName~creates an order|FullyQualifiedName~rejectsEmpty'");
+  assert.strictEqual(T.canDebug(rel), true);
+  const dbg = T.debugCommand(root, rel, t[0], { shellKind: 'posix' });
+  assert.strictEqual(dbg.command, "env VSTEST_HOST_DEBUG=1 dotnet test --filter 'FullyQualifiedName~creates an order'");
+});
+
+const SCALA = `class OrderSuite extends munit.FunSuite {
+  test("creates an order") {
+    assert(1 == 1)
+  }
+}
+`;
+
+test('scala: test("name") (ScalaTest FunSuite/MUnit share this shape), sbt testOnly *Class -- -z "name"; no debug (sbt/jvm-fork too inconsistent)', () => {
+  const t = T.findTests('OrderSuite.scala', SCALA);
+  assert.deepStrictEqual(t.map((x) => [x.kind, x.name, x.line]), [['suite', 'OrderSuite', 1], ['test', 'creates an order', 2]]);
+  const root = tmp(['build.sbt', 'OrderSuite.scala']);
+  const rel = 'OrderSuite.scala';
+  const c = T.testCommand(root, rel, t[1], { shellKind: 'posix' });
+  assert.strictEqual(c.command, 'sbt \'testOnly *OrderSuite -- -z "creates an order"\'');
+  assert.strictEqual(T.fileTestCommand(root, rel, { content: SCALA }).command, "sbt 'testOnly *OrderSuite'");
+  assert.strictEqual(T.canDebug(rel), false);
 });

@@ -988,7 +988,7 @@
   const testKey = (rel, test, all) => (all || !test ? `${rel}|*` : `${rel}|${test.suite || ''}|${test.name}`);
   const testOpts = (rel, test, all) => {
     const m = state.models.get(rel);
-    return { rel, all: !!all, name: test && test.name, kind: test && test.kind, suite: test && test.suite, content: m ? m.model.getValue() : '' };
+    return { rel, all: !!all, name: test && test.name, kind: test && test.kind, suite: test && test.suite, line: test && test.line, content: m ? m.model.getValue() : '' };
   };
   /** Old behaviour, still available: type the command into a terminal (to debug, or to watch it run). */
   async function runTestInTerminal(rel, test, all, debug = false) {
@@ -1161,13 +1161,13 @@
         for (const t of tests) {
           const range = { startLineNumber: t.line, startColumn: 1, endLineNumber: t.line, endColumn: 1 };
           lenses.push({ range, command: { id: 'bazinga.runTest', title: t.kind === 'suite' ? '$(play) Run all in this group' : '$(play) Run test', tooltip: 'Runs just this one here and tells you whether it passed.', arguments: [rel, t] } });
-          if (t.debuggable) lenses.push({ range, command: { id: 'bazinga.debugTest', title: '$(bug) Debug', tooltip: 'Starts this one test so you can step through it (pytest: in the terminal; JUnit: waits for IntelliJ on port 5005; node:test: port 9229).', arguments: [rel, t] } });
+          if (t.debuggable) lenses.push({ range, command: { id: 'bazinga.debugTest', title: '$(bug) Debug', tooltip: 'Starts this one test so you can step through it (pytest: in the terminal; JUnit: waits for IntelliJ on port 5005; node:test: port 9229; go test: dlv headless on 127.0.0.1:2345; dotnet/F# test: waits for Visual Studio/Rider/VS Code to attach by process id; PHPUnit: waits for an already-listening Xdebug on port 9003; RSpec/Minitest: rdbg headless on 127.0.0.1:12345; dart/flutter test: pauses and prints a VM service URL to attach to).', arguments: [rel, t] } });
           const rl = resultLens(range, rel, t, false); if (rl) lenses.push(rl);
         }
         return { lenses, dispose() {} };
       },
     };
-    for (const lang of ['java', 'javascript', 'typescript', 'python', 'kotlin', 'go', 'rust', 'csharp']) monaco.languages.registerCodeLensProvider(lang, provider);
+    for (const lang of ['java', 'javascript', 'typescript', 'python', 'kotlin', 'go', 'rust', 'csharp', 'php', 'ruby', 'dart', 'fsharp', 'scala']) monaco.languages.registerCodeLensProvider(lang, provider);
   }
 
   // ---------------------------------------------------------------- sidebar: history (commit graph, stashes) + read-only commit diffs + line blame
@@ -5852,6 +5852,40 @@
       }, 15000);
       const texts = [...document.querySelectorAll('#editor .codelens-decoration')].map((n) => n.textContent.trim());
       return shown ? true : JSON.stringify({ shown, texts });
+    });
+    await step('debug a Go test: the Debug lens renders, and runs it under dlv headless instead of plain go test', async () => {
+      const content = (await api.fs.read('goapp/math_test.go')).content;
+      const found = await api.tests.find('goapp/math_test.go', content);
+      if (!(found.length === 1 && found[0].debuggable === true)) return JSON.stringify({ found });
+      const shown = await waitFor(() => [...document.querySelectorAll('#editor .codelens-decoration')].some((n) => /Debug/.test(n.textContent)), 15000);
+      const cmd = await api.tests.command({ rel: 'goapp/math_test.go', name: 'TestAdd', kind: 'test', content, debug: true });
+      const ok = shown && /^dlv test \. --headless --listen=127\.0\.0\.1:2345 --api-version=2 -- -test\.run '\^TestAdd\$' -test\.v$/.test(cmd.command) && /2345/.test(cmd.note);
+      return ok ? true : JSON.stringify({ shown, cmd });
+    });
+    await step('"Run this test" + Debug lenses render for PHP, Ruby, Dart, F# and Scala too (same CodeLens-registration regression class as Go)', async () => {
+      const cases = [
+        { rel: 'phpapp/MathTest.php', name: 'testAdd', debuggable: true, cmdRe: /^php vendor\/bin\/phpunit --filter 'testAdd' 'MathTest\.php'$/ },
+        { rel: 'rubyapp/math_spec.rb', name: 'adds', debuggable: true, cmdRe: /^bundle exec rspec 'math_spec\.rb:2'$/ },
+        { rel: 'dartapp/math_test.dart', name: 'adds', debuggable: true, cmdRe: /^dart test --plain-name 'adds' 'math_test\.dart'$/ },
+        { rel: 'fsharpapp/MathTests.fs', name: 'adds', debuggable: true, cmdRe: /^dotnet test --filter 'FullyQualifiedName~adds'$/ },
+        { rel: 'scalaapp/MathSuite.scala', name: 'adds', debuggable: false, cmdRe: /^sbt 'testOnly \*MathSuite -- -z "adds"'$/ },
+      ];
+      const bad = [];
+      for (const c of cases) {
+        const content = (await api.fs.read(c.rel)).content;
+        const found = await api.tests.find(c.rel, content);
+        const test = found.find((t) => t.name === c.name);
+        if (!test || test.debuggable !== c.debuggable) { bad.push({ rel: c.rel, found }); continue; }
+        await openFile(c.rel);
+        const shown = await waitFor(() => {
+          const texts = [...document.querySelectorAll('#editor .codelens-decoration')].map((n) => n.textContent);
+          const hasDebug = texts.some((t) => /Debug/.test(t));
+          return texts.some((t) => /Run test/.test(t)) && (c.debuggable ? hasDebug : !hasDebug);
+        }, 15000);
+        const cmd = await api.tests.command({ rel: c.rel, name: test.name, kind: test.kind, suite: test.suite, line: test.line, content });
+        if (!(shown && c.cmdRe.test(cmd.command))) bad.push({ rel: c.rel, shown, cmd });
+      }
+      return bad.length ? JSON.stringify(bad) : true;
     });
     await step('spring awareness: route lens, implementations lens, overview', async () => {
       const base = 'svc/src/main/java/be/acme/';

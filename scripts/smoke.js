@@ -29,6 +29,22 @@ fs.writeFileSync(path.join(fixture, 'calls.py'), 'from util import helper\nhelpe
 fs.mkdirSync(path.join(fixture, 'goapp'));
 fs.writeFileSync(path.join(fixture, 'goapp', 'go.mod'), 'module goapp\n\ngo 1.21\n');
 fs.writeFileSync(path.join(fixture, 'goapp', 'math_test.go'), 'package goapp\n\nimport "testing"\n\nfunc TestAdd(t *testing.T) {\n\tif 1+1 != 2 {\n\t\tt.Fatal("bad")\n\t}\n}\n');
+// one fixture per newly-supported "run this test" language (PHP, Ruby, Dart, F#, Scala) - just enough for the lens to find something
+fs.mkdirSync(path.join(fixture, 'phpapp'));
+fs.writeFileSync(path.join(fixture, 'phpapp', 'composer.json'), '{}\n');
+fs.writeFileSync(path.join(fixture, 'phpapp', 'MathTest.php'), '<?php\nclass MathTest {\n    public function testAdd() {\n        assert(1 + 1 === 2);\n    }\n}\n');
+fs.mkdirSync(path.join(fixture, 'rubyapp'));
+fs.writeFileSync(path.join(fixture, 'rubyapp', 'Gemfile'), 'source "https://rubygems.org"\n');
+fs.writeFileSync(path.join(fixture, 'rubyapp', 'math_spec.rb'), 'RSpec.describe Math do\n  it \'adds\' do\n    expect(1 + 1).to eq(2)\n  end\nend\n');
+fs.mkdirSync(path.join(fixture, 'dartapp'));
+fs.writeFileSync(path.join(fixture, 'dartapp', 'pubspec.yaml'), 'name: dartapp\ndependencies:\n  test: any\n');
+fs.writeFileSync(path.join(fixture, 'dartapp', 'math_test.dart'), "import 'package:test/test.dart';\nvoid main() {\n  test('adds', () {\n    expect(1 + 1, 2);\n  });\n}\n");
+fs.mkdirSync(path.join(fixture, 'fsharpapp'));
+fs.writeFileSync(path.join(fixture, 'fsharpapp', 'Tests.fsproj'), '<Project Sdk="Microsoft.NET.Sdk"></Project>\n');
+fs.writeFileSync(path.join(fixture, 'fsharpapp', 'MathTests.fs'), 'module MathTests\nopen Xunit\n\n[<Fact>]\nlet ``adds`` () =\n    Assert.Equal(2, 1 + 1)\n');
+fs.mkdirSync(path.join(fixture, 'scalaapp'));
+fs.writeFileSync(path.join(fixture, 'scalaapp', 'build.sbt'), 'name := "scalaapp"\n');
+fs.writeFileSync(path.join(fixture, 'scalaapp', 'MathSuite.scala'), 'class MathSuite extends munit.FunSuite {\n  test("adds") {\n    assert(1 + 1 == 2)\n  }\n}\n');
 // a Spring Boot module for the Build-and-run section
 fs.mkdirSync(path.join(fixture, 'svc', 'src', 'main', 'java', 'be', 'acme'), { recursive: true });
 fs.mkdirSync(path.join(fixture, 'svc', 'src', 'main', 'resources'), { recursive: true });

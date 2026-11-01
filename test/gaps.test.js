@@ -136,9 +136,9 @@ test('testcmd: Gradle project without wrapper, Gradle with wrapper, unknown lang
   write(g, 'gradlew', '');
   const w = T.testCommand(g, 'src/test/java/a/FooTest.java', t, { shellKind: 'powershell' });
   assert.match(w.command, /^\.\\gradlew test --tests '\*FooTest\.works'$/);
-  assert.equal(T.testCommand(g, 'x.rb', t, {}), null);
+  assert.equal(T.testCommand(g, 'x.clj', t, {}), null);
   assert.equal(T.testCommand(tmpdir(), 'src/FooTest.java', t, {}), null, 'no build file: nothing to run');
-  assert.equal(T.fileTestCommand(g, 'x.rb', { content: 'test' }), null);
+  assert.equal(T.fileTestCommand(g, 'x.clj', { content: 'test' }), null);
   assert.equal(T.fileTestCommand(g, 'src/test/java/a/FooTest.java', { content: 'class FooTest {}' }), null, 'no @Test in it');
 });
 
