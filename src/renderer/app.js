@@ -538,6 +538,16 @@
       const m = tab.ro ? null : state.models.get(tab.rel);
       if (tab.kind === 'file') {
         editor.setModel(m.model);
+        // Monaco computes CodeLenses on its own schedule when a model is attached - under heavy load it has
+        // occasionally not engaged at all for a whole run (not a transient per-call failure the provider's own
+        // retry logic would catch, since that only fires after Monaco calls provideCodeLenses at least once).
+        // A one-shot check for "nothing logged for this model yet" nudges it directly, without looping forever.
+        { const lensModel = m.model, lensSince = Date.now();
+          setTimeout(() => {
+            if (editor.getModel() !== lensModel) return; // moved on to a different tab/model meanwhile
+            if (!(state.lensDebug || []).some((e) => e.rel === lensModel.uri.path && e.t >= lensSince)) symbolLensChanged.fire();
+          }, 2000);
+        }
         if (previewing) {
           paintPreview(m.model.getValue(), tab.rel);
           let t = null;
@@ -1042,6 +1052,7 @@
   }
 
   // lenses above classes and methods: "N usages" (click: search for the name) and "author, age · summary" (click: open that commit)
+  const symbolLensChanged = { fire: () => {} }; // wired below; activateTab uses this to nudge Monaco if it never asks at all
   function registerSymbolLenses() {
     monaco.editor.registerCommand('bazinga.symbolUsages', (_accessor, name) => {
       setSideTab('search');
@@ -1083,6 +1094,7 @@
     // into silence instead of retrying forever.
     const lensRetryEmitter = new monaco.Emitter();
     const lensRetries = new Map(); // rel -> attempt count, cleared on success
+    symbolLensChanged.fire = () => lensRetryEmitter.fire();
     const provider = {
       onDidChange: lensRetryEmitter.event,
       async provideCodeLenses(model) {
@@ -6164,10 +6176,12 @@
       // instead of needing a click-through to a separate editor tab.
       const commitRow = [...document.querySelectorAll('#dialog .replay-step.commit')].pop();
       commitRow.click();
-      await new Promise((r) => setTimeout(r, 50));
+      await waitFor(() => document.querySelector('#dialog .replay-detail .row.file'));
       const fileRow = document.querySelector('#dialog .replay-detail .row.file');
       fileRow.click();
-      await new Promise((r) => setTimeout(r, 150));
+      // showInlineDiff awaits api.history.diff() (a git show off disk) before Monaco gets a model - a fixed short
+      // wait here raced that under heavy load the same way the auto-merge dry-run step's fixed delay used to.
+      await waitFor(() => document.querySelector('#dialog .replay-diff .monaco-diff-editor'));
       const inlineDiffShown = !!document.querySelector('#dialog .replay-diff .monaco-diff-editor') && fileRow.classList.contains('sel');
       $('#modal').classList.add('hidden');
       // prepareReview (run via the guard check a real Review/Merge open triggers) folds these two commits into staged
@@ -7338,9 +7352,12 @@
       const offMerged = api.runs.onAutoMerged((e) => { merged = e; });
       // "echo smoke" exits in a few ms, well under idleSeconds: the pty's own exit handler unregisters it from the
       // fix loop before idle ever gets a chance to fire. Use a process that stays alive and goes idle instead, like
-      // the "fix loop end to end" step above does with fake-agent.js - and print at least IdleDetector's minBytes
-      // (400) first, or poll() never considers it busy enough to ever call it idle.
-      const r = await startRun({ task: 'update the docs for this module', name: 'automerge docs', agent: { name: 'Smoke', command: "node -e \"console.log('smoke '.repeat(80)); process.stdin.resume();\"" }, allow: '**' });
+      // the "fix loop end to end" step above does with fake-agent.js - and print well over IdleDetector's minBytes
+      // (400) first, or poll() never considers it busy enough to ever call it idle. 80 reps (~480 bytes) once sat
+      // close enough to that floor that shell/pty startup noise could occasionally eat into the margin and leave
+      // idle-detection never firing at all (a flakier, load-sensitive variant of the same thing) - 400 reps leaves
+      // no realistic room for that.
+      const r = await startRun({ task: 'update the docs for this module', name: 'automerge docs', agent: { name: 'Smoke', command: "node -e \"console.log('smoke '.repeat(400)); process.stdin.resume();\"" }, allow: '**' });
       if (!r) { offStatus(); offMerged(); await api.settings.save(prevSettings); await restore(); return 'start failed'; }
       await api.fs.write('automerge-notes.md', '# notes\n'); // not a .py file: the demo gate (match *.py) stays quiet, so the gates come back clean
       await refreshChanges();
@@ -7380,20 +7397,26 @@
       const offStatus = api.fixloop.onStatus((e) => events.push(e.state));
       let merged = null;
       const offMerged = api.runs.onAutoMerged((e) => { merged = e; });
-      const r = await startRun({ task: 'update the docs for this module once more', name: 'automerge dry run', agent: { name: 'Smoke', command: "node -e \"console.log('smoke '.repeat(80)); process.stdin.resume();\"" }, allow: '**' });
+      const r = await startRun({ task: 'update the docs for this module once more', name: 'automerge dry run', agent: { name: 'Smoke', command: "node -e \"console.log('smoke '.repeat(400)); process.stdin.resume();\"" }, allow: '**' });
       if (!r) { offStatus(); offMerged(); await api.settings.save(prevSettings); await restore(); return 'start failed'; }
       await api.fs.write('automerge-dryrun-notes.md', '# notes\n'); // not .py: stays clean of the demo gate, same reasoning as the real auto-merge step above
       await refreshChanges();
       let verdictReady = false; let stillThere = false;
       if (r.entry && r.entry.id !== null) {
         await waitFor(() => events.includes('done'), 20000);
-        await sleep(500); // tryAutoMerge runs right after 'done'; dry run logs instead of merging, give it a moment
         await refreshRuns();
         stillThere = state.runs.runs.some((x) => x.id === r.run.id);
         if (stillThere) {
-          await mergeRunDialog(r.run);
-          verdictReady = !!document.querySelector('#dialog .guard-row.verdict.ok');
-          $('#modal').classList.add('hidden');
+          // tryAutoMerge runs right after 'done' (dry run logs instead of merging), and the dialog's own verdict
+          // redoes the guard+scorecard check from scratch - both can lag behind a fixed delay under heavy load
+          // (the flaky "stuck verdictReady: false" case this retry loop replaces a single fixed-delay snapshot for).
+          const end = Date.now() + 15000;
+          while (Date.now() < end && !verdictReady) {
+            await mergeRunDialog(r.run);
+            verdictReady = !!document.querySelector('#dialog .guard-row.verdict.ok');
+            $('#modal').classList.add('hidden');
+            if (!verdictReady) await sleep(500);
+          }
         }
       }
       offStatus(); offMerged();

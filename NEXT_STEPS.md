@@ -4,19 +4,6 @@ A working list of what could reasonably come next. Nothing here is committed to 
 Finished work lives in `CHANGELOG.md` and git history, not here, so this file stays short: when something below
 is done, delete it rather than leaving a struck-through retrospective in its place.
 
-## Flaky under heavy load only, not reproduced under normal conditions
-Both noticed during a long back-to-back smoke-run investigation (20-25+ runs, load average 5-7, <100MB free
-memory) and not seen since under normal load. Worth a look only if either recurs in practice:
-- Monaco's own CodeLens scheduling occasionally not engaging at all for an entire run (not just one file) -
-  `registerCodeLensProvider`'s callback never firing. `state.lensDebug` (a rolling trace of the last 50
-  `provideCodeLenses` calls) is already in place to help diagnose a real recurrence.
-- The auto-merge dry-run smoke step once saw a stuck `events: ["checking", "done"]` / `verdictReady: false`
-  pattern, consistent with the idle-detection → fix-loop → verdict cycle timing out under self-inflicted load.
-
-## Smaller polish ideas
-- `recordOutcome(base, run, outcome)`'s `base` parameter is unused in its body (pre-existing oddity) — harmless,
-  but worth a look next time that function is touched anyway.
-
 ## "Run this test" / Debug — intentionally not pursued, so it isn't re-litigated
 - **Rust**: no "wait for a debugger" mechanism as clean as Delve/JDWP/`VSTEST_HOST_DEBUG`. The realistic option -
   locating the hashed test binary under `target/debug/deps/` for `rust-lldb` - was judged too fragile to ship
