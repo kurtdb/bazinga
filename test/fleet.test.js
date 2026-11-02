@@ -52,6 +52,12 @@ test('row, filter, sort, summary', () => {
   assert.deepStrictEqual([s.live, s.running, s.waiting, s.stale, s.blowouts, s.input, s.output], [3, 1, 1, 1, 2, 21005, 3105]);
 });
 
+test('row: autoMergeArmed passes through from the terminal snapshot, false by default', () => {
+  const now = 10_000_000;
+  assert.equal(F.row({ key: 'a', startedAt: now, autoMergeArmed: true }, now).autoMergeArmed, true);
+  assert.equal(F.row({ key: 'a', startedAt: now }, now).autoMergeArmed, false);
+});
+
 test('formatting of tokens and durations', () => {
   assert.deepStrictEqual([0, 999, 1500, 15000, 1650000, 21660000].map(F.fmtTokens), ['0', '999', '1.5k', '15k', '1.65M', '21.7M']);
   assert.deepStrictEqual([5000, 65000, 3_661_000].map(F.fmtDuration), ['5s', '1m 05s', '1h 01m']);

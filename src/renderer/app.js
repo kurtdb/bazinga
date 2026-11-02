@@ -89,6 +89,9 @@
   };
   const MONACO_THEMES = { light: 'vs', dark: 'vs-dark', 'high-contrast': 'bazinga-hc', 'high-contrast-light': 'bazinga-hc-light', night: 'bazinga-night', nerd: 'bazinga-nerd', tron: 'bazinga-tron', wargames: 'bazinga-wargames' };
   const GUARD_LABELS = { errors: 'Gate errors in the changes', tests: 'Tests deleted or weakened', scope: 'Files outside the task scope', unreviewed: 'Files not marked reviewed', summary: 'Files missing from the agent’s summary', gatesNotRun: 'Gates could not be run', protectedPaths: 'Protected files changed (.env, CI workflows, keys…)', bugfixTest: 'Bugfix without a new or changed test', dependencies: 'Dependency files changed', testsImmutable: 'Existing unit/integration tests modified (immutable tests)' };
+  // same ids/labels as core/scorecard.js's KINDS/LABELS - kept as a literal here, same as GUARD_LABELS above, since
+  // the renderer never requires core modules directly.
+  const KIND_LABELS = { tests: 'Tests', bugfix: 'Bug fix', refactor: 'Refactor', feature: 'New feature', docs: 'Docs', review: 'Review / explain', other: 'Other' };
   const THEME_META = {
     system: { label: 'System', icon: 'settings' },
     light: { label: 'Light', icon: 'sun' },
@@ -2457,6 +2460,11 @@
     const amOn = el('input', { type: 'checkbox' }); amOn.checked = !!amCur.enabled;
     const amRate = num(Math.round((amCur.minWinRate ?? 0.8) * 100), 80, 50, 100);
     const amDry = el('input', { type: 'checkbox' }); amDry.checked = !!amCur.dryRun;
+    const amKindSel = {}; // null/absent amCur.kinds = every kind allowed (today's behaviour) = every box checked
+    for (const k of Object.keys(KIND_LABELS)) {
+      amKindSel[k] = el('input', { type: 'checkbox' });
+      amKindSel[k].checked = !Array.isArray(amCur.kinds) || amCur.kinds.includes(k);
+    }
     const notif = el('input', { type: 'checkbox' }); notif.checked = settings.notifications !== undefined ? !!settings.notifications : defaults.notifications !== false;
     const edFont = num(settings.editorFontSize, 13, 8, 32);
     const termFont = num(settings.terminalFontSize, 13, 8, 32);
@@ -2469,6 +2477,33 @@
       guardSel[k] = el('select', null, el('option', { value: 'block', text: 'block' }), el('option', { value: 'warn', text: 'warn' }), el('option', { value: 'off', text: 'ignore' }));
       guardSel[k].value = guardCur[k] || 'warn';
     }
+    // adaptive guard rules: the same "you've overridden this N times, relax it?" suggestions the merge dialog
+    // offers, visible here too (not only at the moment of an override), plus a table of every count so far.
+    const guardOv = await api.guardoverrides.get().catch(() => ({ suggestions: [], counts: {} }));
+    const guardSuggestBox = el('div');
+    const guardCountsBox = el('div');
+    const renderGuardSuggestions = () => {
+      const relevant = (guardOv.suggestions || []).filter((s) => guardSel[s.id]);
+      if (!relevant.length) { fill(guardSuggestBox); return; }
+      fill(guardSuggestBox, el('div', { class: 'guard-suggestion' }, ...relevant.map((s) => guardSuggestionRow(s, GUARD_LABELS[s.id] || s.id, {
+        onRelaxed: (sg) => { guardSel[sg.id].value = sg.next; guardOv.suggestions = guardOv.suggestions.filter((x) => x.id !== sg.id); renderGuardSuggestions(); renderGuardCounts(); },
+        onDismissed: (row) => row.remove(),
+      }))));
+    };
+    const renderGuardCounts = () => {
+      const entries = Object.entries(guardOv.counts || {}).filter(([, n]) => n > 0);
+      if (!entries.length) { fill(guardCountsBox); return; }
+      fill(guardCountsBox, el('div', { class: 'hint', text: 'How many times you have ticked “merge anyway” past each blocker, across every project:' }),
+        el('table', { class: 'sc-table' },
+          el('thead', null, el('tr', null, el('th', { text: 'Rule' }), el('th', { text: 'Times overridden' }), el('th'))),
+          el('tbody', null, ...entries.sort((a, b) => b[1] - a[1]).map(([id, count]) => {
+            const resetBtn = el('button', { class: 'icon', title: 'Reset this count', 'aria-label': `Reset ${GUARD_LABELS[id] || id}` }, ic('undo-2'));
+            resetBtn.addEventListener('click', async () => { await api.guardoverrides.reset(id); delete guardOv.counts[id]; renderGuardCounts(); });
+            return el('tr', null, el('td', { text: GUARD_LABELS[id] || id }), el('td', { text: String(count) }), el('td', null, resetBtn));
+          }))));
+    };
+    renderGuardSuggestions();
+    renderGuardCounts();
     const rulesIn = el('textarea', { rows: '4', placeholder: 'Rules the AI review should check in every project, e.g. “No field injection. Every endpoint needs an authorization check.”', spellcheck: 'false' });
     rulesIn.value = settings.reviewRules || '';
     const tplIn = el('textarea', { rows: '5', placeholder: '## Name of a template\nallow: src/**   (optional first line)\nThe task text, e.g. Fix this bug: <describe it>', spellcheck: 'false' });
@@ -2488,13 +2523,16 @@
     const lvlSel = el('select', null, el('option', { value: '', text: 'Custom (use the individual settings below)' }), ...Object.entries(levels).map(([id, l]) => el('option', { value: id, text: l.label })));
     lvlSel.value = settings.oversight || '';
     const lvlHint = el('div', { class: 'hint' });
-    const levelDependent = [flOn, flRounds, flTests, flTestSec, flIdle, flInclude, flEsc, flEscAfter, ...Object.values(guardSel)];
+    const levelDependent = [flOn, flRounds, flTests, flTestSec, flIdle, flInclude, flEsc, flEscAfter, ...Object.values(guardSel), amOn, amRate, amDry, ...Object.values(amKindSel)];
+    const amHint = el('div', { class: 'hint' });
     const applyLevel = () => {
       const lv = lvlSel.value;
       for (const c of levelDependent) c.disabled = !!lv;
       const proj = state.project && state.project.oversight;
       lvlHint.textContent = (lv ? levels[lv].summary + ' The fix loop and merge guard settings below are set by the level.' : 'No level: the individual settings below apply.')
         + (proj && proj.source === 'project' ? ` This project sets “${proj.label}” in .ide/config.json, which takes precedence here.` : '');
+      amHint.textContent = lv === 'autonomous' ? 'This level turns auto-merge on by default (still only once the guard is clean and the scorecard backs it).'
+        : lv ? 'This level does not touch auto-merge; pick “Custom” to control it yourself.' : '';
     };
     lvlSel.addEventListener('change', applyLevel); applyLevel();
     const lensCur = { usages: true, blame: true, spring: true, ...(settings.symbolLenses || {}) };
@@ -2562,11 +2600,12 @@
       next.monoFont = fontFam.value;
       next.terminalScrollback = Math.min(50000, Math.max(200, Math.round(Number(scrollback.value)) || 2000));
       next.mergeGuard = Object.fromEntries(Object.entries(guardSel).map(([k, sel]) => [k, sel.value]));
-      next.autoMerge = { enabled: amOn.checked, minWinRate: Math.min(1, Math.max(0.5, (Number(amRate.value) || 80) / 100)), dryRun: amDry.checked };
+      const amKindsChecked = Object.keys(KIND_LABELS).filter((k) => amKindSel[k].checked);
+      next.autoMerge = { enabled: amOn.checked, minWinRate: Math.min(1, Math.max(0.5, (Number(amRate.value) || 80) / 100)), dryRun: amDry.checked, kinds: amKindsChecked.length === Object.keys(KIND_LABELS).length ? null : amKindsChecked };
       if (lvlSel.value) {
-        // a level owns the fix loop and merge guard: keep only what the level does not decide
+        // a level owns the fix loop, merge guard and auto-merge: keep only what the level does not decide
         next.oversight = lvlSel.value;
-        delete next.fixLoop; delete next.mergeGuard;
+        delete next.fixLoop; delete next.mergeGuard; delete next.autoMerge;
       } else delete next.oversight;
       await api.settings.save(next);
       close();
@@ -2675,11 +2714,16 @@
         el('div', { class: 'hint', text: 'Stops early when a round changes nothing (same findings, same test output). Your own typing in the terminal resets the round counter.' })),
       mergeGuard: el('div', { class: 'field' }, headWithHelp('Merge guard', 'A last check before an agent’s work is merged into your branch: protected files touched, tests weakened, a bug fix without a test. “block” means you must tick an extra box to merge anyway.'),
         el('div', { class: 'guard-grid' }, ...Object.entries(GUARD_LABELS).flatMap(([k, label]) => [el('span', { text: label }), guardSel[k]])),
-        el('div', { class: 'hint', text: '“block” needs an explicit “merge anyway” tick in the merge dialog.' })),
+        el('div', { class: 'hint', text: '“block” needs an explicit “merge anyway” tick in the merge dialog.' }),
+        guardSuggestBox,
+        guardCountsBox),
       autoMerge: el('div', { class: 'field' }, headWithHelp('Auto-merge', 'Once the fix loop gets the gates fully clean, merge without asking - but only for an agent and kind of task with a strong, proven track record in the scorecard. Off by default: this skips the review queue.'),
         el('label', { class: 'check' }, amOn, ' Merge automatically when the gates are clean and this agent has a strong track record for this kind of task'),
         el('div', { class: 'line wrap' }, 'Needs at least ', amRate, '% wins, with enough runs recorded in the scorecard'),
         el('label', { class: 'check', title: 'Logs what would have been auto-merged, and why, without actually merging - a way to build trust in the feature before turning it on for real.' }, amDry, ' Dry run: log it instead of merging'),
+        el('div', { class: 'line wrap', title: 'Leave every box checked to auto-merge any kind of task (today’s behaviour).' }, 'Kinds of task it may auto-merge: ',
+          ...Object.entries(KIND_LABELS).flatMap(([k, label]) => [el('label', { class: 'check' }, amKindSel[k], ` ${label}`)])),
+        amHint,
         el('div', { class: 'hint', text: 'You can always undo an auto-merge afterwards from the run list.' })),
       taskTemplates: el('div', { class: 'field' }, el('div', { class: 'agent-head', text: 'Task templates (all projects)' }), tplIn,
         el('div', { class: 'hint', text: 'Shown in “New agent run”. A project can add or replace templates (same name) in .ide/tasks.md.' })),
@@ -3287,10 +3331,14 @@
   });
   let fleetTimer = null;
   function scheduleFleet() { if (!fleetTimer) fleetTimer = setTimeout(() => { fleetTimer = null; renderFleet(); }, 300); }
-  const fleetSnapshot = () => [...state.terms.values()].filter((t) => t.agent).map((t) => ({
-    key: String(t.key), runId: t.runId || null, subagents: t.subagents || [], label: t.title, startedAt: t.startedAt, lastData: t.lastData || 0, exited: !!t.exited, exitedAt: t.exitedAt || 0, prompt: !!t.prompt, idleAt: t.idleAt || 0,
-    context: (t.local && t.local.context) || 0, model: (t.local && t.local.model) || '', fleet: t.fleet || null, events: t.events || [],
-  }));
+  const fleetSnapshot = () => {
+    const runsById = new Map(((state.runs && state.runs.runs) || []).map((r) => [r.id, r]));
+    return [...state.terms.values()].filter((t) => t.agent).map((t) => ({
+      key: String(t.key), runId: t.runId || null, subagents: t.subagents || [], label: t.title, startedAt: t.startedAt, lastData: t.lastData || 0, exited: !!t.exited, exitedAt: t.exitedAt || 0, prompt: !!t.prompt, idleAt: t.idleAt || 0,
+      context: (t.local && t.local.context) || 0, model: (t.local && t.local.model) || '', fleet: t.fleet || null, events: t.events || [],
+      autoMergeArmed: !!(t.runId && runsById.has(t.runId) && runsById.get(t.runId).autoMergeArmed),
+    }));
+  };
   async function renderFleet() {
     const host = $('#a-fleet');
     if (!host || fleetUi.busy) return;
@@ -3320,6 +3368,7 @@
           el('span', { class: 'chip', text: r.state === 'idle' ? 'waiting for you' : r.state === 'waiting' ? 'needs approval' : r.state }),
           r.model ? el('span', { class: 'chip', text: r.model }) : null,
           r.subagents.length ? el('span', { class: 'chip', title: 'Helper agents this agent started', text: `${r.subagents.filter((a) => !a.endedAt).length}/${r.subagents.length} subagents` }) : null,
+          r.autoMergeArmed && r.state !== 'exited' ? el('span', { class: 'chip armed', title: 'Auto-merge is on for this kind of task - it merges itself once the gates are clean and the scorecard backs it.' }, ic('git-merge'), ' auto-merge armed') : null,
           el('span', { class: 'fl-time muted', text: r.state === 'exited' ? `ran ${r.elapsedText}` : `${r.elapsedText}${r.state === 'stale' ? ` · quiet ${r.quietText}` : ''}` })),
         el('div', { class: `fl-bar lv-${r.level}`, title: pctText }, el('div', { class: 'fl-fill', style: `width:${Math.min(100, Math.round((r.pct || 0) * 100))}%` })),
         el('div', { class: 'fl-sub muted' }, `${pctText} · ${r.tokensText} · ${r.requests} request${r.requests === 1 ? '' : 's'}`, r.cost !== null ? ` · ~$${r.cost.toFixed(2)}` : ''),
@@ -4509,7 +4558,11 @@
 
   // session replay: scrub through a run's journal + (while still intact) its commits, step by step
   async function openReplay(run) {
-    const close = () => $('#modal').classList.add('hidden');
+    // the inline diff preview below is a dialog-scoped Monaco diff editor (not the shared one at $('#diff')), so it
+    // needs its own disposal - on every step/file change and when the dialog closes - or its models leak.
+    let inlineDiff = null;
+    const disposeInlineDiff = () => { if (inlineDiff) { inlineDiff.editor.dispose(); inlineDiff.originalModel.dispose(); inlineDiff.modifiedModel.dispose(); inlineDiff = null; } };
+    const close = () => { disposeInlineDiff(); $('#modal').classList.add('hidden'); };
     const res = await api.runs.replay(run.id);
     if (res.error) { setStatus(res.error); return; }
     const steps = res.steps || [];
@@ -4519,7 +4572,26 @@
     const scrubber = el('input', { type: 'range', min: '0', max: String(Math.max(0, steps.length - 1)), step: '1', value: String(Math.max(0, selected)) });
     const prevBtn = el('button', { class: 'icon', title: 'Previous step' }, ic('skip-back'));
     const nextBtn = el('button', { class: 'icon', title: 'Next step' }, ic('skip-forward'));
+    // small side-by-side preview right in the panel, instead of a click-through to a separate editor tab
+    const showInlineDiff = async (host, fileRows, row, sha, f) => {
+      disposeInlineDiff();
+      for (const r of fileRows) r.classList.remove('sel');
+      row.classList.add('sel');
+      const diffHost = el('div', { class: 'replay-diff' });
+      fill(host, el('div', { class: 'line wrap' }, el('span', { class: 'muted small', text: f.oldPath ? `${f.oldPath} → ${f.path}` : f.path }),
+        el('button', { class: 'icon', title: 'Open in the editor', onclick: () => openCommitDiff(sha, f) }, ic('external-link'))), diffHost);
+      const info = await api.history.diff(sha, f.path, f.oldPath);
+      if (!diffHost.isConnected) return; // a later click (or the dialog closing) already moved on
+      if (info.error) { fill(diffHost, el('div', { class: 'hint bad', text: info.error })); return; }
+      const uri = (scheme) => monaco.Uri.from({ scheme, path: `/replay/${sha}/${f.path}` });
+      const originalModel = monaco.editor.createModel(info.diff.original, undefined, uri('replay-a'));
+      const modifiedModel = monaco.editor.createModel(info.diff.modified, undefined, uri('replay-b'));
+      const editor = monaco.editor.createDiffEditor(diffHost, { theme: MONACO_THEMES[resolvedTheme()], fontSize: 13, fontFamily: MONO, minimap: { enabled: false }, scrollBeyondLastLine: false, renderSideBySide: true, originalEditable: false, readOnly: true });
+      editor.setModel({ original: originalModel, modified: modifiedModel });
+      inlineDiff = { editor, originalModel, modifiedModel };
+    };
     const renderStep = async () => {
+      disposeInlineDiff();
       for (const row of list.children) row.classList.remove('sel');
       const row = list.children[selected];
       if (row) { row.classList.add('sel'); row.scrollIntoView({ block: 'nearest' }); }
@@ -4540,9 +4612,15 @@
       const info = await api.history.info(s.sha);
       if (selected !== steps.indexOf(s)) return;
       if (info.error) { fill(detail, el('div', { class: 'hint bad', text: info.error })); return; }
+      const diffBox = el('div');
+      const fileRows = info.info.files.map((f) => {
+        const row2 = el('div', { class: 'row file', title: f.oldPath ? `${f.oldPath} → ${f.path}` : f.path },
+          el('span', { class: `tag st-${f.status === 'R' ? 'M' : f.status}`, text: f.status }), el('span', { class: 'name', text: f.path }));
+        row2.addEventListener('click', () => showInlineDiff(diffBox, fileRows, row2, s.sha, f));
+        return row2;
+      });
       fill(detail, el('div', { class: 'hint', text: `${new Date(s.t).toLocaleTimeString()} · commit ${s.sha.slice(0, 7)}` }), el('pre', { class: 'c-msg', text: info.info.message }),
-        ...info.info.files.map((f) => el('div', { class: 'row file', title: f.oldPath ? `${f.oldPath} → ${f.path}` : f.path, onclick: () => openCommitDiff(s.sha, f) },
-          el('span', { class: `tag st-${f.status === 'R' ? 'M' : f.status}`, text: f.status }), el('span', { class: 'name', text: f.path }))));
+        ...fileRows, diffBox);
     };
     steps.forEach((s, i) => {
       const isCommitLike = s.type === 'commit' || s.kind === 'commit-snapshot';
@@ -5047,19 +5125,27 @@
     if (!guard.ok) await addGuardSuggestions(guardBox, guard, run);
   }
 
-  // adaptive guard rules: offer to relax a blocker once it has been overridden past the threshold
+  // adaptive guard rules: one row offering to relax a blocker once it has been overridden past the threshold.
+  // Shared by the merge dialog and Settings -> Merge guard, which surfaces the same suggestions at any time,
+  // not only at the moment of an override.
+  function guardSuggestionRow(s, label, { onRelaxed, onDismissed }) {
+    const relaxBtn = el('button', null, ic('unlock'), `Relax to ${s.next === 'off' ? 'ignore' : s.next}`);
+    const projectBtn = state.project ? el('button', { title: 'Writes to this project’s .ide/config.json, so the whole team gets the relaxed rule.' }, ic('git-branch'), 'Relax for this project') : null;
+    const dismissBtn = el('button', null, ic('x'), 'Not now');
+    relaxBtn.addEventListener('click', async () => { await api.guardoverrides.relax(s.id); onRelaxed(s); });
+    if (projectBtn) projectBtn.addEventListener('click', async () => { await api.guardoverrides.relaxProject(s.id); onRelaxed(s); });
+    dismissBtn.addEventListener('click', async () => { await api.guardoverrides.dismiss(s.id); onDismissed(row); });
+    const row = el('div', { class: 'line wrap' }, el('span', { text: `You have overridden “${label}” ${s.count} times.` }), relaxBtn, ...(projectBtn ? [projectBtn] : []), dismissBtn);
+    return row;
+  }
+
   async function addGuardSuggestions(guardBox, guard, run) {
     const got = await api.guardoverrides.get();
     const relevant = (got.suggestions || []).filter((s) => guard.items.some((i) => i.id === s.id && i.level === 'block'));
     if (!relevant.length) return;
     guardBox.appendChild(el('div', { class: 'guard-suggestion' }, ...relevant.map((s) => {
       const item = guard.items.find((i) => i.id === s.id);
-      const relaxBtn = el('button', null, ic('unlock'), `Relax to ${s.next === 'off' ? 'ignore' : s.next}`);
-      const dismissBtn = el('button', null, ic('x'), 'Not now');
-      relaxBtn.addEventListener('click', async () => { await api.guardoverrides.relax(s.id); await mergeRunDialog(run); });
-      dismissBtn.addEventListener('click', async () => { await api.guardoverrides.dismiss(s.id); row.remove(); });
-      const row = el('div', { class: 'line wrap' }, el('span', { text: `You have overridden “${item.text}” ${s.count} times.` }), relaxBtn, dismissBtn);
-      return row;
+      return guardSuggestionRow(s, item.text, { onRelaxed: () => mergeRunDialog(run), onDismissed: (row) => row.remove() });
     })));
   }
 
@@ -6074,6 +6160,15 @@
       const afterK = scrubber.value;
       document.querySelector('#dialog .line').dispatchEvent(new KeyboardEvent('keydown', { key: 'j', bubbles: true }));
       const afterJ = scrubber.value;
+      // inline diff preview: clicking a file under a commit step shows a small diff editor right in the panel,
+      // instead of needing a click-through to a separate editor tab.
+      const commitRow = [...document.querySelectorAll('#dialog .replay-step.commit')].pop();
+      commitRow.click();
+      await new Promise((r) => setTimeout(r, 50));
+      const fileRow = document.querySelector('#dialog .replay-detail .row.file');
+      fileRow.click();
+      await new Promise((r) => setTimeout(r, 150));
+      const inlineDiffShown = !!document.querySelector('#dialog .replay-diff .monaco-diff-editor') && fileRow.classList.contains('sel');
       $('#modal').classList.add('hidden');
       // prepareReview (run via the guard check a real Review/Merge open triggers) folds these two commits into staged
       // changes - git itself forgets them, so replay must now be getting both from the journal's commit-snapshot
@@ -6087,7 +6182,7 @@
       await refreshRuns();
       const stepped = Number(afterClick) === Number(before) - 1 && Number(afterArrow) === Number(afterClick) + 1
         && Number(afterK) === Number(afterArrow) - 1 && Number(afterJ) === Number(afterK) + 1;
-      return stepsShown >= 2 && stepped && foldedOk ? true : JSON.stringify({ stepsShown, before, afterClick, afterArrow, afterK, afterJ, foldedOk, snaps });
+      return stepsShown >= 2 && stepped && foldedOk && inlineDiffShown ? true : JSON.stringify({ stepsShown, before, afterClick, afterArrow, afterK, afterJ, foldedOk, snaps, inlineDiffShown });
     });
     await step('adaptive guard rules: overriding the same blocker enough times offers to relax it', async () => {
       const mainRoot = state.project.root;
@@ -6102,7 +6197,7 @@
       // build up 3 real overrides of the same blocker (protectedPaths, from touching .env) via the API directly -
       // the merge dialog's own "Merge" button is already covered by the "agent run in worktree" step, and clicking it
       // here too would risk a blocking window.alert() on any unexpected guard error, three times over, for no extra coverage.
-      for (let i = 0; i < 3; i++) {
+      const addOverride = async (i) => {
         const r = await startRun({ task: `protected file run ${i}`, name: `protected ${i}`, agent: { name: 'Smoke', command: 'echo smoke' }, allow: '**', activate: true });
         await api.fs.write('.env', `N=${i}\n`);
         await refreshChanges();
@@ -6113,7 +6208,8 @@
         const blockers = (g.guard ? g.guard.items : []).filter((it) => it.level === 'block').map((it) => it.id);
         const res = await api.runs.merge({ id: r.run.id, message: `protected ${i}`, squash: true, overriddenItems: blockers });
         if (res.error || !blockers.includes('protectedPaths')) { diag.push({ i, error: res.error, blockers, guardError: g.error }); await api.runs.discard(r.run.id, 'skip').catch(() => {}); }
-      }
+      };
+      for (let i = 0; i < 3; i++) await addOverride(i);
       await refreshRuns();
       if (diag.length) { await restore(); return JSON.stringify(diag); }
       const r4 = await startRun({ task: 'protected file run 3', name: 'protected 3', agent: { name: 'Smoke', command: 'echo smoke' }, allow: '**', activate: true });
@@ -6121,15 +6217,37 @@
       await refreshChanges();
       await mergeRunDialog(r4.run);
       const suggested = !!document.querySelector('#dialog .guard-suggestion');
+      // "Relax for this project" writes to .ide/config.json instead of the IDE-level settings - it should appear
+      // right next to the IDE-level "Relax" button, since a project is open here.
+      const projectRelaxShown = [...document.querySelectorAll('#dialog .guard-suggestion button')].some((b) => /this project/.test(b.textContent));
       // the unified safe-to-merge verdict (verdict.js) must call this one "Blocked", not just the raw guard list
       const verdictBlocked = !!document.querySelector('#dialog .guard-row.verdict.block');
       const text = $('#dialog').textContent;
       $('#modal').classList.add('hidden');
+      // the same suggestion (and the override-count table, with a Reset per rule) also surfaces in Settings -> Merge
+      // guard, not only here. Reset only clears the override counter, never the enforced policy level, so clicking
+      // it never affects a later step that relies on protectedPaths still blocking - but the "scorecard" step below
+      // does read this exact counter, so it's rebuilt back to 3 further down before this step returns.
+      await openSettings();
+      const settingsSuggested = !!document.querySelector('#dialog .guard-suggestion');
+      const scTableText = () => (document.querySelector('#dialog .sc-table') || { textContent: '' }).textContent;
+      const countedBefore = /Protected files changed/.test(scTableText());
+      const resetBtn = [...document.querySelectorAll('#dialog .sc-table button.icon')].find((b) => b.title === 'Reset this count' && b.closest('tr').textContent.includes('Protected files changed'));
+      if (resetBtn) resetBtn.click();
+      await sleep(30);
+      const countedAfter = /Protected files changed/.test(scTableText());
+      $('#modal').classList.add('hidden');
       await switchRoot(mainRoot);
       await api.runs.discard(r4.run.id, 'skip');
       await refreshRuns();
+      // the scorecard step below expects this same counter to still read 3 overrides - rebuild it after proving
+      // Reset actually clears it, so testing the button here doesn't erase a count a later step depends on.
+      for (let i = 10; i < 13; i++) await addOverride(i);
+      await refreshRuns();
+      const rebuilt = ((await api.guardoverrides.get()).counts || {}).protectedPaths === 3;
       await restore();
-      return suggested && verdictBlocked && /overridden/.test(text) && /Blocked/.test(text) ? true : `no suggestion after 3 overrides: ${JSON.stringify({ verdictBlocked })} ${text.slice(0, 300)}`;
+      return suggested && projectRelaxShown && verdictBlocked && settingsSuggested && countedBefore && !countedAfter && rebuilt && /overridden/.test(text) && /Blocked/.test(text)
+        ? true : `no suggestion after 3 overrides: ${JSON.stringify({ verdictBlocked, projectRelaxShown, settingsSuggested, countedBefore, countedAfter, rebuilt, diag })} ${text.slice(0, 300)}`;
     });
     await step('semantic diff: the symbol-changes button summarises added/removed/renamed functions and classes', async () => {
       const before = (await api.fs.read('util.py')).content;
@@ -6162,6 +6280,27 @@
       await api.runs.discard(r.run.id, 'skip');
       await refreshRuns();
       return /\d+ symbol changes? across this run/.test(text) ? true : JSON.stringify({ text });
+    });
+    await step('semantic diff: a function moved (and renamed) into a different file counts as one change, not a remove+add', async () => {
+      const mainRoot = state.project.root;
+      const r = await startRun({ task: 'move helper', name: 'cross-file move run', agent: { name: 'Smoke', command: 'echo smoke' }, allow: '**' });
+      await switchRoot(r.run.root);
+      // util.py (the fixture): "def helper(x):\n    return x\n\n\nclass Box:\n    def open(self):\n        return helper(1)\n" -
+      // replace helper's two lines in place (same line count) so Box/open don't shift and register as spurious
+      // "moved" entries of their own; only helper's removal (paired against helper2 below) should show up.
+      await api.fs.write('util.py', '# helper moved elsewhere\n#\n\n\nclass Box:\n    def open(self):\n        return helper(1)\n');
+      await api.fs.write('util2.py', 'def helper2(x):\n    return x\n');
+      await api.git.stage(['util2.py']);
+      await switchRoot(mainRoot);
+      await mergeRunDialog(r.run);
+      const row = document.querySelector('#dialog .guard-row.ok.muted');
+      const text = row ? row.textContent : '';
+      $('#modal').classList.add('hidden');
+      await switchRoot(mainRoot);
+      await api.runs.discard(r.run.id, 'skip');
+      await refreshRuns();
+      // exactly one symbol change (a rename), not two (a remove in util.py plus an add in util2.py)
+      return /^1 symbol change across this run/.test(text.trim()) ? true : JSON.stringify({ text });
     });
     await step('two agents, same task, compared', async () => {
       const mainRoot = state.project.root;
@@ -6472,6 +6611,30 @@
       const remembered = (() => { try { return localStorage.getItem('bazinga.settingsTab'); } catch { return 'agents'; } })();
       return tabs.length === 6 && first.join() === 'set-panel-general' && agentsTab.join() === 'set-panel-agents' && rowsAfter === rowsBefore + 1 && arrowKey === 'set-panel-agents' && saved && fonts.length >= 0 && !!remembered ? true : JSON.stringify({ tabs, first, agentsTab, rowsBefore, rowsAfter, arrowKey, saved, remembered });
     });
+    await step('auto-merge: per-kind-of-task checkboxes save as a narrowed list, and as null when every box stays checked', async () => {
+      const prev = (await api.settings.get()).settings;
+      await openSettings();
+      document.querySelector('#set-tab-oversight').click();
+      const boxes = [...document.querySelectorAll('#set-panel-oversight .check input[type=checkbox]')];
+      const docsBox = boxes.find((b) => b.closest('label').textContent.includes('Docs'));
+      docsBox.checked = false; docsBox.dispatchEvent(new Event('change'));
+      [...document.querySelectorAll('#dialog button')].find((b) => b.textContent === 'Save').click();
+      await sleep(600);
+      const narrowed = (await api.settings.get()).settings;
+      const okNarrowed = Array.isArray(narrowed.autoMerge.kinds) && !narrowed.autoMerge.kinds.includes('docs') && narrowed.autoMerge.kinds.includes('bugfix');
+      await openSettings();
+      document.querySelector('#set-tab-oversight').click();
+      const boxes2 = [...document.querySelectorAll('#set-panel-oversight .check input[type=checkbox]')];
+      const docsBox2 = boxes2.find((b) => b.closest('label').textContent.includes('Docs'));
+      const reflectsNarrowed = docsBox2.checked === false;
+      docsBox2.checked = true; docsBox2.dispatchEvent(new Event('change'));
+      [...document.querySelectorAll('#dialog button')].find((b) => b.textContent === 'Save').click();
+      await sleep(600);
+      const widened = (await api.settings.get()).settings;
+      const okWidened = widened.autoMerge.kinds === null; // every kind checked again = no restriction, same as before this ever existed
+      await api.settings.save(prev); await loadProject();
+      return okNarrowed && reflectsNarrowed && okWidened ? true : JSON.stringify({ okNarrowed, reflectsNarrowed, okWidened, narrowedKinds: narrowed.autoMerge.kinds, widenedKinds: widened.autoMerge.kinds });
+    });
     await step('oversight level: setting → status indicator, task prefix, guard rules; project level wins', async () => {
       const prev = (await api.settings.get()).settings;
       await api.settings.save({ ...prev, oversight: 'guided' });
@@ -6483,7 +6646,8 @@
       await api.fs.write('.ide/config.json', JSON.stringify({ ...JSON.parse(origCfg), oversight: 'autonomous' }));
       await loadProject();
       const proj = $('#status-oversight').textContent;
-      const okProj = /Autonomous/.test(proj) && state.project.config.fixLoop.enabled === true && state.project.oversight.source === 'project';
+      const okProj = /Autonomous/.test(proj) && state.project.config.fixLoop.enabled === true && state.project.oversight.source === 'project'
+        && state.project.config.autoMerge.enabled === true; // "Autonomous" is the natural place to default auto-merge on
       await api.fs.write('.ide/config.json', origCfg);
       await api.settings.save(prev);
       await loadProject();
@@ -7263,8 +7427,13 @@
         mk('smoke-full', { local: { context: 8192, model: 'qwen3:14b', proxy: { token: 'x' } }, fleet: { lastInput: 8000, totalInput: 24000, totalOutput: 1200, requests: 4, model: 'qwen3:14b' }, events: [{ at: Date.now(), kind: 'model', text: 'model request: 8000 in / 90 out' }] }),
         mk('smoke-wait', { prompt: { text: 'Allow edit?', at: Date.now() } }),
         mk('smoke-stale', { lastData: Date.now() - 9 * 60000 }),
+        mk('smoke-armed', { runId: 'smoke-armed-run' }),
       ];
       for (const t of fake) state.terms.set(t.key, t);
+      // runs:list's autoMergeArmed (main.js) reaches the card through fleetSnapshot() -> api.fleetView() -> fleet.row();
+      // faking state.runs.runs directly here is the join point, same as the real refreshRuns() response would be.
+      const savedRuns = state.runs;
+      state.runs = { ...(state.runs || {}), runs: [...((state.runs && state.runs.runs) || []), { id: 'smoke-armed-run', autoMergeArmed: true }] };
       try {
         await renderFleet();
         const cards = document.querySelectorAll('#a-fleet .fl-card');
@@ -7275,8 +7444,11 @@
         const only = document.querySelectorAll('#a-fleet .fl-card').length === 1;
         fleetUi.filter = 'all'; fleetUi.open.add('smoke-full'); await renderFleet();
         const timeline = !!document.querySelector('#a-fleet .fl-events .fl-ev');
-        return ok1 && ok2 && only && timeline ? true : JSON.stringify({ ok1, ok2, only, timeline, cards: cards.length, text: full && full.textContent });
-      } finally { for (const t of fake) state.terms.delete(t.key); fleetUi.open.clear(); fleetUi.filter = 'all'; await renderFleet(); }
+        const armedCard = [...document.querySelectorAll('#a-fleet .fl-card')].find((c) => c.textContent.includes('smoke-armed'));
+        const armed = !!armedCard && !!armedCard.querySelector('.chip.armed') && /auto-merge armed/.test(armedCard.textContent);
+        const notArmed = !full.querySelector('.chip.armed'); // a run with no autoMergeArmed never gets the chip
+        return ok1 && ok2 && only && timeline && armed && notArmed ? true : JSON.stringify({ ok1, ok2, only, timeline, armed, notArmed, cards: cards.length, text: full && full.textContent });
+      } finally { for (const t of fake) state.terms.delete(t.key); fleetUi.open.clear(); fleetUi.filter = 'all'; state.runs = savedRuns; await renderFleet(); }
     });
 
     await step('board columns and best-of dialog', async () => {

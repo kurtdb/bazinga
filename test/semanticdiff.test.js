@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { diffSymbols } = require('../src/core/semanticdiff');
+const { diffSymbols, crossFileMoves, summarizeSymbolChanges } = require('../src/core/semanticdiff');
 
 test('an unchanged symbol (same body, same line) is not reported', () => {
   const content = 'function foo(x) {\n  return x + 1;\n}\n';
@@ -74,4 +74,50 @@ test('results are sorted by where they sit in the file', () => {
 test('empty symbol lists give an empty diff', () => {
   assert.deepEqual(diffSymbols('a', 'b', [], []), []);
   assert.deepEqual(diffSymbols('a', 'b', null, null), []);
+});
+
+test('crossFileMoves: a function cut from one file and pasted into another under a new name is a rename', () => {
+  const oldSym = { name: 'foo', kind: 'function', line: 1, endLine: 3 };
+  const newSym = { name: 'bar', kind: 'function', line: 10, endLine: 12 };
+  const removals = [{ path: 'a.js', sym: oldSym, content: 'function foo(x) {\n  return foo(x - 1) + 1;\n}\n' }];
+  const additions = [{ path: 'b.js', sym: newSym, content: '\n\n\n\n\n\n\n\n\nfunction bar(x) {\n  return bar(x - 1) + 1;\n}\n' }];
+  assert.deepEqual(crossFileMoves(removals, additions), [{ type: 'renamed', kind: 'function', name: 'foo', newName: 'bar', fromPath: 'a.js', toPath: 'b.js', oldLine: 1, newLine: 10 }]);
+});
+
+test('crossFileMoves: same name across files is a move, not a rename', () => {
+  const oldSym = { name: 'foo', kind: 'function', line: 1, endLine: 3 };
+  const newSym = { name: 'foo', kind: 'function', line: 1, endLine: 3 };
+  const removals = [{ path: 'a.js', sym: oldSym, content: 'function foo() {\n  return 1;\n}\n' }];
+  const additions = [{ path: 'b.js', sym: newSym, content: 'function foo() {\n  return 1;\n}\n' }];
+  assert.deepEqual(crossFileMoves(removals, additions), [{ type: 'moved', kind: 'function', name: 'foo', fromPath: 'a.js', toPath: 'b.js', oldLine: 1, newLine: 1 }]);
+});
+
+test('crossFileMoves: never pairs removals/additions from the same file - that is diffSymbols’ own job', () => {
+  const sym = { name: 'foo', kind: 'function', line: 1, endLine: 3 };
+  const removals = [{ path: 'a.js', sym, content: 'function foo() {\n  return 1;\n}\n' }];
+  const additions = [{ path: 'a.js', sym, content: 'function foo() {\n  return 1;\n}\n' }];
+  assert.deepEqual(crossFileMoves(removals, additions), []);
+});
+
+test('crossFileMoves: no match leaves the lists untouched', () => {
+  const removals = [{ path: 'a.js', sym: { name: 'foo', kind: 'function', line: 1, endLine: 3 }, content: 'function foo() {\n  return 1;\n}\n' }];
+  const additions = [{ path: 'b.js', sym: { name: 'bar', kind: 'function', line: 1, endLine: 3 }, content: 'function bar() {\n  return "totally different";\n}\n' }];
+  assert.deepEqual(crossFileMoves(removals, additions), []);
+});
+
+test('summarizeSymbolChanges: one line per change, cross-file moves show both paths', () => {
+  const changes = [
+    { type: 'added', kind: 'function', name: 'f', path: 'x.js' },
+    { type: 'renamed', kind: 'function', name: 'foo', newName: 'bar', fromPath: 'a.js', toPath: 'b.js' },
+  ];
+  const text = summarizeSymbolChanges(changes);
+  assert.match(text, /added function f \(x\.js\)/);
+  assert.match(text, /renamed function foo → bar \(a\.js → b\.js\)/);
+});
+
+test('summarizeSymbolChanges: caps the list and says how many were omitted', () => {
+  const changes = Array.from({ length: 60 }, (_, i) => ({ type: 'added', kind: 'function', name: `f${i}`, path: 'x.js' }));
+  const text = summarizeSymbolChanges(changes);
+  assert.equal(text.split('\n').length, 51); // 50 lines + the omitted-count line
+  assert.match(text, /10 more symbol changes omitted/);
 });

@@ -779,7 +779,20 @@ function registerIpc() {
   ipcMain.handle('git:commit', (_e, message) => safe(async () => ({ output: await G.commit(requireRoot(), message) })));
   ipcMain.handle('git:revert', (_e, rel) => safe(async () => { resolveInRoot(rel); return { result: await G.revertFile(requireRoot(), rel) }; }));
   // agent runs (git worktrees)
-  ipcMain.handle('runs:list', () => safe(async () => ({ ...(await runs.listRuns(requireRoot())), current: requireRoot() })));
+  ipcMain.handle('runs:list', () => safe(async () => {
+    const base = requireRoot();
+    const got = await runs.listRuns(base);
+    // kind + autoMergeArmed: cheap (keyword classifier, not the async Jev one) so the Fleet dashboard can show at a
+    // glance which runs might merge themselves - "armed" means auto-merge is on and applies to this kind of task,
+    // not that the gates are clean right now (that still needs guardForRun, done only when you open the run).
+    const list = (got.runs || []).map((r) => {
+      const kind = scorecard.kindOf(r.task);
+      const cfg = withDefaults(loadConfigSafe(r.root), 'autoMerge');
+      const autoMergeArmed = !!cfg.enabled && (!Array.isArray(cfg.kinds) || !cfg.kinds.length || cfg.kinds.includes(kind));
+      return { ...r, kind, autoMergeArmed };
+    });
+    return { ...got, runs: list, current: base };
+  }));
   ipcMain.handle('runs:create', (_e, opts = {}) => safe(async () => {
     const base = requireRoot();
     let linkDirs = [];
@@ -965,6 +978,7 @@ function registerIpc() {
     return { suggestions: guardoverrides.suggestions(store, eff.policy), counts: store.counts };
   }));
   ipcMain.handle('guardoverrides:dismiss', (_e, ruleId) => safe(() => guardoverrides.dismiss(userFile('guardoverrides.json'), ruleId)));
+  ipcMain.handle('guardoverrides:reset', (_e, ruleId) => safe(() => guardoverrides.resetCount(userFile('guardoverrides.json'), ruleId)));
   ipcMain.handle('guardoverrides:relax', (_e, ruleId) => safe(() => {
     const base = requireRoot();
     const settings = readSettings();
@@ -975,6 +989,17 @@ function registerIpc() {
     writeJson('settings.json', next);
     guardoverrides.dismiss(userFile('guardoverrides.json'), ruleId);
     return { level: next.mergeGuard[ruleId] };
+  }));
+  // same relax step, but written into the project's own .ide/config.json instead of the IDE-level settings
+  ipcMain.handle('guardoverrides:relaxProject', (_e, ruleId) => safe(() => {
+    const base = requireRoot();
+    const cfg = loadConfigSafe(base);
+    const eff = require('../core/ciguard').effectivePolicy(base, { mergeGuard: cfg.mergeGuard, protectedPaths: cfg.protectedPaths });
+    const current = eff.policy[ruleId] || 'warn';
+    const next = guardoverrides.relax(current);
+    guardoverrides.relaxProject(base, ruleId, next);
+    guardoverrides.dismiss(userFile('guardoverrides.json'), ruleId);
+    return { level: next };
   }));
   ipcMain.handle('runs:discard', (_e, id, why) => safe(async () => {
     const base = requireRoot();
@@ -1065,13 +1090,16 @@ function registerIpc() {
     return { name: who.name };
   }));
   ipcMain.handle('jira:forget', () => safe(async () => { secrets().delete('jira'); return true; }));
-  // semantic diff, summed across every changed text file of a run (not just the one open in the editor) - for the
-  // merge dialog's "N symbol changes" line. findSymbols()/treesitter return [] for a language they don't know, so
-  // nothing here needs to guess which files are "code"; a file that errors or is too large just contributes 0.
-  async function symbolChangesForRun(root, files) {
+  // semantic diff across every changed text file of a run (not just the one open in the editor) - backs the merge
+  // dialog's "N symbol changes" line and the AI review prompt's symbol-changes section. findSymbols()/treesitter
+  // return [] for a language they don't know, so nothing here needs to guess which files are "code"; a file that
+  // errors or is too large just contributes nothing. A second pass pairs each file's leftover 'removed'/'added'
+  // entries against every *other* file's, so a function moved (and maybe renamed) across files shows as one entry
+  // instead of a spurious removed+added pair - see semanticdiff.crossFileMoves().
+  async function allSymbolChanges(root, files) {
     const cfgSym = loadConfigSafe(root).symbolParser;
     const symbolsOf = async (rel, content) => (cfgSym === 'regex' ? null : await treesitter.symbols(rel, content)) || symbols.findSymbols(rel, content);
-    let total = 0;
+    const perFile = [];
     for (const f of files) {
       if (f.status === 'D' || f.status === 'U') continue;
       let modified;
@@ -1084,11 +1112,32 @@ function registerIpc() {
       const original = await G.headContent(root, f.path);
       try {
         const [oldSymbols, newSymbols] = await Promise.all([symbolsOf(f.path, original), symbolsOf(f.path, modified)]);
-        total += semanticdiff.diffSymbols(original, modified, oldSymbols, newSymbols).length;
-      } catch { /* one file's parser hiccup should not sink the whole count */ }
+        const changes = semanticdiff.diffSymbols(original, modified, oldSymbols, newSymbols);
+        perFile.push({ path: f.path, changes, original, modified, oldSymbols: oldSymbols || [], newSymbols: newSymbols || [] });
+      } catch { /* one file's parser hiccup should not sink the rest */ }
     }
-    return total;
+    const removals = [];
+    const additions = [];
+    for (const pf of perFile) {
+      for (const c of pf.changes) {
+        if (c.type === 'removed') { const sym = pf.oldSymbols.find((s) => s.kind === c.kind && s.name === c.name && s.line === c.oldLine); if (sym) removals.push({ path: pf.path, sym, content: pf.original }); }
+        if (c.type === 'added') { const sym = pf.newSymbols.find((s) => s.kind === c.kind && s.name === c.name && s.line === c.newLine); if (sym) additions.push({ path: pf.path, sym, content: pf.modified }); }
+      }
+    }
+    const moves = semanticdiff.crossFileMoves(removals, additions);
+    const movedRemovals = new Set(moves.map((m) => `${m.fromPath}\u0000${m.kind}\u0000${m.name}\u0000${m.oldLine}`));
+    const movedAdditions = new Set(moves.map((m) => `${m.toPath}\u0000${m.kind}\u0000${m.newName || m.name}\u0000${m.newLine}`));
+    const out = [];
+    for (const pf of perFile) {
+      for (const c of pf.changes) {
+        if (c.type === 'removed' && movedRemovals.has(`${pf.path}\u0000${c.kind}\u0000${c.name}\u0000${c.oldLine}`)) continue;
+        if (c.type === 'added' && movedAdditions.has(`${pf.path}\u0000${c.kind}\u0000${c.name}\u0000${c.newLine}`)) continue;
+        out.push({ ...c, path: pf.path });
+      }
+    }
+    return [...out, ...moves];
   }
+  async function symbolChangesForRun(root, files) { return (await allSymbolChanges(root, files)).length; }
   // merge guard: gates + scope analysis of one run, judged by the project's policy
   async function guardForRun(base, run, opts = {}) {
     await runs.prepareReview(base, run.id);
@@ -1692,7 +1741,14 @@ function registerIpc() {
     let config;
     try { config = loadConfig(root, readSettings()); } catch (err) { return { error: err.message }; }
     reviewAbort = new AbortController();
-    try { return await runReview(root, { command: config.reviewCommand, findings: findings || [], reviewRules: config.reviewRules, signal: reviewAbort.signal }); } finally { reviewAbort = null; }
+    // what moved/was renamed/added/removed, structurally - so the reviewer model gets "renamed X→Y" instead of
+    // having to infer it from a messy line diff. A hiccup here should never block the review itself.
+    let symbolSummary = '';
+    try {
+      const changed = (await G.changedFiles(root)).filter((c) => !c.path.startsWith('.ide/'));
+      symbolSummary = semanticdiff.summarizeSymbolChanges(await allSymbolChanges(root, changed));
+    } catch { /* the diff itself still goes out */ }
+    try { return await runReview(root, { command: config.reviewCommand, findings: findings || [], reviewRules: config.reviewRules, symbolSummary, signal: reviewAbort.signal }); } finally { reviewAbort = null; }
   });
   ipcMain.handle('review:cancel', () => { if (reviewAbort) reviewAbort.abort(); return true; });
 

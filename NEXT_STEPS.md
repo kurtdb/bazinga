@@ -4,29 +4,6 @@ A working list of what could reasonably come next. Nothing here is committed to 
 Finished work lives in `CHANGELOG.md` and git history, not here, so this file stays short: when something below
 is done, delete it rather than leaving a struck-through retrospective in its place.
 
-## Adaptive guard rules
-- Surface the same suggestion (and a way to review/reset override counts) in **Settings → Merge guard**, not only
-  in the merge dialog — right now you only see it at the moment you override, never afterwards.
-- Let a suggestion apply to a **project's** `.ide/config.json` instead of only the IDE-level settings, for teams
-  that commit their guard policy.
-
-## Session replay
-- Inline diff preview in the replay panel itself (small side-by-side) instead of requiring a click-through to a
-  separate Monaco tab — would make scrubbing feel more like actual video scrubbing.
-
-## Auto-merge
-- An oversight-level tie-in: "Autonomous" is the natural place to default `autoMerge.enabled` on, if the user
-  wants the levels to fully express this instead of it being a separate toggle.
-- A Fleet-dashboard indicator when auto-merge is armed for a run, so it's visible at a glance which runs might
-  merge themselves.
-- Per-kind-of-task control (e.g. auto-merge `docs`/`tests` but never `bugfix`), instead of one global toggle.
-
-## Semantic diff
-- Extend the rename heuristic to **moved-across-files** renames (a function cut from one file and pasted into
-  another with a new name) — currently only looked at within a single file's before/after.
-- Feed the semantic-diff summary into the AI review prompt (`reviewCommand`) as extra context, so the reviewer
-  model gets "renamed X→Y" instead of having to infer it from a messy line diff.
-
 ## Flaky under heavy load only, not reproduced under normal conditions
 Both noticed during a long back-to-back smoke-run investigation (20-25+ runs, load average 5-7, <100MB free
 memory) and not seen since under normal load. Worth a look only if either recurs in practice:

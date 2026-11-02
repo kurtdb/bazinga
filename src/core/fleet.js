@@ -56,6 +56,7 @@ function row(t, now = Date.now(), { staleMs } = {}) {
   const blowout = pct !== null && pct >= 0.9 || !!f.overflow;
   return {
     key: t.key, runId: t.runId || null, label: t.label || t.title || 'Agent', model: f.model || t.model || '', state, pct, level: contextLevel(pct), blowout,
+    autoMergeArmed: !!t.autoMergeArmed,
     context: t.context || 0, input: f.totalInput || 0, output: f.totalOutput || 0, requests: f.requests || 0,
     cloud: cloudOf(f), errors: f.errors || (f.otel && f.otel.errors) || 0, lastError: f.lastError || (f.otel && f.otel.lastError) || '',
     subagents: (t.subagents || []).slice(-20).map((a) => ({ id: a.id, type: a.type, startedAt: a.startedAt, endedAt: a.endedAt || 0, text: a.text || '' })),

@@ -8,6 +8,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const THRESHOLD = 3; // overridden this many times before it is worth asking about
+const CONFIG_REL = path.join('.ide', 'config.json');
 
 function load(file) {
   try {
@@ -39,9 +40,37 @@ function dismiss(file, ruleId) {
   return save(file, store);
 }
 
+/** Clears a rule's override count and dismissal, so the suggestion can resurface after THRESHOLD more overrides. */
+function resetCount(file, ruleId) {
+  const store = load(file);
+  delete store.counts[ruleId];
+  store.dismissed = store.dismissed.filter((id) => id !== ruleId);
+  return save(file, store);
+}
+
 /** One step down: 'block' -> 'warn' -> 'off'. Already-relaxed or unknown levels are returned unchanged. */
 function relax(level) {
   return level === 'block' ? 'warn' : level === 'warn' ? 'off' : level;
+}
+
+/**
+ * Writes a relaxed rule into the *project's* .ide/config.json instead of the IDE-level settings, for teams that
+ * commit their guard policy. Same read/validate/write recipe as core/folderroles.js's save() - leaves every other
+ * key untouched, throws on invalid JSON rather than clobbering it.
+ */
+function relaxProject(root, ruleId, next) {
+  const file = path.join(root, CONFIG_REL);
+  let cfg = {};
+  let text = null;
+  try { text = fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  if (text !== null && text.trim()) {
+    try { cfg = JSON.parse(text); } catch (e) { throw new Error(`.ide/config.json is not valid JSON (${e.message}); fix it first, nothing was changed.`); }
+    if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) throw new Error('.ide/config.json must contain a JSON object; nothing was changed.');
+  }
+  cfg.mergeGuard = { ...(cfg.mergeGuard || {}), [ruleId]: next };
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify(cfg, null, 2)}\n`);
+  return cfg.mergeGuard;
 }
 
 /**
@@ -56,4 +85,4 @@ function suggestions(store, policy, { threshold = THRESHOLD } = {}) {
     .sort((a, b) => b.count - a.count);
 }
 
-module.exports = { THRESHOLD, load, save, recordOverride, dismiss, relax, suggestions };
+module.exports = { THRESHOLD, load, save, recordOverride, dismiss, resetCount, relax, relaxProject, suggestions };

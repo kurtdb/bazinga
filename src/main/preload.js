@@ -76,7 +76,9 @@ contextBridge.exposeInMainWorld('api', {
   guardoverrides: {
     get: () => invoke('guardoverrides:get'),
     dismiss: (ruleId) => invoke('guardoverrides:dismiss', ruleId),
+    reset: (ruleId) => invoke('guardoverrides:reset', ruleId),
     relax: (ruleId) => invoke('guardoverrides:relax', ruleId),
+    relaxProject: (ruleId) => invoke('guardoverrides:relaxProject', ruleId),
   },
   hooks: { bind: (token, id) => invoke('hooks:bind', token, id) },
   debug: { log: (source, text) => invoke('debug:log', source, text), get: (since) => invoke('debug:get', since), clear: () => invoke('debug:clear'), save: () => invoke('debug:save') },

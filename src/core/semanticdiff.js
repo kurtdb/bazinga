@@ -64,4 +64,50 @@ function diffSymbols(oldContent, newContent, oldSymbols, newSymbols) {
   return changes.sort((a, b) => (a.oldLine ?? a.newLine ?? 0) - (b.oldLine ?? b.newLine ?? 0));
 }
 
-module.exports = { diffSymbols };
+/** Same blanked-own-name body key diffSymbols() uses to pair a rename within one file - exposed so a caller can
+ * pair leftover 'removed'/'added' symbols across *different* files (see crossFileMoves). */
+function renameKey(content, sym) {
+  return withNamePlaceholder(bodyOf(String(content).split('\n'), sym), sym.name);
+}
+
+/**
+ * Pairs symbols diffSymbols() reported as 'removed' in one file with ones it reported as 'added' in another -
+ * a function cut from one file and pasted into another, same name ('moved') or a new one ('renamed'). Same-file
+ * pairing is diffSymbols()'s own job (it already saw both sides there); this only looks across files, so it never
+ * re-litigates a within-file case diffSymbols left as plain removed+added on purpose (e.g. an ambiguous match).
+ * @param {Array<{path:string, sym:object, content:string}>} removals
+ * @param {Array<{path:string, sym:object, content:string}>} additions
+ */
+function crossFileMoves(removals, additions) {
+  const usedAdd = new Set();
+  const out = [];
+  for (const r of removals || []) {
+    const rKey = renameKey(r.content, r.sym);
+    const match = (additions || []).find((a) => !usedAdd.has(a) && a.path !== r.path && a.sym.kind === r.sym.kind && renameKey(a.content, a.sym) === rKey);
+    if (!match) continue;
+    usedAdd.add(match);
+    out.push({
+      type: match.sym.name === r.sym.name ? 'moved' : 'renamed',
+      kind: r.sym.kind, name: r.sym.name, ...(match.sym.name !== r.sym.name ? { newName: match.sym.name } : {}),
+      fromPath: r.path, toPath: match.path, oldLine: r.sym.line, newLine: match.sym.line,
+    });
+  }
+  return out;
+}
+
+/** One line per change, for the AI review prompt - capped so a huge run never blows the prompt budget. */
+function summarizeSymbolChanges(changes, max = 50) {
+  const describe = (c) => {
+    const where = c.fromPath ? `${c.fromPath} → ${c.toPath}` : c.path;
+    if (c.type === 'renamed') return `renamed ${c.kind} ${c.name} → ${c.newName} (${where})`;
+    if (c.type === 'moved') return `moved ${c.kind} ${c.name} (${where})`;
+    if (c.type === 'modified') return `changed ${c.kind} ${c.name} (${where})`;
+    if (c.type === 'added') return `added ${c.kind} ${c.name} (${where})`;
+    if (c.type === 'removed') return `removed ${c.kind} ${c.name} (${where})`;
+    return `${c.type} ${c.kind} ${c.name} (${where})`;
+  };
+  const list = (changes || []).slice(0, max);
+  return list.map(describe).join('\n') + ((changes || []).length > max ? `\n[${changes.length - max} more symbol changes omitted]` : '');
+}
+
+module.exports = { diffSymbols, renameKey, crossFileMoves, summarizeSymbolChanges };

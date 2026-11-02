@@ -13,6 +13,10 @@ const LEVELS = {
     config: {
       fixLoop: { enabled: true, maxRounds: 5, relatedTests: true },
       mergeGuard: { errors: 'block', tests: 'block', protectedPaths: 'block', scope: 'warn', unreviewed: 'off', summary: 'off', gatesNotRun: 'warn', bugfixTest: 'warn', dependencies: 'warn' },
+      // "Autonomous" is the level that already lets the fix loop and merge guard run unattended; auto-merge finishing
+      // the job (once the guard is clean and the scorecard backs it) is the natural extension of that, so this level
+      // defaults it on. minWinRate/dryRun/kinds stay whatever the user already has (see oversight.DEEP_KEYS).
+      autoMerge: { enabled: true },
       notifyKinds: ['agent-prompt', 'fixloop'],
       taskPrefix: '',
     },
@@ -55,7 +59,7 @@ const presetFor = (level) => (isLevel(level) ? LEVELS[level].config : {});
 
 const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
 /** Keys whose objects are merged field by field across layers; every other key is replaced as a whole. */
-const DEEP_KEYS = ['fixLoop', 'mergeGuard', 'agentContainer'];
+const DEEP_KEYS = ['fixLoop', 'mergeGuard', 'agentContainer', 'autoMerge'];
 
 /**
  * @param {object[]} layers  config layers in order, later wins; each may carry `oversight`

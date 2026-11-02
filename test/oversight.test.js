@@ -87,6 +87,20 @@ test('other config keys keep replacing as a whole (lsp, agents), only fixLoop an
   assert.ok(Array.isArray(cfg.agents) && cfg.agents.length >= 2);
 });
 
+test('autonomous defaults auto-merge on; the user\'s own minWinRate/dryRun/kinds still apply (deep merge)', () => {
+  assert.equal(O.presetFor('autonomous').autoMerge.enabled, true);
+  assert.equal(O.presetFor('supervised').autoMerge, undefined, 'only autonomous opts auto-merge in');
+  const cfg = loadConfig(project(null), { oversight: 'autonomous', autoMerge: { minWinRate: 0.95, dryRun: true } });
+  assert.equal(cfg.autoMerge.enabled, true);
+  assert.equal(cfg.autoMerge.minWinRate, 0.95);
+  assert.equal(cfg.autoMerge.dryRun, true);
+});
+
+test('an explicit autoMerge.enabled: false beats the autonomous level\'s default', () => {
+  const cfg = loadConfig(project(null), { oversight: 'autonomous', autoMerge: { enabled: false } });
+  assert.equal(cfg.autoMerge.enabled, false);
+});
+
 test('notification kinds follow the level', () => {
   const base = { enabled: true, focused: false };
   assert.equal(shouldNotify({ ...base, kind: 'agent-idle', kinds: O.presetFor('autonomous').notifyKinds }), false);

@@ -51,3 +51,19 @@ test('minWinRate defaults to 0.8 when the config omits it', () => {
   const r = autoMergeEligible({ guard: cleanGuard, scorecardRows: [strongRow], agent: 'Claude', kind: 'bugfix', cfg: { enabled: true } });
   assert.equal(r.eligible, true);
 });
+
+test('kinds: a kind not in the allow-list is never eligible, even with a clean guard and a strong record', () => {
+  const r = autoMergeEligible({ guard: cleanGuard, scorecardRows: [strongRow], agent: 'Claude', kind: 'bugfix', cfg: { enabled: true, kinds: ['docs', 'tests'] } });
+  assert.equal(r.eligible, false);
+  assert.match(r.reason, /off for "bugfix" tasks/);
+});
+
+test('kinds: a kind in the allow-list is unaffected', () => {
+  const r = autoMergeEligible({ guard: cleanGuard, scorecardRows: [strongRow], agent: 'Claude', kind: 'bugfix', cfg: { enabled: true, kinds: ['bugfix'] } });
+  assert.equal(r.eligible, true);
+});
+
+test('kinds: null or an empty list means every kind is allowed, same as today', () => {
+  assert.equal(autoMergeEligible({ guard: cleanGuard, scorecardRows: [strongRow], agent: 'Claude', kind: 'bugfix', cfg: { enabled: true, kinds: null } }).eligible, true);
+  assert.equal(autoMergeEligible({ guard: cleanGuard, scorecardRows: [strongRow], agent: 'Claude', kind: 'bugfix', cfg: { enabled: true, kinds: [] } }).eligible, true);
+});

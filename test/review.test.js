@@ -25,6 +25,18 @@ test('prompt = instructions + non-legacy findings + diff + new files', async () 
   assert.match(prompt, /## New file: new\.js\nexport const added = true;/);
 });
 
+test('symbolSummary, when given, gets its own section ahead of the raw diff', async () => {
+  const root = repo({ 'a.js': 'let a = 1;\n' });
+  const prompt = await buildReviewPrompt(root, { symbolSummary: 'renamed function foo → bar (a.js)' });
+  assert.match(prompt, /## Symbol changes.*\n+renamed function foo → bar \(a\.js\)/);
+  assert.ok(prompt.indexOf('## Symbol changes') < prompt.indexOf('## Diff against HEAD'));
+});
+
+test('no symbolSummary: no Symbol changes section at all', async () => {
+  const root = repo({ 'a.js': 'let a = 1;\n' });
+  assert.doesNotMatch(await buildReviewPrompt(root), /## Symbol changes/);
+});
+
 test('no changes: says so; repo without commits does not throw', async () => {
   const root = repo({ 'a.txt': 'x\n' });
   assert.match(await buildReviewPrompt(root), /\(no tracked changes\)/);

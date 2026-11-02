@@ -27,7 +27,7 @@ function loadReviewRules(root, ideRules) {
   return out;
 }
 
-async function buildReviewPrompt(root, { findings = [], maxChars = 80000, reviewRules } = {}) {
+async function buildReviewPrompt(root, { findings = [], maxChars = 80000, reviewRules, symbolSummary } = {}) {
   let diff = '';
   try { diff = await git(root, ['-c', 'core.quotepath=false', 'diff', '--no-color', '--no-ext-diff', '--relative', 'HEAD']); } catch { /* no HEAD yet */ }
 
@@ -41,6 +41,10 @@ async function buildReviewPrompt(root, { findings = [], maxChars = 80000, review
   if (real.length) {
     parts.push('## Findings already reported by the automated gates');
     parts.push(real.slice(0, 80).map((f) => `${f.file || '(project)'}${f.line ? `:${f.line}` : ''} [${f.tool}${f.rule ? ` ${f.rule}` : ''}] ${f.message}`).join('\n'));
+  }
+  if (symbolSummary) {
+    parts.push('## Symbol changes (what moved, was renamed, added or removed - from a structural diff, trust this over guessing from the line diff below)');
+    parts.push(symbolSummary);
   }
   let budget = maxChars - parts.join('\n\n').length - 200;
   parts.push('## Diff against HEAD');
@@ -63,9 +67,9 @@ async function buildReviewPrompt(root, { findings = [], maxChars = 80000, review
 }
 
 /** Pipe the prompt to the review command (stdin) and return its output. */
-async function runReview(root, { command, findings, reviewRules, signal, timeoutMs = 10 * 60 * 1000 } = {}) {
+async function runReview(root, { command, findings, reviewRules, symbolSummary, signal, timeoutMs = 10 * 60 * 1000 } = {}) {
   if (!command) return { error: 'No review command configured (Settings > Review command).' };
-  const prompt = await buildReviewPrompt(root, { findings, reviewRules });
+  const prompt = await buildReviewPrompt(root, { findings, reviewRules, symbolSummary });
   const res = await runShell(command, { cwd: root, input: prompt, timeoutMs, signal });
   if (res.cancelled) return { cancelled: true };
   if (res.timedOut) return { error: 'The review command timed out.' };

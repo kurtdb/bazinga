@@ -7,6 +7,7 @@ const path = require('node:path');
 const go = require('../src/core/guardoverrides');
 
 function tmpFile() { return path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'bz-go-')), 'guardoverrides.json'); }
+function tmpRoot() { return fs.mkdtempSync(path.join(os.tmpdir(), 'bz-go-root-')); }
 
 test('relax: one step down, never tightens', () => {
   assert.equal(go.relax('block'), 'warn');
@@ -64,4 +65,45 @@ test('dismiss: persists and is idempotent', () => {
   go.dismiss(file, 'scope');
   go.dismiss(file, 'scope');
   assert.deepEqual(go.load(file).dismissed, ['scope']);
+});
+
+test('resetCount: clears the count and un-dismisses, so it can resurface', () => {
+  const file = tmpFile();
+  go.recordOverride(file, ['scope', 'scope', 'scope']);
+  go.dismiss(file, 'scope');
+  go.resetCount(file, 'scope');
+  const store = go.load(file);
+  assert.equal(store.counts.scope, undefined);
+  assert.deepEqual(store.dismissed, []);
+});
+
+test('resetCount: leaves other rules alone', () => {
+  const file = tmpFile();
+  go.recordOverride(file, ['scope', 'summary']);
+  go.resetCount(file, 'scope');
+  assert.equal(go.load(file).counts.summary, 1);
+});
+
+test('relaxProject: writes mergeGuard into .ide/config.json, leaving other keys untouched', () => {
+  const root = tmpRoot();
+  fs.mkdirSync(path.join(root, '.ide'));
+  fs.writeFileSync(path.join(root, '.ide', 'config.json'), JSON.stringify({ agents: ['x'], mergeGuard: { tests: 'block' } }));
+  go.relaxProject(root, 'scope', 'warn');
+  const cfg = JSON.parse(fs.readFileSync(path.join(root, '.ide', 'config.json'), 'utf8'));
+  assert.deepEqual(cfg.mergeGuard, { tests: 'block', scope: 'warn' });
+  assert.deepEqual(cfg.agents, ['x']);
+});
+
+test('relaxProject: creates .ide/config.json when the project has none yet', () => {
+  const root = tmpRoot();
+  go.relaxProject(root, 'scope', 'off');
+  const cfg = JSON.parse(fs.readFileSync(path.join(root, '.ide', 'config.json'), 'utf8'));
+  assert.deepEqual(cfg.mergeGuard, { scope: 'off' });
+});
+
+test('relaxProject: throws on invalid JSON instead of clobbering it', () => {
+  const root = tmpRoot();
+  fs.mkdirSync(path.join(root, '.ide'));
+  fs.writeFileSync(path.join(root, '.ide', 'config.json'), 'not json');
+  assert.throws(() => go.relaxProject(root, 'scope', 'warn'), /not valid JSON/);
 });

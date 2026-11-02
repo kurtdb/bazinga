@@ -17,6 +17,7 @@
  */
 function autoMergeEligible({ guard, scorecardRows, agent, kind, cfg } = {}) {
   if (!cfg || !cfg.enabled) return { eligible: false, reason: 'auto-merge is off' };
+  if (Array.isArray(cfg.kinds) && cfg.kinds.length && !cfg.kinds.includes(kind)) return { eligible: false, reason: `auto-merge is off for "${kind}" tasks` };
   if (!guard || !guard.clean) return { eligible: false, reason: 'the merge guard has something to say' };
   const rec = (scorecardRows || []).find((r) => r.agent === agent && r.kind === kind);
   if (!rec || !rec.enough) return { eligible: false, reason: 'not enough history for this agent and kind of task yet' };
