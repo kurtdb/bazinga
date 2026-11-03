@@ -4028,18 +4028,31 @@
     const levelSel = el('select', { id: 'sk-level' }, el('option', { value: 'project', text: 'This project' }), el('option', { value: 'ide', text: 'All projects (IDE level)' }));
     let pending = null;
     const dropPending = () => { if (pending) { api.skills.cancel(pending.token); pending = null; } };
-    const row = (level, s) => el('div', { class: 'skill-row' },
-      el('div', { class: 'skill-main' }, el('b', { text: s.name }), s.description ? el('span', { class: 'muted', text: ` ${s.description}` }) : null,
-        el('div', { class: 'muted', text: s.source ? `from ${s.source}${s.provenance && s.provenance.commit ? ` @ ${s.provenance.commit.slice(0, 7)}` : ''}` : 'added by hand' })),
-      s.provenance && s.provenance.url ? el('button', { title: 'Fetch the source again and replace this skill when it changed', onclick: async () => {
-        setStatus(`Updating ${s.name}…`);
-        const r = await api.skills.update({ level, name: s.name });
-        setStatus(r.error ? r.error : r.unchanged ? `${s.name} is up to date.` : `${s.name} updated.`); await draw();
-      } }, ic('refresh-cw'), 'Update') : null,
-      el('button', { class: 'icon danger', title: 'Remove this skill', 'aria-label': `Remove ${s.name}`, onclick: async () => {
-        if (!window.confirm(`Remove the skill “${s.name}” (${level === 'ide' ? 'IDE level' : 'this project'})?`)) return;
-        const r = await api.skills.remove({ level, name: s.name }); if (r.error) setStatus(r.error); await draw();
-      } }, ic('trash-2')));
+    // small, reusable "visual vocabulary" for this dialog: a coloured icon swatch per source kind, and a chip for badges.
+    const skIco = (name, kind) => el('div', { class: `skill-ico src-${kind}` }, ic(name));
+    const skBadge = (text, cls, iconName, title) => el('span', { class: `chip ${cls}`, title: title || '' }, iconName ? ic(iconName) : null, text);
+    const skHead = (iconName, text) => el('div', { class: 'sk-head' }, ic(iconName), el('span', { text }));
+    const row = (level, s) => {
+      const isGit = !!(s.provenance && s.provenance.url);
+      return el('div', { class: 'skill-row' },
+        skIco(isGit ? 'git-branch' : 'folder', isGit ? 'git' : 'manual'),
+        el('div', { class: 'skill-main' },
+          el('div', { class: 'skill-title' }, el('b', { text: s.name })),
+          s.description ? el('div', { class: 'skill-desc', text: s.description }) : null,
+          el('div', { class: 'skill-badges' },
+            s.source ? skBadge(`${s.source}${s.provenance && s.provenance.commit ? ` @ ${s.provenance.commit.slice(0, 7)}` : ''}`, 'info', 'git-branch')
+              : skBadge('added by hand', 'ghost', 'folder'))),
+        el('div', { class: 'skill-actions' },
+          isGit ? el('button', { title: 'Fetch the source again and replace this skill when it changed', onclick: async () => {
+            setStatus(`Updating ${s.name}…`);
+            const r = await api.skills.update({ level, name: s.name });
+            setStatus(r.error ? r.error : r.unchanged ? `${s.name} is up to date.` : `${s.name} updated.`); await draw();
+          } }, ic('refresh-cw'), 'Update') : null,
+          el('button', { class: 'icon danger', title: 'Remove this skill', 'aria-label': `Remove ${s.name}`, onclick: async () => {
+            if (!window.confirm(`Remove the skill “${s.name}” (${level === 'ide' ? 'IDE level' : 'this project'})?`)) return;
+            const r = await api.skills.remove({ level, name: s.name }); if (r.error) setStatus(r.error); await draw();
+          } }, ic('trash-2'))));
+    };
     const draw = async () => {
       const r = await api.skills.list();
       if (r.error) { fill(listHost, el('div', { class: 'hint danger', text: r.error })); return; }
@@ -4047,18 +4060,22 @@
       const installedNames = new Set([...r.project, ...r.ide].map((x) => x.name));
       const projNames = new Set(r.project.map((x) => x.name));
       fill(listHost,
-        el('div', { class: 'agent-head', text: 'Recommended skills' }),
+        skHead('package', 'Recommended skills'),
         ...((bundled.skills || []).length ? bundled.skills.map((b) => el('div', { class: 'skill-row' },
-          el('div', { class: 'skill-main' }, el('b', { text: b.name }), b.description ? el('span', { class: 'muted', text: ` ${b.description}` }) : null,
-            el('div', { class: 'muted', text: 'bundled with Bazinga - a local copy, not a git fetch' })),
-          installedNames.has(b.name) ? el('span', { class: 'muted', text: 'Installed' }) : el('button', { class: 'primary', onclick: async () => {
-            const level = levelSel.value;
-            const res = await api.skills.installBundled({ level, name: b.name, replace: true });
-            setStatus(res.error ? res.error : `Installed ${res.installed}.`); await draw();
-          } }, ic('download'), 'Install'))) : [el('div', { class: 'muted', text: 'None.' })]),
-        el('div', { class: 'agent-head', text: `This project (${r.project.length})` }),
+          skIco('package', 'bundled'),
+          el('div', { class: 'skill-main' },
+            el('div', { class: 'skill-title' }, el('b', { text: b.name })),
+            b.description ? el('div', { class: 'skill-desc', text: b.description }) : null,
+            el('div', { class: 'skill-badges' }, skBadge('Bundled with Bazinga', 'accent', 'package', 'A local copy, not a git fetch'))),
+          el('div', { class: 'skill-actions' },
+            installedNames.has(b.name) ? skBadge('Installed', 'ok', 'check') : el('button', { class: 'primary', onclick: async () => {
+              const level = levelSel.value;
+              const res = await api.skills.installBundled({ level, name: b.name, replace: true });
+              setStatus(res.error ? res.error : `Installed ${res.installed}.`); await draw();
+            } }, ic('download'), 'Install')))) : [el('div', { class: 'muted', text: 'None.' })]),
+        skHead('folder', `This project (${r.project.length})`),
         ...(r.project.length ? r.project.map((x) => row('project', x)) : [el('div', { class: 'muted', text: 'None. Skills here are committed with the project and win over IDE-level skills of the same name.' })]),
-        el('div', { class: 'agent-head', text: `All projects, IDE level (${r.ide.length})` }),
+        skHead('folder-open', `All projects, IDE level (${r.ide.length})`),
         ...(r.ide.length ? r.ide.map((x) => row('ide', x)) : [el('div', { class: 'muted', text: 'None.' })]),
         el('div', { class: 'hint', text: `Also copied to: ${[...r.also.project, ...r.also.ide].join(' · ') || '(nowhere: set “skillsMirrors”)'}. Claude Code reads .claude/skills, Copilot reads .agents/skills; agents without skill support are pointed to the project skills through AGENTS.md.` }),
         el('div', { class: 'hint', text: `Folders: ${r.dirs.project || '(no project)'} · ${r.dirs.ide}${[...r.ide].some((x) => projNames.has(x.name)) ? ' · some IDE skills are overridden by the project' : ''}` }));
@@ -4067,11 +4084,18 @@
       pending = res;
       const checks = res.skills.map((k) => { const c = el('input', { type: 'checkbox' }); c.checked = res.skills.length === 1 || (!!want && k.name.toLowerCase() === want.toLowerCase()); c.dataset.name = k.name; return c; });
       fill(fetchHost,
-        el('div', { class: 'agent-head', text: `${res.label} @ ${res.commit.slice(0, 7)}: ${res.skills.length} skill${res.skills.length === 1 ? '' : 's'}` }),
+        skHead('git-branch', `${res.label} @ ${res.commit.slice(0, 7)}: ${res.skills.length} skill${res.skills.length === 1 ? '' : 's'}`),
         ...res.skills.map((k, i) => el('div', { class: 'skill-cand' },
-          el('label', { class: 'check' }, checks[i], el('b', { text: ` ${k.name}` }), el('span', { class: 'muted', text: ` ${k.description || ''}` })),
-          k.hasScripts ? el('div', { class: 'hint danger', text: 'Contains files other than text (scripts?). An agent may run them. Read them before you install.' }) : null,
-          el('details', null, el('summary', { text: `Preview SKILL.md · ${k.fileCount} file${k.fileCount === 1 ? '' : 's'}` }), el('pre', { class: 'detail', text: `${k.files.join('\n')}\n\n${k.preview}` })))),
+          el('label', { class: 'check skill-cand-row' },
+            checks[i],
+            skIco('file-code', 'git'),
+            el('div', { class: 'skill-main' },
+              el('div', { class: 'skill-title' }, el('b', { text: k.name })),
+              k.description ? el('div', { class: 'skill-desc', text: k.description }) : null,
+              el('div', { class: 'skill-badges' },
+                skBadge(`${k.fileCount} file${k.fileCount === 1 ? '' : 's'}`, 'ghost', 'files'),
+                k.hasScripts ? skBadge('Contains scripts', 'danger', 'triangle-alert', 'Other than text - an agent may run them. Read them before you install.') : null))),
+          el('details', null, el('summary', { text: 'Preview SKILL.md' }), el('pre', { class: 'detail', text: `${k.files.join('\n')}\n\n${k.preview}` })))),
         el('div', { class: 'actions' },
           el('button', { onclick: () => { dropPending(); fill(fetchHost); } }, ic('x'), 'Cancel'),
           el('button', { class: 'primary', onclick: async () => {
@@ -4104,17 +4128,24 @@
       if (r.error) { fill(found, el('div', { class: 'hint danger', text: r.error })); return; }
       if (!r.results.length) { fill(found, el('div', { class: 'muted', text: 'Nothing found.' })); return; }
       fill(found, ...r.results.slice(0, 12).map((s) => el('div', { class: 'skill-hit' },
-        el('div', { class: 'skill-main' }, el('b', { text: s.name }), el('span', { class: 'muted', text: `  ${s.source} · ${s.installs.toLocaleString()} installs` })),
-        s.installable ? el('button', { title: 'Download the repository, show what is in it and ask before installing', onclick: () => { src.value = s.source; doFetch(s.slug); } }, ic('eye'), 'Preview…') : el('span', { class: 'muted', title: 'Only GitHub repositories (owner/repo) can be installed here', text: 'not from GitHub' }))),
+        skIco('globe', 'web'),
+        el('div', { class: 'skill-main' },
+          el('div', { class: 'skill-title' }, el('b', { text: s.name })),
+          el('div', { class: 'skill-badges' },
+            skBadge(s.source, 'ghost'),
+            skBadge(`${s.installs.toLocaleString()} installs`, 'info', 'download'))),
+        el('div', { class: 'skill-actions' },
+          s.installable ? el('button', { class: 'primary', title: 'Download the repository, show what is in it and ask before installing', onclick: () => { src.value = s.source; doFetch(s.slug); } }, ic('eye'), 'Preview…')
+            : skBadge('not from GitHub', 'ghost', null, 'Only GitHub repositories (owner/repo) can be installed here')))),
       el('div', { class: 'hint', text: 'Anybody can publish a skill. A skill is instructions (sometimes scripts) your agent follows: read the preview before you install.' }));
     };
     q.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 350); });
     q.addEventListener('keydown', (e) => { if (e.key === 'Enter') { clearTimeout(searchTimer); runSearch(); } });
-    $('#dialog').replaceChildren(el('h3', { text: 'Agent skills' }),
+    $('#dialog').replaceChildren(el('h3', { class: 'ico-head' }, ic('package'), ' Agent skills'),
       listHost,
-      el('div', { class: 'agent-head', text: 'Find skills on the internet (skills.sh)' }),
+      skHead('globe', 'Find skills on the internet (skills.sh)'),
       el('div', { class: 'line' }, q), found,
-      el('div', { class: 'agent-head', text: 'Or add from a git repository (skills.sh style)' }),
+      skHead('git-branch', 'Or add from a git repository (skills.sh style)'),
       el('div', { class: 'line' }, src, levelSel, el('button', { onclick: doFetch }, ic('download'), 'Fetch')),
       fetchHost,
       el('div', { class: 'hint', text: 'Skills are plain folders with a SKILL.md, installed next to your agent’s own skills (setting “skillsDir”, default .claude/skills). Nothing is executed by the IDE.' }),

@@ -543,9 +543,32 @@ button.toggle.on { border-color: var(--accent); color: var(--accent); }
 .term.drop-target { outline: 2px dashed var(--accent); outline-offset: -4px; }
 .row[draggable=true] { -webkit-user-drag: element; }
 .journal { max-height: 55vh; overflow: auto; white-space: pre-wrap; background: var(--bg-3); padding: 8px 10px; border-radius: 6px; font-family: var(--font-mono); font-size: 12px; }
-.skill-row { display: flex; align-items: center; gap: 6px; padding: 4px 0; border-bottom: 1px solid var(--line); }
+/* ---- Agent skills dialog: card-based layout (recommended / installed / search / fetch candidates) ---- */
+.skill-row, .skill-cand, .skill-hit { display: flex; align-items: flex-start; gap: 10px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg-3); margin-bottom: 6px; }
+.skill-row:hover, .skill-hit:hover { border-color: var(--accent-line); }
 .skill-main { flex: 1; min-width: 0; }
-.skill-cand { padding: 6px 0; border-bottom: 1px solid var(--line); }
+.skill-cand { flex-direction: column; align-items: stretch; }
+.skill-cand-row { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+.skill-cand pre.detail { margin: 6px 0 0 42px; }
+.skill-ico { width: 30px; height: 30px; border-radius: 8px; flex: none; display: flex; align-items: center; justify-content: center; }
+.skill-ico .i { width: 16px; height: 16px; }
+.skill-ico.src-bundled { background: var(--accent-bg); color: var(--accent); }
+.skill-ico.src-git { background: var(--ok-bg); color: var(--ok); }
+.skill-ico.src-web { background: var(--info-bg); color: var(--info); }
+.skill-ico.src-manual { background: var(--bg); color: var(--muted); border: 1px solid var(--line); }
+.skill-title { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.skill-desc { color: var(--muted); font-size: 12px; margin-top: 1px; }
+.skill-badges { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 6px; }
+.skill-actions { flex: none; display: flex; gap: 4px; align-items: center; }
+.sk-head { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; color: var(--fg); margin: 16px 0 6px; }
+.sk-head:first-child { margin-top: 0; }
+.sk-head .i { color: var(--accent); }
+.dialog h3.ico-head { display: flex; align-items: center; gap: 8px; }
+.chip.accent { color: var(--accent); border-color: var(--accent); background: var(--accent-bg); }
+.chip.ok { color: var(--ok); border-color: var(--ok); background: var(--ok-bg); }
+.chip.info { color: var(--info); border-color: var(--info); background: var(--info-bg); }
+.chip.danger { color: var(--err); border-color: var(--err); background: var(--err-bg); }
+.chip.ghost { color: var(--muted); background: transparent; }
 .wf { padding: 6px 8px; margin: 4px 0; border: 1px solid var(--line); border-radius: 6px; background: var(--bg-2); }
 .wf-step { display: flex; align-items: center; gap: 6px; padding: 2px 0; flex-wrap: wrap; }
 .wf-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
@@ -635,8 +658,6 @@ input.invalid, textarea.invalid { border-color: var(--err); }
 .wfs-wait { color: var(--muted); }
 
 .skills-found { margin: 4px 0 8px; }
-.skill-hit { display: flex; gap: 8px; align-items: center; justify-content: space-between; padding: 3px 0; }
-.skill-hit .skill-main { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
 /* Fleet panel */
 .fleet { display: flex; flex-direction: column; gap: 6px; padding: 0 8px 8px; }
