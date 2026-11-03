@@ -20,6 +20,25 @@ function unmetRequirement(check, root) {
   const files = toArray(check.requiresFile);
   const missing = files.filter((f) => !fs.existsSync(path.join(root, f)));
   if (missing.length) return `missing ${missing.join(', ')}`;
+  const anyFiles = toArray(check.requiresFileAny);
+  if (anyFiles.length && !anyFiles.some((f) => fs.existsSync(path.join(root, f)))) {
+    return `missing one of ${anyFiles.join(', ')}`;
+  }
+  return unmetContentRequirement(check, root);
+}
+
+/** check.requiresFileContains: { file | anyFile, pattern, note? } - the first existing file must match pattern (case-insensitive). */
+function unmetContentRequirement(check, root) {
+  const req = check.requiresFileContains;
+  if (!req || !req.pattern) return null;
+  const candidates = toArray(req.file || req.anyFile);
+  const file = candidates.find((f) => fs.existsSync(path.join(root, f)));
+  if (!file) return req.note || `missing ${candidates.join(' or ')}`;
+  let text;
+  try { text = fs.readFileSync(path.join(root, file), 'utf8'); } catch { return req.note || `could not read ${file}`; }
+  let re;
+  try { re = new RegExp(req.pattern, 'i'); } catch { return null; }
+  if (!re.test(text)) return req.note || `${file} does not match the required configuration`;
   return null;
 }
 
@@ -53,6 +72,18 @@ function tail(result, lines = 40, maxChars = 4000) {
 function commandNotFound(result) {
   return result.code === 127 || /is not recognized as an internal or external command/i.test(result.stderr)
     || (/command not found|not found$/im.test(result.stderr) && result.code !== 0 && !result.stdout.trim());
+}
+
+/** Gradle task not found means the plugin isn't applied in this project's build script - not a real failure. */
+function gradleTaskNotFound(result) {
+  return /Task '[^']+' not found in (root project|project ':)/i.test(result.stderr);
+}
+
+/** Prefer a project's own wrapper (pins its Gradle version) over a global `gradle` install. */
+function gradleBinFor(root) {
+  const wrapper = process.platform === 'win32' ? 'gradlew.bat' : 'gradlew';
+  if (fs.existsSync(path.join(root, wrapper))) return process.platform === 'win32' ? 'gradlew.bat' : './gradlew';
+  return 'gradle';
 }
 
 /**
@@ -102,6 +133,7 @@ async function runCheck(check, ctx) {
     const m = ctx.mavenArgs();
     runTemplate = runTemplate.replace('{modules-only}', m.modulesOnly).replace('{modules}', m.modules);
   }
+  if (runTemplate.includes('{gradle}')) runTemplate = runTemplate.replace('{gradle}', ctx.gradleBin());
 
   const cwd = check.cwd ? path.resolve(ctx.root, check.cwd) : ctx.root;
   const usesFiles = check.scope !== 'project' && runTemplate.includes('{files}');
@@ -145,6 +177,7 @@ async function runCheck(check, ctx) {
       break;
     }
     if (result.code !== 0 && commandNotFound(result)) return skipped('command not found');
+    if (result.code !== 0 && gradleTaskNotFound(result)) return skipped('Gradle task not configured for this project (plugin not applied in build.gradle)');
 
     const text = TEXT_PARSERS.has(check.parser) ? `${result.stdout}\n${result.stderr}` : (result.stdout.trim() ? result.stdout : result.stderr);
     let parsed = [];
@@ -232,12 +265,14 @@ async function runChecks(root, opts = {}) {
 
   let allFilesCache;
   let mavenCache;
+  let gradleBinCache;
   const ctxBase = {
     root,
     files,
     signal,
     allFiles: () => (allFilesCache || (allFilesCache = listAllFiles(root, 100000))),
     mavenArgs: () => (mavenCache || (mavenCache = mavenModuleArgs(root, files))),
+    gradleBin: () => (gradleBinCache || (gradleBinCache = gradleBinFor(root))),
   };
 
   const runs = [];
@@ -292,4 +327,4 @@ function formatFindings(result, { limit = 60, includeLegacy = false } = {}) {
   return lines.join('\n');
 }
 
-module.exports = { runChecks, runCheck, formatFindings, mavenModuleArgs };
+module.exports = { runChecks, runCheck, formatFindings, mavenModuleArgs, gradleBinFor };

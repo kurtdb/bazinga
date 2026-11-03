@@ -29,6 +29,7 @@ test('shell terminal: quoted for the shell in use', () => {
 
 test('control characters in a file name cannot inject keystrokes; empty and oversized lists are handled', () => {
   const out = formatDropPaths(['evil\r\nrm -rf x\u001b[201~.txt'], { agent: true });
+  // eslint-disable-next-line no-control-regex
   assert.ok(!/[\u0000-\u001f]/.test(out.trimEnd()));
   assert.equal(formatDropPaths([], {}), '');
   assert.equal(formatDropPaths(null, {}), '');

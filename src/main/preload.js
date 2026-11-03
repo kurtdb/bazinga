@@ -180,6 +180,8 @@ contextBridge.exposeInMainWorld('api', {
     remove: (opts) => invoke('skills:remove', opts),
     update: (opts) => invoke('skills:update', opts),
     sync: () => invoke('skills:sync'),
+    listBundled: () => invoke('skills:listBundled'),
+    installBundled: (opts) => invoke('skills:installBundled', opts),
   },
   doctor: () => invoke('doctor:run'),
   springMap: { overview: () => invoke('spring:overview') },

@@ -167,6 +167,76 @@ function parseDependabot(json) {
   return { ...c, total, text: total ? `${total} open Dependabot alert${total === 1 ? '' : 's'} (${c.critical} critical, ${c.high} high).` : 'No open Dependabot alerts.' };
 }
 
+// ------------------------------------------------------------ Maven dependencies (pom.xml) + OSV.dev vulnerability lookup
+/** Dependencies declared directly in pom.xml - not dependencyManagement, which only sets defaults/bounds for a
+ *  parent pom and is not itself "what this project depends on". `${...}` property references are resolved
+ *  against <properties> when possible (e.g. ${spring.version}); left as the raw literal otherwise. */
+function parseMavenDeps(xml) {
+  const text = String(xml || '').replace(/<dependencyManagement>[\s\S]*?<\/dependencyManagement>/g, '');
+  const props = {};
+  const propsBlock = /<properties>([\s\S]*?)<\/properties>/.exec(text);
+  if (propsBlock) for (const m of propsBlock[1].matchAll(/<([\w.-]+)>([^<]*)<\/\1>/g)) props[m[1]] = m[2].trim();
+  const resolve = (v) => { const m = /^\$\{([\w.-]+)\}$/.exec(String(v || '').trim()); return m ? (props[m[1]] || v) : v; };
+  const out = [];
+  for (const d of text.matchAll(/<dependency>([\s\S]*?)<\/dependency>/g)) {
+    const body = d[1];
+    const field = (name) => { const m = new RegExp(`<${name}>([^<]*)<\\/${name}>`).exec(body); return m ? m[1].trim() : ''; };
+    const groupId = field('groupId'); const artifactId = field('artifactId');
+    if (!groupId || !artifactId) continue;
+    out.push({ groupId, artifactId, version: resolve(field('version')), scope: field('scope') || 'compile', name: `${groupId}:${artifactId}` });
+  }
+  return out;
+}
+/** Dependencies declared in build.gradle/build.gradle.kts as a single GAV coordinate string - by far the
+ *  dominant real-world form, in both DSLs: `implementation 'group:artifact:version'` (Groovy, single or double
+ *  quotes) or `implementation("group:artifact:version")` (Kotlin). Map-style dependencies (group:/name:/version:)
+ *  and version catalogs (libs.versions.toml) are not parsed - scoped out the same way Maven's own
+ *  dependencyManagement/unresolved-${property} gaps already are. */
+function parseGradleDeps(text) {
+  const configs = 'implementation|api|compileOnly|runtimeOnly|testImplementation|testRuntimeOnly|compile|testCompile';
+  const re = new RegExp(`^\\s*(${configs})\\s*[(]?\\s*['"]([^'"]+)['"]`, 'gm');
+  const out = [];
+  for (const m of String(text || '').matchAll(re)) {
+    const [groupId, artifactId, ...rest] = m[2].split(':');
+    if (!groupId || !artifactId) continue;
+    out.push({ groupId, artifactId, version: rest.join(':') || '', scope: m[1], name: `${groupId}:${artifactId}` });
+  }
+  return out;
+}
+/** Request body for OSV.dev's free, keyless batch vulnerability lookup (POST /v1/querybatch). A dependency with
+ *  no resolved version (an unresolvable ${property}, or none declared - inherited from a parent/BOM) is skipped;
+ *  OSV needs an exact version to match against. */
+function osvBatchBody(deps) {
+  return { queries: deps.filter((d) => d.version && !/^\$\{/.test(d.version)).map((d) => ({ package: { name: d.name, ecosystem: 'Maven' }, version: d.version })) };
+}
+/** Pairs each queried dependency (same filter/order as osvBatchBody) with the vuln ids OSV found for it.
+ *  The batch endpoint only returns id + modified-date for speed; severity needs a separate GET /v1/vulns/{id}. */
+function parseOsvBatch(json, deps) {
+  const queried = deps.filter((d) => d.version && !/^\$\{/.test(d.version));
+  const results = (json && json.results) || [];
+  const out = [];
+  queried.forEach((d, i) => { for (const v of (results[i] && results[i].vulns) || []) out.push({ dep: d, id: v.id }); });
+  return out;
+}
+/** One OSV vuln record (GET /v1/vulns/{id}) -> a severity bucket. OSV normalizes almost nothing across sources;
+ *  database_specific.severity (GHSA's own bucket) is the only field reliably in that shape, so anything else
+ *  (a bare CVSS vector with no bucket, or a source that omits severity) is reported as 'unknown' rather than guessed. */
+function parseOsvSeverity(json) {
+  const s = String((json && json.database_specific && json.database_specific.severity) || '').toLowerCase();
+  return ['critical', 'high', 'moderate', 'low'].includes(s) ? s : 'unknown';
+}
+/** Tally {dep, id, severity} hits into the same shape parseNpmAudit/parseDependabot already use. `label`
+ *  names the build tool in the text (Maven dependencies / Gradle dependencies) - OSV.dev's own ecosystem
+ *  for both is "Maven" regardless (it's about the registry, not the build tool), so osvBatchBody/
+ *  parseOsvBatch/parseOsvSeverity need no label of their own. */
+function summarizeOsv(hits, label = 'Maven') {
+  const c = { critical: 0, high: 0, moderate: 0, low: 0, unknown: 0 };
+  for (const h of hits) c[h.severity in c ? h.severity : 'unknown']++;
+  const total = hits.length;
+  const known = `${c.critical} critical, ${c.high} high, ${c.moderate} moderate, ${c.low} low${c.unknown ? `, ${c.unknown} unrated` : ''}`;
+  return { ...c, total, hits, text: total ? `${total} known problem${total === 1 ? '' : 's'} in ${label} dependencies (OSV.dev: ${known}).` : `No known problems in ${label} dependencies (OSV.dev).` };
+}
+
 // ------------------------------------------------------------ Spring Actuator
 function parseActuatorHealth(json) {
   if (!json || typeof json.status !== 'string') return null;
@@ -188,4 +258,7 @@ function formatMetric(kind, v) {
   return String(Math.round(v));
 }
 
-module.exports = { snapshot, statusLineText, describeLimits, totals, timeByKind, modelHealth, parseCoverage, parseLcov, parseJacoco, parseCobertura, coverageFor, COVERAGE_FILES, sonarUrl, parseSonarGate, parseNpmAudit, parseDependabot, parseActuatorHealth, metricValue, formatMetric, METRICS };
+module.exports = {
+  snapshot, statusLineText, describeLimits, totals, timeByKind, modelHealth, parseCoverage, parseLcov, parseJacoco, parseCobertura, coverageFor, COVERAGE_FILES,
+  sonarUrl, parseSonarGate, parseNpmAudit, parseDependabot, parseMavenDeps, parseGradleDeps, osvBatchBody, parseOsvBatch, parseOsvSeverity, summarizeOsv, parseActuatorHealth, metricValue, formatMetric, METRICS,
+};

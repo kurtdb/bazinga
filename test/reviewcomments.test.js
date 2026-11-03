@@ -28,6 +28,7 @@ test('empty, file-less and text-less comments are dropped; nothing to send gives
 test('control characters are stripped (they would end up in a terminal), lengths and counts are capped, backslashes normalised', () => {
   const n = normalize([{ file: 'src\\a.js', line: 0, text: 'ok\u001b[31mbad\u0007\u0000', code: 'x'.repeat(500) }]);
   assert.strictEqual(n[0].file, 'src/a.js'); assert.strictEqual(n[0].line, 1);
+  // eslint-disable-next-line no-control-regex
   assert.ok(!/[\u0000-\u0008\u001b\u007f]/.test(n[0].text));
   assert.strictEqual(n[0].code.length, 200);
   const many = Array.from({ length: 100 }, (_, i) => ({ file: 'a', line: i + 1, text: 't' }));

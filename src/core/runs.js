@@ -21,7 +21,6 @@ const slugify = (s) => String(s || 'run').toLowerCase().replace(/[^a-z0-9]+/g, '
 const trim = (s) => String(s).trim();
 const errText = (err) => String((err && (err.stderr || err.message)) || err).trim();
 
-async function repoTop(root) { return path.resolve(trim(await git(root, ['rev-parse', '--show-toplevel']))); }
 async function prefixOf(root) { return toPosix(trim(await git(root, ['rev-parse', '--show-prefix']))).replace(/\/+$/, ''); }
 
 /** [{ path, branch, head }] from `git worktree list --porcelain`; the first entry is the main worktree. */

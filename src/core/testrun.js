@@ -3,6 +3,7 @@
  * Turns the output of a test run (node --test, pytest, vitest, jest, Maven, Gradle, go test, cargo test, dotnet test) into one honest verdict.
  * The important rule: "exit code 0 but zero tests ran" is NOT a pass, because that is what a mistyped name filter looks like.
  */
+// eslint-disable-next-line no-control-regex
 const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
 const strip = (s) => String(s || '').replace(ANSI, '');
 const num = (m, i = 1) => (m ? Number(m[i]) : 0);

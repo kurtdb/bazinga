@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { buildReviewPrompt, runReview } = require('../src/core/review');
-const { repo, write, sh } = require('./helpers');
+const { repo, write } = require('./helpers');
 
 const node = (code) => `"${process.execPath}" -e "${code}"`;
 

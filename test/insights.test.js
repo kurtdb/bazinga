@@ -97,6 +97,86 @@ test('dependency problems: npm audit and Dependabot', () => {
   assert.equal(d.total, 2);
   assert.equal(I.parseDependabot({ message: 'Not Found' }), null);
 });
+test('Maven dependencies: parsed from pom.xml, dependencyManagement ignored, ${property} versions resolved', () => {
+  const pom = `<project>
+    <properties><spring.version>5.3.9</spring.version></properties>
+    <dependencyManagement><dependencies><dependency><groupId>should</groupId><artifactId>be-ignored</artifactId><version>9.9.9</version></dependency></dependencies></dependencyManagement>
+    <dependencies>
+      <dependency><groupId>org.springframework</groupId><artifactId>spring-core</artifactId><version>\${spring.version}</version></dependency>
+      <dependency><groupId>commons-io</groupId><artifactId>commons-io</artifactId><version>2.11.0</version><scope>test</scope></dependency>
+      <dependency><groupId>no.version</groupId><artifactId>inherited</artifactId></dependency>
+    </dependencies>
+  </project>`;
+  const deps = I.parseMavenDeps(pom);
+  assert.equal(deps.length, 3);
+  assert.deepEqual(deps[0], { groupId: 'org.springframework', artifactId: 'spring-core', version: '5.3.9', scope: 'compile', name: 'org.springframework:spring-core' });
+  assert.equal(deps[1].scope, 'test');
+  assert.equal(deps[2].version, '');
+  assert.ok(!deps.some((d) => d.artifactId === 'be-ignored'));
+});
+
+test('Gradle dependencies: single-GAV-coordinate form, Groovy and Kotlin DSL, legacy compile/testCompile', () => {
+  const groovy = `
+    dependencies {
+      implementation 'org.springframework:spring-core:5.3.9'
+      implementation "com.fasterxml.jackson.core:jackson-databind:2.13.0"
+      testImplementation 'junit:junit:4.13.2'
+      compile 'old.style:thing:1.0'
+      testCompile 'old.style:test-thing:1.0'
+    }`;
+  const deps = I.parseGradleDeps(groovy);
+  assert.equal(deps.length, 5);
+  assert.deepEqual(deps[0], { groupId: 'org.springframework', artifactId: 'spring-core', version: '5.3.9', scope: 'implementation', name: 'org.springframework:spring-core' });
+  assert.equal(deps[2].scope, 'testImplementation');
+  assert.equal(deps[3].scope, 'compile');
+  assert.equal(deps[4].scope, 'testCompile');
+
+  const kotlin = `
+    dependencies {
+      implementation("org.springframework:spring-core:5.3.9")
+      testImplementation("junit:junit:4.13.2")
+    }`;
+  const kdeps = I.parseGradleDeps(kotlin);
+  assert.equal(kdeps.length, 2);
+  assert.deepEqual(kdeps[0], { groupId: 'org.springframework', artifactId: 'spring-core', version: '5.3.9', scope: 'implementation', name: 'org.springframework:spring-core' });
+  assert.equal(kdeps[1].scope, 'testImplementation');
+
+  assert.equal(I.parseGradleDeps('').length, 0);
+  assert.equal(I.parseGradleDeps('// no dependencies here').length, 0);
+});
+
+test('summarizeOsv: label defaults to Maven, Gradle call sites pass their own label', () => {
+  const hit = { dep: { name: 'a:x' }, id: 'GHSA-1', severity: 'high' };
+  assert.match(I.summarizeOsv([hit]).text, /known problems? in Maven dependencies/);
+  assert.match(I.summarizeOsv([hit], 'Gradle').text, /known problems? in Gradle dependencies/);
+  assert.match(I.summarizeOsv([], 'Gradle').text, /No known problems in Gradle dependencies/);
+});
+
+test('OSV.dev batch lookup: deps with no resolvable version are skipped, results pair back to the right dep, severity is bucketed', () => {
+  const deps = [
+    { groupId: 'a', artifactId: 'x', version: '1.0.0', name: 'a:x' },
+    { groupId: 'b', artifactId: 'y', version: '${unresolved}', name: 'b:y' },
+    { groupId: 'c', artifactId: 'z', version: '2.0.0', name: 'c:z' },
+  ];
+  const body = I.osvBatchBody(deps);
+  assert.deepEqual(body.queries, [{ package: { name: 'a:x', ecosystem: 'Maven' }, version: '1.0.0' }, { package: { name: 'c:z', ecosystem: 'Maven' }, version: '2.0.0' }]);
+
+  const hits = I.parseOsvBatch({ results: [{ vulns: [{ id: 'GHSA-1' }] }, { vulns: [] }] }, deps);
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].dep.name, 'a:x');
+  assert.equal(hits[0].id, 'GHSA-1');
+  assert.equal(I.parseOsvBatch({ results: [] }, deps).length, 0);
+
+  assert.equal(I.parseOsvSeverity({ database_specific: { severity: 'HIGH' } }), 'high');
+  assert.equal(I.parseOsvSeverity({ database_specific: { severity: 'made-up' } }), 'unknown');
+  assert.equal(I.parseOsvSeverity({}), 'unknown');
+
+  const s = I.summarizeOsv([{ dep: deps[0], id: 'GHSA-1', severity: 'high' }, { dep: deps[2], id: 'GHSA-2', severity: 'unknown' }]);
+  assert.equal(s.total, 2); assert.equal(s.high, 1); assert.equal(s.unknown, 1);
+  assert.match(s.text, /2 known problems in Maven dependencies \(OSV\.dev: 0 critical, 1 high, 0 moderate, 0 low, 1 unrated\)\./);
+  assert.match(I.summarizeOsv([]).text, /No known problems/);
+});
+
 test('Actuator health and metrics', () => {
   const h = I.parseActuatorHealth({ status: 'DOWN', components: { db: { status: 'DOWN' }, ping: { status: 'UP' } } });
   assert.equal(h.up, false);

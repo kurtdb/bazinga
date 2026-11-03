@@ -18,6 +18,7 @@ test('parse: most installed first, nameless dropped, only owner/repo sources are
   assert.deepStrictEqual(r.map((s) => s.installable), [true, true, false, false]);
   assert.strictEqual(r[0].slug, 'react-tips'); assert.strictEqual(r[0].url, 'https://skills.sh/a/b/react-tips');
   assert.strictEqual(r[3].installs, 0);
+  // eslint-disable-next-line no-control-regex
   assert.ok(!/[\u0000-\u001f]/.test(r[3].name));
 });
 

@@ -7,6 +7,7 @@ const MAX_COMMENTS = 40;
 const MAX_TEXT = 2000;
 const MAX_CODE = 200;
 
+// eslint-disable-next-line no-control-regex
 const clean = (s, max) => String(s || '').replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').trim().slice(0, max);
 
 /** Normalise and drop unusable comments (no file, no text); order by file then line. */

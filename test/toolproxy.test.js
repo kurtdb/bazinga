@@ -323,7 +323,7 @@ test('proxy: a plain answer is relayed as it comes, and with lean off the reques
 });
 
 test('proxy: a non-streaming request is repaired too, and other paths are passed through untouched', async () => {
-  const up = await fakeOllama((req, res, body) => {
+  const up = await fakeOllama((req, res) => {
     if (req.url.startsWith('/v1/messages/count_tokens')) { res.writeHead(404, { 'content-type': 'application/json' }); res.end('{"error":"nope"}'); return; }
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ id: 'm', type: 'message', role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: '{"name":"Bash","arguments":{"cmd":"ls"}}' }] }));

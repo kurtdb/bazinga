@@ -61,7 +61,7 @@ test('prcomment.post (Azure): adds a thread the first time, updates the same com
   const second = await prc.post(res([]), { env, request: async (m, u, t, k, b) => { calls.push([m, u, b]); return m === 'GET' ? { value: [{ id: 5, comments: [{ id: 1, content: `${prc.MARK} old` }] }] } : {}; } });
   assert.deepEqual([second.posted, second.updated], [true, true]);
   assert.ok(calls.some(([m, u]) => m === 'PATCH' && /threads\/5\/comments\/1/.test(u)));
-  assert.ok(calls.some(([m, u, b]) => m === 'PATCH' && b && b.status === 'closed'), 'a clean result closes the thread');
+  assert.ok(calls.some(([m, , b]) => m === 'PATCH' && b && b.status === 'closed'), 'a clean result closes the thread');
 });
 
 test('prcomment.post (GitHub): updates the existing comment, a failing request is reported not thrown', async () => {

@@ -106,3 +106,43 @@ test('garbage input never throws', () => {
     assert.deepEqual(p[name](''), []);
   }
 });
+
+test('reportParsers.pmd', () => {
+  const xml = '<pmd><file name="/p/A.java"><violation beginline="3" begincolumn="1" priority="3" rule="UnusedLocalVariable">Avoid unused local variables such as \'x\'.</violation></file></pmd>';
+  const f = p.reportParsers.pmd(xml);
+  assert.equal(f.length, 1);
+  assert.deepEqual([f[0].file, f[0].line, f[0].column, f[0].severity, f[0].rule], ['/p/A.java', 3, 1, 'warning', 'UnusedLocalVariable']);
+});
+
+test('reportParsers.checkstyle', () => {
+  const xml = '<checkstyle><file name="/p/A.java"><error line="10" column="5" severity="error" message="Missing a Javadoc comment." source="com.puppycrawl.tools.checkstyle.checks.javadoc.JavadocMethodCheck"/></file></checkstyle>';
+  const f = p.reportParsers.checkstyle(xml);
+  assert.equal(f.length, 1);
+  assert.deepEqual([f[0].file, f[0].line, f[0].column, f[0].severity, f[0].rule], ['/p/A.java', 10, 5, 'error', 'JavadocMethod']);
+});
+
+test('reportParsers.checkstyle skips severity="ignore"', () => {
+  const xml = '<checkstyle><file name="/p/A.java"><error line="1" severity="ignore" message="not real" source="x.YCheck"/></file></checkstyle>';
+  assert.deepEqual(p.reportParsers.checkstyle(xml), []);
+});
+
+test('reportParsers.spotbugs', () => {
+  const ctx = { files: () => ['/p/src/main/java/com/acme/Main.java'] };
+  const xml = '<BugCollection><BugInstance type="ES_COMPARING_STRINGS_WITH_EQ" priority="2"><LongMessage>Comparison of String objects using == in com.acme.Main.main(String[])</LongMessage><SourceLine classname="com.acme.Main" sourcepath="com/acme/Main.java" start="6" primary="true"/></BugInstance></BugCollection>';
+  const f = p.reportParsers.spotbugs(xml, ctx);
+  assert.equal(f.length, 1);
+  assert.deepEqual([f[0].file, f[0].line, f[0].severity, f[0].rule], ['/p/src/main/java/com/acme/Main.java', 6, 'warning', 'ES_COMPARING_STRINGS_WITH_EQ']);
+});
+
+test('reportParsers.junit tags an ArchUnit violation distinctly from an ordinary test failure', () => {
+  const ctx = { files: () => [] };
+  const archXml = '<testsuite><testcase classname="com.acme.ArchTest" name="layering"><failure message="Architecture Violation [Priority: MEDIUM] - Rule \'...\' was violated (1 times)">Architecture Violation [Priority: MEDIUM] - Rule \'...\' was violated (1 times):\nClass ... accesses ...</failure></testcase></testsuite>';
+  const archFindings = p.reportParsers.junit(archXml, ctx);
+  assert.equal(archFindings.length, 1);
+  assert.equal(archFindings[0].rule, 'architecture-violation');
+
+  const normalXml = '<testsuite><testcase classname="com.acme.FooTest" name="bar"><failure message="expected true, got false">expected true, got false</failure></testcase></testsuite>';
+  const normalFindings = p.reportParsers.junit(normalXml, ctx);
+  assert.equal(normalFindings.length, 1);
+  assert.equal(normalFindings[0].rule, 'test-failure');
+});

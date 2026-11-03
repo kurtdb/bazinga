@@ -7,6 +7,7 @@
  */
 const BASE = 'https://skills.sh';
 const REPO_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/;
+// eslint-disable-next-line no-control-regex
 const clean = (s, n = 120) => String(s == null ? '' : s).replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, n);
 
 /** API body -> [{ name, slug, source, installs, installable, url }], most installed first. Entries without a name are dropped. */

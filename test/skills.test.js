@@ -108,3 +108,14 @@ test('skills: installs go to the primary folder and every mirror; remove and syn
   assert.deepStrictEqual(sk.syncMirrors(targets), [], 'second sync has nothing to do');
   assert.throws(() => sk.levelDirs('project', { root, home: tmp, mirrors: ['../outside'] }), /relative path inside/);
 });
+
+test('installBundled: installs a skill from a plain (non-git) bundled directory with no provenance url, and rejects an unknown name', () => {
+  const bundledRoot = repo({ 'clean-code/SKILL.md': '---\nname: Clean Code\ndescription: Uncle Bob mode\n---\nBody.' });
+  const target = path.join(tmpdir(), '.claude', 'skills');
+  const res = sk.installBundled(bundledRoot, 'clean-code', [target]);
+  assert.strictEqual(res.name, 'clean-code');
+  const list = sk.listInstalled(target);
+  assert.strictEqual(list.length, 1);
+  assert.strictEqual(list[0].provenance.url, undefined);
+  assert.throws(() => sk.installBundled(bundledRoot, 'does-not-exist', [target]), /not found among the bundled skills/);
+});

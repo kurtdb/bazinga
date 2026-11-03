@@ -17,7 +17,11 @@ function write(root, rel, text) { fs.mkdirSync(path.dirname(path.join(root, rel)
 
 /** A repo with one committed file, one modified, one untracked and one deleted. */
 function makeRepo() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bazinga-'));
+  // realpath, matching main.js's setRoot: on macOS os.tmpdir() is under a symlink (/var -> /private/var), and
+  // tools spawned with cwd: root report their findings' file paths already resolved - without this, onlyChangedFiles
+  // gates would silently find 0 matches here (path.relative(root, resolvedFile) produces garbage, not a real bug
+  // in production since setRoot already realpaths, but it made this fixture under-test what it looks like it tests).
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'bazinga-')));
   git(root, 'init', '-q');
   write(root, 'keep.py', 'print("keep")\n');
   write(root, 'edit.py', 'print("v1")\n');
@@ -227,7 +231,7 @@ test('every built-in gate is well-formed: known parser, compilable regex pattern
     assert.ok(Array.isArray(check.match) && check.match.length, `${check.name}: no match patterns`);
     if (check.native) continue; // runs in-process, nothing external to be missing
     assert.ok(check.run, `${check.name}: no run command`);
-    assert.ok(check.requiresBin || check.requiresFile, `${check.name}: no requiresBin/requiresFile - will throw instead of skip when its tool is absent`);
+    assert.ok(check.requiresBin || check.requiresFile || check.requiresFileAny, `${check.name}: no requiresBin/requiresFile/requiresFileAny - will throw instead of skip when its tool is absent`);
     const parserName = check.parser || 'exitcode';
     assert.ok(typeof parsers[parserName] === 'function', `${check.name}: unknown parser "${parserName}"`);
     if (parserName === 'regex') {
@@ -237,7 +241,7 @@ test('every built-in gate is well-formed: known parser, compilable regex pattern
   }
 });
 
-test('the Go, Rust and .NET default gates run end to end (against a real go.mod/Cargo.toml/.csproj fixture) without throwing, whatever happens to be installed on this machine', async () => {
+test('the Go, Rust, .NET, Java/Maven and Java/Gradle default gates run end to end (against a real go.mod/Cargo.toml/.csproj/pom.xml/build.gradle fixture) without throwing, whatever happens to be installed on this machine', async () => {
   const root = makeRepo();
   write(root, 'go.mod', 'module example\n\ngo 1.21\n');
   write(root, 'main.go', 'package main\n\nfunc main() {}\n');
@@ -245,16 +249,30 @@ test('the Go, Rust and .NET default gates run end to end (against a real go.mod/
   write(root, 'src/main.rs', 'fn main() {}\n');
   write(root, 'example.csproj', '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>\n');
   write(root, 'Program.cs', 'class Program { static void Main() { } }\n');
+  write(root, 'pom.xml', '<project><modelVersion>4.0.0</modelVersion><groupId>example</groupId><artifactId>example</artifactId><version>1.0</version><properties><maven.compiler.source>11</maven.compiler.source><maven.compiler.target>11</maven.compiler.target></properties></project>\n');
+  write(root, 'src/main/java/Main.java', 'public class Main {\n  public static void main(String[] args) {\n    System.out.println("v1");\n  }\n}\n');
+  // The Gradle gates share the same conventional src/main/java source tree as the Maven fixture above - both
+  // builds point at the same real empty-catch-block violation, so this isn't a second source fixture.
+  write(root, 'build.gradle', "plugins {\n  id 'java'\n  id 'pmd'\n  id 'checkstyle'\n  id 'com.github.spotbugs' version '6.4.4'\n}\nrepositories { mavenCentral() }\nspotbugsMain {\n  reports {\n    xml.required = true\n  }\n}\n");
+  write(root, 'settings.gradle', "rootProject.name = 'example'\n");
+  write(root, 'config/checkstyle/checkstyle.xml', '<!DOCTYPE module PUBLIC "-//Checkstyle//DTD Checkstyle Configuration 1.3//EN" "https://checkstyle.org/dtds/configuration_1_3.dtd">\n<module name="Checker"><module name="TreeWalker"><module name="EmptyCatchBlock"/></module></module>\n');
   git(root, 'add', '.');
   git(root, 'commit', '-q', '-m', 'lang fixture');
-  // touch each so changedFiles() (runChecks' default scope) actually sees them
+  // touch each so changedFiles() (runChecks' default scope) actually sees them - and, for Main.java, with an
+  // empty catch block, so PMD's real default ruleset (EmptyCatchBlock) actually has something to find for
+  // onlyChangedFiles: true (an unused local variable, tried first, isn't in PMD's actual default ruleset)
   write(root, 'main.go', 'package main\n\nfunc main() { println(1) }\n');
   write(root, 'src/main.rs', 'fn main() { println!("{}", 1); }\n');
   write(root, 'Program.cs', 'class Program { static void Main() { println(1); } }\n');
+  write(root, 'src/main/java/Main.java', 'public class Main {\n  public static void main(String[] args) {\n    try {\n      System.out.println("v2");\n    } catch (Exception e) {\n    }\n  }\n}\n');
 
   const res = await runChecks(root, { tier: 'all' });
   const by = Object.fromEntries(res.runs.map((r) => [r.name, r]));
-  for (const name of ['Go vet', 'Go build', 'Go test', 'Cargo check', 'Cargo clippy', 'Cargo test', '.NET build', '.NET test']) {
+  for (const name of [
+    'Go vet', 'Go build', 'Go test', 'Cargo check', 'Cargo clippy', 'Cargo test', '.NET build', '.NET test',
+    'Maven compile', 'Maven test', 'PMD', 'Checkstyle', 'SpotBugs',
+    'Gradle compile', 'Gradle test', 'Gradle PMD', 'Gradle Checkstyle', 'Gradle SpotBugs',
+  ]) {
     assert.ok(by[name], `${name} did not run at all`);
     assert.ok(['skipped', 'passed', 'failed', 'findings'].includes(by[name].status), `${name}: unexpected status ${by[name].status}`);
   }

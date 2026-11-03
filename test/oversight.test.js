@@ -1,10 +1,8 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const O = require('../src/core/oversight');
-const { loadConfig, DEFAULT_CONFIG } = require('../src/core/config');
+const { loadConfig } = require('../src/core/config');
 const { DEFAULT_POLICY } = require('../src/core/guard');
 const { shouldNotify } = require('../src/core/notify');
 const { tmpdir, write } = require('./helpers');

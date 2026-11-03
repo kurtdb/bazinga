@@ -416,7 +416,7 @@
   // ---------------------------------------------------------------- Markdown preview (sanitised: no scripts, no remote images, links only open on click)
   let previewDisposable = null;
   const isMarkdown = (rel) => /\.(md|markdown|mdown)$/i.test(rel || '');
-  function markdownToNode(text, rel) {
+  function markdownToNode(text) {
     const html = window.marked.parse(String(text), { gfm: true, async: false });
     const clean = window.DOMPurify.sanitize(html, { FORBID_TAGS: ['style', 'form', 'iframe', 'object', 'embed', 'link', 'meta', 'base', 'svg', 'math'], FORBID_ATTR: ['style', 'srcset', 'formaction'], ALLOW_DATA_ATTR: false });
     const box = document.createElement('div');
@@ -489,7 +489,7 @@
     const host = $('#md-preview');
     const top = keepScroll ? host.scrollTop : 0;
     let node;
-    try { node = markdownToNode(text, rel); } catch (err) { node = el('div', { class: 'hint danger', text: `Could not render: ${err.message}` }); }
+    try { node = markdownToNode(text); } catch (err) { node = el('div', { class: 'hint danger', text: `Could not render: ${err.message}` }); }
     host.replaceChildren(node);
     host.dataset.rel = rel;
     host.scrollTop = top;
@@ -4043,8 +4043,19 @@
     const draw = async () => {
       const r = await api.skills.list();
       if (r.error) { fill(listHost, el('div', { class: 'hint danger', text: r.error })); return; }
+      const bundled = await api.skills.listBundled();
+      const installedNames = new Set([...r.project, ...r.ide].map((x) => x.name));
       const projNames = new Set(r.project.map((x) => x.name));
       fill(listHost,
+        el('div', { class: 'agent-head', text: 'Recommended skills' }),
+        ...((bundled.skills || []).length ? bundled.skills.map((b) => el('div', { class: 'skill-row' },
+          el('div', { class: 'skill-main' }, el('b', { text: b.name }), b.description ? el('span', { class: 'muted', text: ` ${b.description}` }) : null,
+            el('div', { class: 'muted', text: 'bundled with Bazinga - a local copy, not a git fetch' })),
+          installedNames.has(b.name) ? el('span', { class: 'muted', text: 'Installed' }) : el('button', { class: 'primary', onclick: async () => {
+            const level = levelSel.value;
+            const res = await api.skills.installBundled({ level, name: b.name, replace: true });
+            setStatus(res.error ? res.error : `Installed ${res.installed}.`); await draw();
+          } }, ic('download'), 'Install'))) : [el('div', { class: 'muted', text: 'None.' })]),
         el('div', { class: 'agent-head', text: `This project (${r.project.length})` }),
         ...(r.project.length ? r.project.map((x) => row('project', x)) : [el('div', { class: 'muted', text: 'None. Skills here are committed with the project and win over IDE-level skills of the same name.' })]),
         el('div', { class: 'agent-head', text: `All projects, IDE level (${r.ide.length})` }),
@@ -4336,7 +4347,6 @@
   const WF_GATE_LABELS = { none: 'No check', 'tests-added': 'A test must be added or changed', 'tests-untouched': 'Existing tests must stay untouched', guard: 'The merge guard must have no blockers', changed: 'The agent must have changed files', refactor: 'Files changed, and existing tests untouched' };
   /** Form editor for a workflow: nobody has to remember the file syntax. `initial` is a workflow object or null; `file`/`source` identify the file being edited. */
   async function openWorkflowEditor(initial, { file = null, source = null } = {}) {
-    const close = () => $('#modal').classList.add('hidden');
     const agentList = (state.project.config && state.project.config.agents) || [];
     const agents = agentList.map((a) => a.name);
     const wf = initial ? JSON.parse(JSON.stringify(initial)) : { name: '', description: '', steps: [{ id: 'step1', task: '', agent: '', gate: 'none', needs: [], approval: null, retries: 1, allow: '' }] };
@@ -4526,7 +4536,7 @@
           el('div', { class: 'muted', text: `Check: ${WF_GATE_LABELS[s.gate] || s.gate} · ${approval}` }));
       }));
     };
-    if (preset.workflow && valid.some((w, i) => `${w.source}:${w.name}` === preset.workflow)) sel.value = String(valid.findIndex((w) => `${w.source}:${w.name}` === preset.workflow));
+    if (preset.workflow && valid.some((w) => `${w.source}:${w.name}` === preset.workflow)) sel.value = String(valid.findIndex((w) => `${w.source}:${w.name}` === preset.workflow));
     input.value = preset.input || '';
     sel.addEventListener('change', refresh); refresh();
     const bad = res.workflows.filter((w) => w.errors && w.errors.length);
@@ -4801,7 +4811,7 @@
     const close = () => $('#modal').classList.add('hidden');
     if (c.error || !c.text) { setStatus(c.error || 'No changelog found.'); return; }
     const first = c.text.split('\n').slice(0, 40).join('\n');
-    const body = markdownToNode(first, 'CHANGELOG.md');
+    const body = markdownToNode(first);
     body.classList.add('whatsnew');
     $('#dialog').replaceChildren(el('h3', { text: `What’s new in Bazinga${c.version ? ` ${c.version}` : ''}` }), body,
       el('div', { class: 'actions' }, el('button', { class: 'primary', onclick: async () => { await api.changelog.seen(c.hash); close(); } }, ic('check'), 'Close')));
@@ -4840,8 +4850,24 @@
     out.push(slot('Dependency problems', 'Check now', async () => {
       const r = await api.insights.run('deps');
       if (r.error) return [line(r.error, 'danger')];
-      const rows = [r.npm && line(`npm: ${r.npm.text}`, r.npm.total ? 'warn' : ''), r.dependabot && line(`Dependabot: ${r.dependabot.text}`, r.dependabot.total ? 'warn' : ''), r.note && line(r.note, 'muted')].filter(Boolean);
-      return rows.length ? rows : [line('Nothing to check here (no package.json, and no GitHub project with Dependabot).', 'muted')];
+      const rows = [r.npm && line(`npm: ${r.npm.text}`, r.npm.total ? 'warn' : ''), r.dependabot && line(`Dependabot: ${r.dependabot.text}`, r.dependabot.total ? 'warn' : '')];
+      if (r.maven) {
+        const names = r.maven.deps.map((dep) => `${dep.name}:${dep.version || '?'}`);
+        rows.push(line(`Maven dependencies (pom.xml): ${names.length} found`));
+        if (names.length) rows.push(line(names.slice(0, 8).join(', ') + (names.length > 8 ? `, … (+${names.length - 8} more)` : ''), 'muted'));
+        if (r.maven.vulns) rows.push(line(r.maven.vulns.text, r.maven.vulns.total ? 'warn' : ''));
+        else if (r.maven.vulnsError) rows.push(line(r.maven.vulnsError, 'muted'));
+      }
+      if (r.gradle) {
+        const names = r.gradle.deps.map((dep) => `${dep.name}:${dep.version || '?'}`);
+        rows.push(line(`Gradle dependencies (build.gradle): ${names.length} found`));
+        if (names.length) rows.push(line(names.slice(0, 8).join(', ') + (names.length > 8 ? `, … (+${names.length - 8} more)` : ''), 'muted'));
+        if (r.gradle.vulns) rows.push(line(r.gradle.vulns.text, r.gradle.vulns.total ? 'warn' : ''));
+        else if (r.gradle.vulnsError) rows.push(line(r.gradle.vulnsError, 'muted'));
+      }
+      if (r.note) rows.push(line(r.note, 'muted'));
+      const out2 = rows.filter(Boolean);
+      return out2.length ? out2 : [line('Nothing to check here (no package.json, no pom.xml or build.gradle, and no GitHub project with Dependabot).', 'muted')];
     }));
     out.push(slot('Code quality (SonarCloud)', 'Check this branch', async () => {
       const r = await api.insights.run('sonar', sonarKey.value.trim());
@@ -5853,7 +5879,6 @@
     });
     await step('terminal session restore (agent resumes, shell comes back, outside folders dropped)', async () => {
       const textOf = (e) => { const buf = e.term.buffer.active; return Array.from({ length: buf.length }, (_, n) => (buf.getLine(n) ? buf.getLine(n).translateToString(true) : '')).join('\n'); };
-      const root = state.project.root;
       const a = await newTerminal({ title: 'Echo', agent: 'Echo', persist: true, label: 'Echo' });
       const b = await newTerminal({ title: 'NoResume', agent: 'NoResume', persist: true });
       const c = await newTerminal({ title: 'Terminal' });
@@ -6567,7 +6592,7 @@
       p2.close();
       const errPanel = await testAgentModel(agent, async () => ({ error: 'A model test is already running.' }));
       const errShown = /already running/.test(document.querySelector('.overlay-panel').textContent);
-      document.querySelector('.overlay-panel').remove();
+      errPanel.close();
       await openSettings();
       document.querySelector('#set-tab-agents').click();
       const preset = document.querySelector('#set-preset');

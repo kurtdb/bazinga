@@ -79,6 +79,78 @@ module.exports = [
     reports: ['**/target/surefire-reports/TEST-*.xml'], reportFormat: 'junit',
   },
   {
+    // Resolved by Maven's own plugin-prefix mechanism even with no <plugin> block in pom.xml, same as compile/test.
+    // Neither goal needs upstream modules built first (unlike compile/test), so {modules-only} skips -am.
+    // onlyChangedFiles: without it, every pre-existing violation across a whole touched module would drown out
+    // anything about the agent's actual diff - the same reasoning the "Duplicate code" gate below already uses.
+    name: 'PMD', tier: 'slow', scope: 'project', match: ['*.java', 'pom.xml'],
+    requiresFile: ['pom.xml'], requiresBin: 'mvn', onlyChangedFiles: true,
+    run: 'mvn -q -B {modules-only} pmd:pmd', parser: 'exitcode', timeoutSec: 600,
+    reports: ['**/target/pmd.xml'], reportFormat: 'pmd',
+  },
+  {
+    name: 'Checkstyle', tier: 'slow', scope: 'project', match: ['*.java', 'pom.xml'],
+    requiresFile: ['pom.xml'], requiresBin: 'mvn', onlyChangedFiles: true,
+    run: 'mvn -q -B {modules-only} checkstyle:checkstyle', parser: 'exitcode', timeoutSec: 600,
+    reports: ['**/target/checkstyle-result.xml'], reportFormat: 'checkstyle',
+  },
+  {
+    // SpotBugs lives under the com.github.spotbugs groupId, which isn't in Maven's default plugin-group
+    // search path, so (unlike pmd/checkstyle) it needs the fully-qualified goal, not a bare prefix. It
+    // analyzes bytecode, not source, so compile has to run first; {modules} (+ -am) rather than
+    // {modules-only} because compiling a module may need its upstream modules built first.
+    name: 'SpotBugs', tier: 'slow', scope: 'project', match: ['*.java', 'pom.xml'],
+    requiresFile: ['pom.xml'], requiresBin: 'mvn', onlyChangedFiles: true,
+    run: 'mvn -q -B {modules} compile com.github.spotbugs:spotbugs-maven-plugin:spotbugs', parser: 'exitcode', timeoutSec: 600,
+    reports: ['**/target/spotbugsXml.xml'], reportFormat: 'spotbugs',
+  },
+  {
+    // {gradle} resolves to a project's own ./gradlew when present (pins its Gradle version), else the global
+    // `gradle` binary - no requiresBin: if neither exists, the shell's own "command not found" already skips
+    // this cleanly. Unlike Maven's compile error format ([ERROR] file:[line,col] msg), Gradle prints javac's
+    // own raw diagnostic line (file:line: error: msg), confirmed against a real compile error.
+    name: 'Gradle compile', tier: 'slow', scope: 'project', match: ['*.java', 'build.gradle', 'build.gradle.kts'],
+    requiresFileAny: ['build.gradle', 'build.gradle.kts'],
+    run: '{gradle} compileJava', parser: 'regex', pattern: '^(?<file>.+?):(?<line>\\d+): (?<severity>error|warning): (?<message>.+)$', timeoutSec: 600,
+  },
+  {
+    name: 'Gradle test', tier: 'slow', scope: 'project', match: ['*.java', 'build.gradle', 'build.gradle.kts'],
+    requiresFileAny: ['build.gradle', 'build.gradle.kts'],
+    run: '{gradle} -q test', parser: 'exitcode', timeoutSec: 900,
+    reports: ['**/build/test-results/test/TEST-*.xml'], reportFormat: 'junit',
+  },
+  {
+    // Unlike Maven, a Gradle task genuinely doesn't exist until its plugin is applied in build.gradle - running
+    // it then fails with "Task 'pmdMain' not found...", which the engine treats as skipped, not failed.
+    name: 'Gradle PMD', tier: 'slow', scope: 'project', match: ['*.java', 'build.gradle', 'build.gradle.kts'],
+    requiresFileAny: ['build.gradle', 'build.gradle.kts'], onlyChangedFiles: true,
+    run: '{gradle} -q pmdMain', parser: 'exitcode', timeoutSec: 600,
+    reports: ['**/build/reports/pmd/main.xml'], reportFormat: 'pmd',
+  },
+  {
+    // Unlike Maven's Checkstyle plugin (ships Sun's defaults automatically), Gradle's has no default ruleset
+    // and hard-requires this file at its conventional path - a real prerequisite, not a tool-missing situation.
+    name: 'Gradle Checkstyle', tier: 'slow', scope: 'project', match: ['*.java', 'build.gradle', 'build.gradle.kts'],
+    requiresFileAny: ['build.gradle', 'build.gradle.kts'], requiresFile: ['config/checkstyle/checkstyle.xml'], onlyChangedFiles: true,
+    run: '{gradle} -q checkstyleMain', parser: 'exitcode', timeoutSec: 600,
+    reports: ['**/build/reports/checkstyle/main.xml'], reportFormat: 'checkstyle',
+  },
+  {
+    // Unlike both PMD/Checkstyle-on-Gradle and SpotBugs-on-Maven, Gradle's SpotBugs plugin writes HTML only by
+    // default - without `spotbugsMain { reports { xml.required = true } }` in the build script it would exit 0
+    // with real bugs present and zero findings read. requiresFileContains makes that an honest skip, not a
+    // silent false "passed".
+    name: 'Gradle SpotBugs', tier: 'slow', scope: 'project', match: ['*.java', 'build.gradle', 'build.gradle.kts'],
+    requiresFileAny: ['build.gradle', 'build.gradle.kts'], onlyChangedFiles: true,
+    requiresFileContains: {
+      anyFile: ['build.gradle', 'build.gradle.kts'],
+      pattern: 'xml\\.(required|enabled)\\b[\\s\\S]{0,20}true',
+      note: 'enable the SpotBugs XML report (spotbugsMain { reports { xml.required = true } }) in build.gradle',
+    },
+    run: '{gradle} -q spotbugsMain', parser: 'exitcode', timeoutSec: 600,
+    reports: ['**/build/reports/spotbugs/main.xml'], reportFormat: 'spotbugs',
+  },
+  {
     name: 'pytest', tier: 'slow', scope: 'project', match: ['*.py'], requiresBin: 'pytest',
     run: 'pytest -q -x --disable-warnings --junitxml=.pytest_cache/bazinga-junit.xml', parser: 'exitcode', timeoutSec: 600,
     reports: ['.pytest_cache/bazinga-junit.xml'], reportFormat: 'junit',

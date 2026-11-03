@@ -88,7 +88,6 @@ const MAX_FILE_BYTES = 2 * 1024 * 1024;
 let win = null;
 let root = null;
 let watcher = null;
-let watchTimer = null;
 let checksRunning = false;
 let checksAbort = null;
 let reviewAbort = null;
@@ -353,13 +352,6 @@ function loadConfigSafe(r) { try { return loadConfig(r || path.join(app.getPath(
 
 const shellKindOf = (config) => appcore.shellKindOf(config);
 
-/** Every folder the IDE may work in: the main checkout and its agent run worktrees. */
-async function knownRoots() {
-  const base = requireRoot();
-  const { main, runs: list } = await runs.listRuns(base).catch(() => ({ main: null, runs: [] }));
-  return [base, main && main.root, ...list.map((r) => r.root)].filter(Boolean);
-}
-
 const isTrusted = (r) => SMOKE || (readState().trusted || []).includes(r);
 
 /** Run the gates for any known folder without prompting: custom (project-defined) checks need that folder to be trusted already. */
@@ -383,7 +375,7 @@ async function runGatesAndTests(r, o = {}) {
     const t = await runRelatedTests({ root: r, files, readFile: (rel) => fs.readFileSync(path.join(r, rel), 'utf8'), timeoutSec: cfg.testTimeoutSec, signal: o.signal });
     const findings = [...res.findings, ...t.findings];
     return { ...res, findings, counts: { ...res.counts, error: (res.counts && res.counts.error || 0) + t.findings.length }, tests: { ran: files.length, failed: t.findings.length, skipped: t.skipped } };
-  } catch (err) { return res; }
+  } catch { return res; }
 }
 
 /** One line in the scorecard when a run ends: who did the task, what kind of task, and what you did with the result. */
@@ -861,6 +853,9 @@ function registerIpc() {
   const skillHome = () => process.env.BAZINGA_HOME || (SMOKE ? USER_DATA_OVERRIDE : os.homedir());
   const skillDirs = (level) => { const c = loadConfigSafe(root); return skillsCore.levelDirs(level, { root, home: skillHome(), skillsDir: c.skillsDir, mirrors: c.skillsMirrors }); };
   const skillDir = (level) => skillDirs(level)[0];
+  // Shipped inside the app itself (same pattern as the docker/agent/<f> read above) - no git fetch, so these
+  // install as a local copy and never show an "Update" button (their freshness tracks Bazinga's own version).
+  const bundledSkillsDir = () => path.join(__dirname, '..', '..', 'bundled-skills');
   /** Agents without skill support read AGENTS.md: keep its managed block in step with the project's skills. */
   function refreshSkillIndex() {
     if (!root) return null;
@@ -909,6 +904,16 @@ function registerIpc() {
   ipcMain.handle('skills:sync', () => safe(async () => {
     const copied = [...skillsCore.syncMirrors(skillDirs('ide')), ...(root ? skillsCore.syncMirrors(skillDirs('project')) : [])];
     return { copied, index: root ? refreshSkillIndex() : null };
+  }));
+  // a small, curated list bundled with the app itself - see bundled-skills/
+  ipcMain.handle('skills:listBundled', () => safe(async () => ({
+    skills: skillsCore.findSkills(bundledSkillsDir()).map((k) => ({ name: k.name, description: k.description })),
+  })));
+  ipcMain.handle('skills:installBundled', (_e, opts = {}) => safe(async () => {
+    const targets = skillDirs(opts.level);
+    const res = skillsCore.installBundled(bundledSkillsDir(), opts.name, targets, { replace: !!opts.replace });
+    if (opts.level === 'project') refreshSkillIndex();
+    return { installed: res.name, dir: targets[0], alsoIn: targets.slice(1) };
   }));
   ipcMain.handle('skills:search', (_e, query, owner) => skillsearch.search(query, { owner }));
   ipcMain.handle('skills:fetch', (_e, source) => safe(async () => {
@@ -1531,6 +1536,18 @@ function registerIpc() {
   }));
   // Usage & insights: fast facts on open, slow or networked ones only when asked. Every parser hides what it cannot read.
   const fetchJson = async (url, headers = {}, ms = 6000) => { const r = await fetch(url, { headers, signal: AbortSignal.timeout(ms) }); if (!r.ok) throw new Error(`${r.status} ${r.statusText}`.trim()); return r.json(); };
+  const postJson = async (url, body, ms = 15000) => { const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(ms) }); if (!r.ok) throw new Error(`${r.status} ${r.statusText}`.trim()); return r.json(); };
+  // OSV.dev: free, keyless, no local CVE database to download (unlike the OWASP dependency-check Maven plugin) -
+  // the batch call gives ids only, so a bounded number of individual lookups fill in severity.
+  const checkOsv = async (deps, label) => {
+    try {
+      const hits = insightsCore.parseOsvBatch(await postJson('https://api.osv.dev/v1/querybatch', insightsCore.osvBatchBody(deps)), deps);
+      const ids = [...new Set(hits.map((h) => h.id))].slice(0, 30);
+      const severityById = {};
+      for (const id of ids) { try { severityById[id] = insightsCore.parseOsvSeverity(await fetchJson(`https://api.osv.dev/v1/vulns/${id}`, {}, 8000)); } catch { severityById[id] = 'unknown'; } }
+      return { vulns: insightsCore.summarizeOsv(hits.map((h) => ({ ...h, severity: severityById[h.id] || 'unknown' })), label) };
+    } catch (e) { return { vulnsError: `OSV.dev did not answer (${e.message}).` }; }
+  };
   ipcMain.handle('insights:get', () => safe(async () => {
     const cfg = loadConfigSafe(root);
     const ins = { ...(cfg.insights || {}) };
@@ -1561,7 +1578,16 @@ function registerIpc() {
         let j = null; try { j = JSON.parse(res.stdout); } catch { /* not on GitHub, or alerts are off */ }
         const d = insightsCore.parseDependabot(j); if (d) out.dependabot = d;
       }
-      if (fs.existsSync(path.join(r, 'pom.xml')) || fs.existsSync(path.join(r, 'build.gradle')) || fs.existsSync(path.join(r, 'build.gradle.kts'))) out.note = 'Maven/Gradle projects: checking Java dependencies needs the OWASP dependency-check plugin, which Bazinga does not run for you. Dependabot alerts (above, when the project is on GitHub) cover them.';
+      if (fs.existsSync(path.join(r, 'pom.xml'))) {
+        const deps = insightsCore.parseMavenDeps(fs.readFileSync(path.join(r, 'pom.xml'), 'utf8'));
+        out.maven = { deps, ...(await checkOsv(deps, 'Maven')) };
+      } else {
+        const gradleFile = ['build.gradle', 'build.gradle.kts'].find((f) => fs.existsSync(path.join(r, f)));
+        if (gradleFile) {
+          const deps = insightsCore.parseGradleDeps(fs.readFileSync(path.join(r, gradleFile), 'utf8'));
+          out.gradle = { deps, ...(await checkOsv(deps, 'Gradle')) };
+        }
+      }
       return out;
     }
     if (what === 'actuator') {

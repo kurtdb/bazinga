@@ -45,6 +45,7 @@ test('a runner that is not installed is reported as such, not as a failing test'
 test('timeout, cancel, ANSI colours and unknown output', () => {
   assert.strictEqual(run('', -1, { timedOut: true }).status, 'timeout');
   assert.strictEqual(run('', -1, { cancelled: true }).status, 'cancelled');
+  // eslint-disable-next-line no-control-regex
   assert.ok(!/\u001b/.test(run('\u001b[31mred\u001b[0m').output));
   assert.strictEqual(run('all good', 0).status, 'passed');
   assert.match(run('boom', 3).headline, /exit code 3/);

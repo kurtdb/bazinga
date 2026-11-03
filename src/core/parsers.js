@@ -252,12 +252,15 @@ function junit(xml, ctx) {
     const loc = locateFailure(attrs, text, ctx);
     const shortClass = (attrs.classname || '').split('.').pop();
     const first = (failAttrs.message || text.split('\n')[0] || 'test failed').split('\n')[0];
+    // ArchUnit's exception message always starts with this exact, stable prefix - tag it as its own rule
+    // category instead of the generic test-failure, so it reads as an architecture problem, not a flaky test.
+    const archViolation = /^Architecture Violation \[Priority:/.test(text) || /^Architecture Violation \[Priority:/.test(failAttrs.message || '');
     out.push({
       file: loc.file,
       line: loc.line,
       severity: 'error',
       message: `${shortClass ? `${shortClass}.` : ''}${attrs.name || 'test'}: ${first}`,
-      rule: fail[1] === 'error' ? 'test-error' : 'test-failure',
+      rule: archViolation ? 'architecture-violation' : (fail[1] === 'error' ? 'test-error' : 'test-failure'),
       detail: text.split('\n').slice(0, 15).join('\n'),
     });
   }

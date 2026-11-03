@@ -187,6 +187,14 @@ function installEverywhere(checkout, skill, targets, opts = {}) {
   return first;
 }
 
+/** Install one bundled skill (shipped inside the app, no git fetch) by name. Source is deliberately `{}`:
+ * nothing external to re-fetch later, so the UI correctly shows no "Update" button for it. */
+function installBundled(bundledRoot, name, targets, { replace = false } = {}) {
+  const skill = findSkills(bundledRoot).find((s) => s.name === name);
+  if (!skill) throw new Error(`${name}: not found among the bundled skills.`);
+  return installEverywhere(bundledRoot, skill, targets, { replace, source: {} });
+}
+
 function removeEverywhere(targets, name) {
   let removed = 0;
   for (const t of targets) { try { removeSkill(t, name); removed++; } catch { /* not in this folder */ } }
@@ -217,4 +225,4 @@ function effectiveSkills({ project = [], ide = [] }) {
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-module.exports = { PROVENANCE, parseSource, parseSkillMd, findSkills, fetchSource, installSkill, listInstalled, removeSkill, levelDir, levelDirs, installEverywhere, removeEverywhere, syncMirrors, effectiveSkills, slug };
+module.exports = { PROVENANCE, parseSource, parseSkillMd, findSkills, fetchSource, installSkill, installBundled, listInstalled, removeSkill, levelDir, levelDirs, installEverywhere, removeEverywhere, syncMirrors, effectiveSkills, slug };

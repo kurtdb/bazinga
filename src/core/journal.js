@@ -14,6 +14,7 @@ const fileFor = (dir, runId) => path.join(dir, `${safeId(runId)}.jsonl`);
 
 function clean(event) {
   const e = { t: Number.isFinite(event.t) ? event.t : Date.now(), kind: String(event.kind || 'note').slice(0, 40) };
+  // eslint-disable-next-line no-control-regex
   if (event.text) e.text = String(event.text).replace(/[\u0000-\u0008\u000b-\u001f]/g, ' ').slice(0, MAX_TEXT);
   if (event.data && typeof event.data === 'object') e.data = event.data;
   return e;

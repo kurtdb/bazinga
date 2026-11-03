@@ -52,7 +52,8 @@
   },
   "devDependencies": {
     "electron": "^44.7.0",
-    "electron-builder": "^26.15.3"
+    "electron-builder": "^26.15.3",
+    "eslint": "^10.14.0"
   },
   "build": {
     "appId": "dev.bazinga.app",
@@ -72,6 +73,7 @@
       "bin/**",
       "CHANGELOG.md",
       "docker/**",
+      "bundled-skills/**",
       "vendor/**",
       "build/icon.png",
       "package.json",

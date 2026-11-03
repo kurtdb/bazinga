@@ -8,7 +8,6 @@
  */
 const { spawn } = require('node:child_process');
 const { EventEmitter } = require('node:events');
-const fs = require('node:fs');
 const crypto = require('node:crypto');
 const path = require('node:path');
 const { pathToFileURL, fileURLToPath } = require('node:url');
