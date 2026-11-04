@@ -258,7 +258,7 @@
     autoCheck: false,
     onlyMine: true,
     search: { regex: false, caseSensitive: false },
-    quick: { files: [], stale: true, sel: 0, items: [] },
+    quick: { files: [], stale: true, sel: 0, items: [], symbols: [] },
     review: { used: false, running: false, output: '', error: '' },
     commitMsg: '',
     task: { allow: '', summary: '', baseline: null, reviewed: {}, started: null },
@@ -332,12 +332,15 @@
     editor.addAction({ id: 'bazinga.mdPreview', label: 'Markdown: toggle preview', keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyV], precondition: undefined, run: () => toggleMarkdownPreview() });
     diffEditor.getModifiedEditor().addAction(addCommentAction);
     diffEditor.getModifiedEditor().onMouseDown((e) => { if (e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN && e.target.position) { const t = activeTab(); if (t && t.kind === 'diff' && !t.ro) commentOnLine(t.rel, e.target.position.lineNumber); } });
+    editor.onMouseDown((e) => { if (e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN && e.target.position) { const t = activeTab(); if (t && t.kind === 'file') toggleBreakpoint(t.rel, e.target.position.lineNumber); } });
     editor.onDidChangeCursorPosition(() => paintBlame());
     editor.onDidChangeModel(() => paintCoverage());
     for (const [id, label, which] of [['bazinga.openVsCode', 'Open in VS Code', 'vscode'], ['bazinga.openIdea', 'Open in IntelliJ IDEA', 'idea']]) editor.addAction({ id, label, contextMenuGroupId: 'navigation', contextMenuOrder: 9, run: () => openInOtherEditor(which) });
+    editor.addAction({ id: 'bazinga.debugFile', label: 'Debug this file (Python)', contextMenuGroupId: 'navigation', contextMenuOrder: 10, run: () => { const t = activeTab(); if (t && t.kind === 'file' && canRealDebug(t.rel)) startDebugging(t.rel); } });
     registerTestLenses();
     registerSymbolLenses();
     registerLspProviders();
+    registerInlineCompletionProvider();
   }
 
   const fileUri = (rel) => monaco.Uri.from({ scheme: 'file', path: `/${rel}` });
@@ -359,6 +362,7 @@
     state.models.set(rel, m);
     applyMarkers(rel);
     lspTrackModel(rel, model);
+    paintBreakpoints(rel);
     return m;
   }
 
@@ -920,6 +924,19 @@
       }),
     };
   }
+  async function lspRenameAt(model, pos, newName) {
+    const rel = lspLive(model); if (!rel) return null;
+    const res = await api.lsp.request(rel, 'rename', { ...lspPos(pos), newName });
+    const edits = res && !res.error ? res.result : null;
+    if (!edits) return null;
+    await Promise.all(Object.keys(edits).map((r) => ensureModel(r)));
+    const out = [];
+    for (const [r, list] of Object.entries(edits)) {
+      if (!state.models.has(r)) continue; // a file ensureModel could not open (e.g. gitignored, or outside the project) is dropped rather than applied half-blind
+      for (const e of list) out.push({ resource: fileUri(r), textEdit: { range: lspRange(e.range), text: e.newText } });
+    }
+    return out.length ? { edits: out } : null;
+  }
   async function lspSignatureAt(model, pos) {
     const rel = lspLive(model); if (!rel) return null;
     const res = await lspAsk(rel, 'signatureHelp', pos);
@@ -943,6 +960,7 @@
       monaco.languages.registerReferenceProvider(lang, { provideReferences: (m, p) => lspLocationsAt(m, p, 'references') });
       monaco.languages.registerCompletionItemProvider(lang, { triggerCharacters: ['.', ':', '>', '"', "'", '/', '@', '#', '<'], provideCompletionItems: (m, p) => lspCompletionsAt(m, p) });
       monaco.languages.registerSignatureHelpProvider(lang, { signatureHelpTriggerCharacters: ['(', ','], provideSignatureHelp: (m, p) => lspSignatureAt(m, p) });
+      monaco.languages.registerRenameProvider(lang, { provideRenameEdits: (m, p, newName) => lspRenameAt(m, p, newName) });
     }
     // go-to-definition into another project file opens it as a tab
     monaco.editor.registerEditorOpener({
@@ -954,6 +972,29 @@
         return true;
       },
     });
+  }
+
+  // ---------------------------------------------------------------- AI inline completion (ghost text, opt-in: Settings → inlineCompletion)
+  // Not LSP-backed: a local model's fill-in-the-middle endpoint (Ollama only, see core/ollama.js). Off by default -
+  // the main process returns { skip: true } at once when it is, so this never calls out to a model uninvited.
+  let inlineCompletionSeq = 0;
+  async function provideInlineCompletion(model, pos, _context, token) {
+    const icCfg = (state.project && state.project.config && state.project.config.inlineCompletion) || {};
+    if (!icCfg.enabled) return { items: [] };
+    const seq = ++inlineCompletionSeq;
+    await new Promise((res) => setTimeout(res, Number(icCfg.debounceMs) || 400));
+    if (token.isCancellationRequested || seq !== inlineCompletionSeq) return { items: [] };
+    const text = model.getValue();
+    const offset = model.getOffsetAt(pos);
+    let res;
+    try { res = await api.ai.complete({ prefix: text.slice(Math.max(0, offset - 4000), offset), suffix: text.slice(offset, offset + 1000) }); } catch { return { items: [] }; }
+    if (token.isCancellationRequested || seq !== inlineCompletionSeq || !res || res.error || res.skip || !res.text) return { items: [] };
+    const suggestion = res.text.split(/\r?\n[ \t]*\r?\n[ \t]*\r?\n/)[0]; // stop at a double blank line: a model that keeps going past that is writing a new unrelated block, not finishing this one
+    if (!suggestion.trim()) return { items: [] };
+    return { items: [{ insertText: suggestion, range: new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column) }] };
+  }
+  function registerInlineCompletionProvider() {
+    monaco.languages.registerInlineCompletionsProvider('*', { provideInlineCompletions: provideInlineCompletion, freeInlineCompletions: () => {} });
   }
 
   async function lspOpenModel(rel) {
@@ -1908,8 +1949,36 @@
   }
   const closeQuickOpen = () => { $('#quickopen').classList.add('hidden'); if (editor) editor.focus(); };
 
+  /** "Go to symbol in workspace": every class/method/function in the project (tree-sitter, same parser the symbol lenses use), fuzzy-filtered client-side like the file list above. */
+  async function openGotoSymbol() {
+    if (!state.project || !state.project.root) return;
+    state.quick.mode = 'symbols';
+    $('#quickopen').classList.remove('hidden');
+    const input = $('#qo-input');
+    input.value = '';
+    input.placeholder = 'Go to symbol in workspace…';
+    input.focus();
+    $('#qo-list').replaceChildren(el('div', { class: 'qo-row muted', text: 'Indexing…' }));
+    const res = await api.symbols.workspaceAll();
+    state.quick.symbols = (res && res.symbols) || [];
+    renderQuick();
+  }
+
+  const SYMBOL_ICON = { class: 'box', method: 'square-function', function: 'square-function' };
   function renderQuick() {
     const q = $('#qo-input').value.trim();
+    if (state.quick.mode === 'symbols') {
+      const all = state.quick.symbols || [];
+      const items = (q ? all.map((s) => ({ s, sc: fuzzy(q, s.name) })).filter((x) => x.sc >= 0).sort((a, b) => b.sc - a.sc).map((x) => x.s) : all).slice(0, 60);
+      state.quick.items = items;
+      state.quick.sel = Math.min(state.quick.sel, Math.max(items.length - 1, 0));
+      $('#qo-list').replaceChildren(...(items.length ? items.map((s, i) => el('div', { class: `qo-row${i === state.quick.sel ? ' sel' : ''}`, onclick: () => pickQuick(i) },
+        ic(SYMBOL_ICON[s.kind] || 'square-function', 'qo-ico'), el('span', { text: s.name }), el('span', { class: 'dir', text: `${s.rel}:${s.line}` })))
+        : [el('div', { class: 'qo-row muted', text: q ? 'No symbols match.' : 'No symbols indexed (nothing parseable, or an empty project).' })]));
+      const selSym = $('#qo-list .sel');
+      if (selSym) selSym.scrollIntoView({ block: 'nearest' });
+      return;
+    }
     if (state.quick.mode === 'commands') {
       const all = commandList();
       const items = (q ? all.map((c) => ({ c, s: fuzzy(q, c.title) })).filter((x) => x.s >= 0).sort((a, b) => b.s - a.s).map((x) => x.c) : all).slice(0, 40);
@@ -1944,6 +2013,7 @@
     if (!f) return;
     closeQuickOpen();
     if (state.quick.mode === 'commands') { f.run(); return; }
+    if (state.quick.mode === 'symbols') { openFile(f.rel, f.line); return; }
     openFile(f);
   }
 
@@ -1952,6 +2022,7 @@
     const tab = activeTab();
     const cmds = [
       ['Go to file…', 'search', openQuickOpen, 'Ctrl+P'],
+      ['Go to symbol in workspace…', 'square-function', openGotoSymbol, 'Ctrl+T'],
       ['Open project folder…', 'folder-open', () => $('#btn-open').click()],
       ['New terminal', 'square-terminal', () => newTerminal({ title: 'Terminal' }), 'Ctrl+`'],
       ['New agent run…', 'bot', openRunDialog],
@@ -1979,6 +2050,8 @@
       ['Git: checkpoint now', 'tag', () => makeCheckpoint('manual')],
       ['Test: run the test at the cursor', 'flask-conical', runTestAtCursor],
       ['Test: run all tests in this file', 'flask-conical', () => { if (tab && tab.kind === 'file') runTestFor(tab.rel, null, true); else setStatus('Open a test file first.'); }],
+      ['Debug this file (Python)', 'octagon-pause', () => { if (tab && tab.kind === 'file' && canRealDebug(tab.rel)) startDebugging(tab.rel); else setStatus('Debugging is only wired up for Python right now (open a .py file first).'); }],
+      ['Debug: stop', 'square', () => stopDebugging()],
       [`Switch theme (now: ${themeLabel(themeSetting)})`, themeIcon(themeSetting), () => { const names = allThemeIds(); setThemeSetting(names[(names.indexOf(themeSetting) + 1) % names.length]); }],
       ['Font size: larger', 'plus', () => changeFontSize(1)],
       ['Font size: smaller', 'minus', () => changeFontSize(-1)],
@@ -2085,6 +2158,140 @@
     if (state.bottom === 'debug') showBottom('problems'); else renderBottomTabs();
   }
 
+  // ---------------------------------------------------------------- real debugger (breakpoints, step, call stack, variables)
+  // Python only for now (debugpy, via core/dap.js - see its header comment for what was verified against a real
+  // debugpy.adapter session). Other languages keep the existing "Debug" lens (Settings → a Debug lens), which
+  // starts the test waiting for your own IDE's debugger to attach instead.
+  state.debugger = { open: false, status: 'idle', rel: null, breakpoints: new Map(), threadId: null, frames: [], currentFrameId: null, scopes: new Map(), variables: new Map(), expanded: new Set(), output: [] };
+  const canRealDebug = (rel) => /\.py$/i.test(String(rel || ''));
+  const bpSet = (rel) => { let s = state.debugger.breakpoints.get(rel); if (!s) { s = new Set(); state.debugger.breakpoints.set(rel, s); } return s; };
+  const bpDecoIds = new Map(); // rel -> decoration ids, so a repaint replaces rather than piles up
+  function paintBreakpoints(rel) {
+    const m = state.models.get(rel);
+    if (!m) return;
+    const lines = [...bpSet(rel)].sort((a, b) => a - b);
+    bpDecoIds.set(rel, m.model.deltaDecorations(bpDecoIds.get(rel) || [], lines.map((line) => ({
+      range: new monaco.Range(line, 1, line, 1),
+      options: { isWholeLine: false, glyphMarginClassName: 'bp-dot', glyphMarginHoverMessage: { value: 'Breakpoint (click the gutter to remove)' }, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges },
+    }))));
+  }
+  function toggleBreakpoint(rel, line) {
+    const set = bpSet(rel);
+    if (set.has(line)) set.delete(line); else set.add(line);
+    paintBreakpoints(rel);
+    if (state.debugger.status !== 'idle' && state.debugger.status !== 'terminated' && state.debugger.rel === rel) api.dap.setBreakpoints({ rel, lines: [...set] });
+  }
+  let currentLineDeco = { rel: null, ids: [] };
+  function clearCurrentLine() {
+    if (currentLineDeco.rel) { const m = state.models.get(currentLineDeco.rel); if (m) m.model.deltaDecorations(currentLineDeco.ids, []); }
+    currentLineDeco = { rel: null, ids: [] };
+  }
+  async function paintCurrentLine(rel, line) {
+    clearCurrentLine();
+    await ensureModel(rel);
+    const m = state.models.get(rel);
+    if (!m) return;
+    currentLineDeco = { rel, ids: m.model.deltaDecorations([], [{ range: new monaco.Range(line, 1, line, 1), options: { isWholeLine: true, className: 'debug-current-line', glyphMarginClassName: 'debug-current-arrow' } }]) };
+    openFile(rel, line);
+  }
+  const absToRel = (abs) => {
+    const root = state.project && state.project.root; if (!root || !abs) return null;
+    const norm = (s) => String(s).replace(/\\/g, '/').replace(/\/+$/, '');
+    const r = norm(root).toLowerCase(); const a = norm(abs);
+    return a.toLowerCase().startsWith(`${r}/`) ? a.slice(r.length + 1) : null;
+  };
+  function closeDebugger() {
+    state.debugger.open = false;
+    if (state.bottom === 'debugger') showBottom('problems'); else renderBottomTabs();
+  }
+  async function stopDebugging() {
+    await api.dap.stop();
+    state.debugger.status = 'idle'; state.debugger.threadId = null; state.debugger.frames = []; state.debugger.currentFrameId = null;
+    state.debugger.scopes = new Map(); state.debugger.variables = new Map(); state.debugger.expanded = new Set();
+    clearCurrentLine();
+    renderDebuggerPanel();
+  }
+  async function startDebugging(rel) {
+    if (!canRealDebug(rel)) { setStatus('Debugging is only wired up for Python right now.'); return; }
+    if (state.debugger.status !== 'idle' && state.debugger.status !== 'terminated') await stopDebugging();
+    state.debugger.rel = rel; state.debugger.status = 'starting'; state.debugger.open = true; state.debugger.output = [];
+    showBottom('debugger');
+    const started = await api.dap.start({ rel });
+    if (started.error) { setStatus(started.error); state.debugger.status = 'idle'; renderDebuggerPanel(); return; }
+    const bpRes = await api.dap.setBreakpoints({ rel, lines: [...bpSet(rel)] });
+    if (!bpRes.error) for (const b of bpRes.breakpoints || []) if (!b.verified) setStatus(`Breakpoint at ${rel}:${b.line} could not be verified${b.message ? `: ${b.message}` : ''}.`);
+    await api.dap.configurationDone();
+    renderDebuggerPanel();
+  }
+  async function refreshStack() {
+    const r = await api.dap.stackTrace(state.debugger.threadId);
+    state.debugger.frames = r.frames || [];
+    state.debugger.scopes = new Map(); state.debugger.variables = new Map(); state.debugger.expanded = new Set();
+    await focusFrame(state.debugger.frames[0]);
+  }
+  async function focusFrame(frame) {
+    if (!frame) { renderDebuggerPanel(); return; }
+    state.debugger.currentFrameId = frame.id;
+    const rel = frame.source && frame.source.path ? absToRel(frame.source.path) : null;
+    if (rel) await paintCurrentLine(rel, frame.line); else clearCurrentLine();
+    const sc = await api.dap.scopes(frame.id);
+    state.debugger.scopes.set(frame.id, sc.scopes || []);
+    for (const s of sc.scopes || []) { if (s.expensive) continue; const v = await api.dap.variables(s.variablesReference); state.debugger.variables.set(s.variablesReference, v.variables || []); }
+    renderDebuggerPanel();
+  }
+  async function toggleVariable(ref) {
+    if (state.debugger.expanded.has(ref)) state.debugger.expanded.delete(ref);
+    else {
+      state.debugger.expanded.add(ref);
+      if (!state.debugger.variables.has(ref)) { const v = await api.dap.variables(ref); state.debugger.variables.set(ref, v.variables || []); }
+    }
+    renderDebuggerPanel();
+  }
+  const varRows = (ref, depth) => (state.debugger.variables.get(ref) || []).flatMap((v) => {
+    const expandable = v.variablesReference > 0;
+    const row = el('div', { class: 'dbgr-var', style: `padding-left:${depth * 16}px` },
+      expandable ? el('span', { class: 'dbgr-caret', onclick: () => toggleVariable(v.variablesReference) }, ic(state.debugger.expanded.has(v.variablesReference) ? 'chevron-down' : 'chevron-right')) : el('span', { class: 'dbgr-caret' }),
+      el('b', { text: v.name }), el('span', { class: 'muted', text: ' = ' }), el('span', { text: v.value }), v.type ? el('span', { class: 'muted', text: ` (${v.type})` }) : null);
+    return expandable && state.debugger.expanded.has(v.variablesReference) ? [row, ...varRows(v.variablesReference, depth + 1)] : [row];
+  });
+  function renderDebuggerPanel() {
+    const host = $('#debugger');
+    if (!host) return;
+    const d = state.debugger;
+    const running = d.status === 'running';
+    const stopped = d.status === 'stopped';
+    const frame = d.frames.find((f) => f.id === d.currentFrameId);
+    const scopesHere = frame ? (d.scopes.get(frame.id) || []) : [];
+    fill(host,
+      el('div', { class: 'dbgr-toolbar' },
+        el('span', { class: `chip ${stopped ? 'danger' : running ? 'ok' : 'ghost'}`, text: d.status }),
+        el('button', { class: 'icon', title: 'Continue', disabled: !stopped, onclick: () => api.dap.continue(d.threadId) }, ic('play')),
+        el('button', { class: 'icon', title: 'Step over', disabled: !stopped, onclick: () => api.dap.next(d.threadId) }, ic('step-forward')),
+        el('button', { class: 'icon', title: 'Step into', disabled: !stopped, onclick: () => api.dap.stepIn(d.threadId) }, ic('corner-down-right')),
+        el('button', { class: 'icon', title: 'Step out', disabled: !stopped, onclick: () => api.dap.stepOut(d.threadId) }, ic('skip-forward')),
+        el('button', { class: 'icon', title: 'Pause', disabled: !running, onclick: () => api.dap.pause(d.threadId) }, ic('pause')),
+        el('button', { class: 'icon danger', title: 'Stop', disabled: d.status === 'idle', onclick: () => stopDebugging() }, ic('square'))),
+      el('div', { class: 'dbgr-body' },
+        el('div', { class: 'dbgr-col' },
+          el('div', { class: 'sk-head' }, ic('layers'), el('span', { text: 'Call stack' })),
+          ...(d.frames.length ? d.frames.map((f) => el('div', { class: `dbgr-frame${f.id === d.currentFrameId ? ' sel' : ''}`, onclick: () => focusFrame(f) },
+            el('b', { text: f.name }), el('span', { class: 'muted', text: f.source && f.source.path ? ` ${(absToRel(f.source.path) || f.source.path)}:${f.line}` : '' })))
+            : [el('div', { class: 'muted', text: stopped ? 'No frames.' : running ? 'Running…' : d.status === 'terminated' ? 'Finished.' : 'Not running.' })])),
+        el('div', { class: 'dbgr-col' },
+          el('div', { class: 'sk-head' }, ic('variable'), el('span', { text: 'Variables' })),
+          ...(scopesHere.length ? scopesHere.flatMap((s) => [el('div', { class: 'dbgr-scope', text: s.name }), ...varRows(s.variablesReference, 0)]) : [el('div', { class: 'muted', text: 'Stop at a breakpoint to see variables.' })])),
+        el('div', { class: 'dbgr-col' },
+          el('div', { class: 'sk-head' }, ic('square-terminal'), el('span', { text: 'Output' })),
+          el('pre', { class: 'dbgr-output', text: d.output.slice(-200).join('') }))));
+  }
+  function handleDapEvent(event, body) {
+    const d = state.debugger;
+    if (event === 'stopped') { d.status = 'stopped'; d.threadId = body.threadId; refreshStack(); return; }
+    if (event === 'continued') { d.status = 'running'; clearCurrentLine(); renderDebuggerPanel(); return; }
+    if (event === 'terminated') { d.status = 'terminated'; d.frames = []; d.currentFrameId = null; clearCurrentLine(); renderDebuggerPanel(); return; }
+    if (event === 'output' && body && typeof body.output === 'string') { d.output.push(body.output); if (d.output.length > 400) d.output.splice(0, d.output.length - 400); renderDebuggerPanel(); }
+  }
+
   // ---------------------------------------------------------------- bottom panel: problems, review, terminals
   function renderBottomTabs() {
     const bar = $('#bottom-tabs');
@@ -2097,6 +2304,7 @@
         ic('sparkles'), 'Review', state.review.running ? el('span', { class: 'badge', text: '…' }) : null));
     }
     if (state.debug.open) tabs.push(el('div', { class: `btab${state.bottom === 'debug' ? ' active' : ''}`, onclick: () => showBottom('debug') }, ic('bug'), 'Debug', el('span', { class: 'x', onclick: (e) => { e.stopPropagation(); closeDebug(); } }, ic('x'))));
+    if (state.debugger.open) tabs.push(el('div', { class: `btab${state.bottom === 'debugger' ? ' active' : ''}`, onclick: () => showBottom('debugger') }, ic('octagon-pause'), 'Run & Debug', el('span', { class: 'x', onclick: (e) => { e.stopPropagation(); closeDebugger(); } }, ic('x'))));
     for (const t of state.terms.values()) {
       tabs.push(el('div', { class: `btab${state.bottom === t.key ? ' active' : ''}${t.exited ? ' exited' : ''}`, onclick: () => showBottom(t.key) },
         ic(t.fix && (t.fix.state === 'fixing' || t.fix.state === 'checking') ? 'repeat' : 'terminal', t.fix && (t.fix.state === 'fixing' || t.fix.state === 'checking') ? 'spin' : ''), el('span', { text: t.title }),
@@ -2116,7 +2324,8 @@
     $('#review').style.display = key === 'review' ? 'block' : 'none';
     $('#debug').style.display = key === 'debug' ? 'flex' : 'none';
     if (key === 'debug') pollDebug();
-    const isTerm = key !== 'problems' && key !== 'review' && key !== 'debug';
+    $('#debugger').style.display = key === 'debugger' ? 'flex' : 'none';
+    const isTerm = key !== 'problems' && key !== 'review' && key !== 'debug' && key !== 'debugger';
     $('#terms').style.display = isTerm ? 'block' : 'none';
     for (const t of state.terms.values()) t.container.classList.toggle('active', t.key === key);
     renderBottomTabs();
@@ -2558,6 +2767,11 @@
     for (const [name, dflt] of Object.entries(LSP_DEFAULTS)) {
       lspCmd[name] = el('input', { type: 'text', placeholder: `default: ${dflt}`, value: (lspCur.servers && lspCur.servers[name] && lspCur.servers[name].command) || '', spellcheck: 'false' });
     }
+    const icCur = { ...defaults.inlineCompletion, ...(settings.inlineCompletion || {}) };
+    const icOn = el('input', { type: 'checkbox' }); icOn.checked = !!icCur.enabled;
+    const icBaseUrl = el('input', { type: 'text', placeholder: 'default: the first agent pointed at an Ollama server', value: icCur.baseUrl || '', spellcheck: 'false' });
+    const icModel = el('input', { type: 'text', placeholder: 'default: that agent’s model', value: icCur.model || '', spellcheck: 'false' });
+    const icDebounce = num(icCur.debounceMs, 400, 100, 3000);
     const agentBox = el('div');
     const drawAgents = () => agentBox.replaceChildren(...agents.map((a, i) => {
       const n = el('input', { type: 'text', value: a.name, placeholder: 'Name' }); n.style.maxWidth = '140px';
@@ -2607,6 +2821,7 @@
       const servers = {};
       for (const [name, input] of Object.entries(lspCmd)) if (input.value.trim()) servers[name] = { ...((lspCur.servers || {})[name] || {}), command: input.value.trim() };
       next.lsp = { ...lspCur, enabled: lspOn.checked, servers };
+      next.inlineCompletion = { enabled: icOn.checked, baseUrl: icBaseUrl.value.trim(), model: icModel.value.trim(), debounceMs: Math.min(3000, Math.max(100, Number(icDebounce.value) || 400)) };
       next.editorFontSize = Math.min(32, Math.max(8, Number(edFont.value) || 13));
       next.terminalFontSize = Math.min(32, Math.max(8, Number(termFont.value) || 13));
       next.monoFont = fontFam.value;
@@ -2765,6 +2980,11 @@
         el('label', { class: 'check' }, lspOn, ' Hover, go to definition, find references, completion and diagnostics from installed language servers'),
         ...Object.entries(lspCmd).map(([name, input]) => el('div', { class: 'line' }, el('span', { class: 'lsp-name', text: name }), input)),
         el('div', { class: 'hint', text: 'Nothing is bundled: install the server (e.g. jdtls for Java, pyright for Python, typescript-language-server for TS/JS, gopls for Go, rust-analyzer for Rust, csharp-ls for C#) and it is found on your PATH. Leave a field empty for the default command.' })),
+      aiCompletion: el('div', { class: 'field' }, el('div', { class: 'agent-head', text: 'AI inline completion (optional)' }),
+        el('label', { class: 'check' }, icOn, ' Suggest ghost-text completions as you type, from a local model'),
+        el('div', { class: 'line' }, 'Ollama server ', icBaseUrl, ' model ', icModel),
+        el('div', { class: 'line' }, 'Wait before asking (ms) ', icDebounce),
+        el('div', { class: 'hint', text: 'Ollama only, fill-in-the-middle (codellama/qwen2.5-coder/starcoder-style models give the best results; others still work, just less precisely mid-function). Leave the server/model blank to use the first agent in Settings → Agents that already points at an Ollama server. Tab accepts a suggestion, Esc dismisses it.' })),
       codeLenses: el('div', { class: 'field' }, el('div', { class: 'agent-head', text: 'Above classes and methods' }),
         el('label', { class: 'check' }, lensUsages, ' Show how often the name is used in the project'),
         el('label', { class: 'check' }, lensBlame, ' Show who changed it last (git blame of its lines); click opens the commit'),
@@ -2783,7 +3003,7 @@
       ['review', 'Review & checks', ['reviewCommand', 'autoCheck'], 'shield-check'],
       ['oversight', 'Oversight', ['humanInLoop', 'fixLoop', 'mergeGuard', 'autoMerge'], 'eye'],
       ['safety', 'Safety', ['agentSafety'], 'lock'],
-      ['editor', 'Editor', ['languageServers', 'codeLenses'], 'file-code'],
+      ['editor', 'Editor', ['languageServers', 'aiCompletion', 'codeLenses'], 'file-code'],
     ];
     const used = new Set(TABS.flatMap((t) => t[2]).concat(['title', 'footnote', 'actions']));
     const stray = Object.keys(f).filter((k) => !used.has(k));
@@ -5388,6 +5608,7 @@
     }
   }
   api.fs.onChanged((info) => { refreshAfterChange(info); });
+  api.dap.onEvent((event, body) => handleDapEvent(event, body));
 
   async function switchProject(dir) {
     const before = state.project && state.project.root;
@@ -5528,6 +5749,7 @@
     if (mod && !e.shiftKey && k === 's') { e.preventDefault(); saveActive(); }
     else if (mod && !e.shiftKey && k === 'p') { e.preventDefault(); openQuickOpen(); }
     else if (mod && e.shiftKey && k === 'p') { e.preventDefault(); openPalette(); }
+    else if (mod && !e.shiftKey && k === 't') { e.preventDefault(); openGotoSymbol(); }
     else if (mod && e.shiftKey && k === 'f') { e.preventDefault(); focusSearch(); }
     else if (e.ctrlKey && e.key === '`') { e.preventDefault(); newTerminal({ title: 'Terminal' }); }
   });

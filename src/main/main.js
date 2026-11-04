@@ -47,6 +47,8 @@ const runconfig = require('../core/runconfig');
 const symbols = require('../core/symbols');
 const treesitter = require('../core/treesitter');
 const { UsageIndex } = require('../core/usages');
+const { SymbolIndex } = require('../core/symbolindex');
+const dap = require('../core/dap');
 const { SpringIndex } = require('../core/springmap');
 const runstats = require('../core/runstats');
 const taskTemplates = require('../core/tasktemplates');
@@ -94,8 +96,18 @@ let reviewAbort = null;
 let ptys = null;
 let fixloop = null;
 let lsp = null;
+let dapSession = null;
 let usageIndex = null;
+let symbolIndex = null;
 let springIndex = null;
+const getSymbolIndex = (r) => {
+  if (!symbolIndex) {
+    const cfgSym = loadConfigSafe(r).symbolParser;
+    const symbolsOf = async (rel, content) => (cfgSym === 'regex' ? null : await treesitter.symbols(rel, content)) || symbols.findSymbols(rel, content);
+    symbolIndex = new SymbolIndex(r, () => G.projectFiles(r), symbolsOf);
+  }
+  return symbolIndex;
+};
 const getSpringIndex = (r) => { if (!springIndex) springIndex = new SpringIndex(r, () => G.projectFiles(r)); return springIndex; };
 let localHistory = null;
 const lhTimers = new Map();
@@ -221,6 +233,7 @@ function startWatcher(isRetry = false) {
       watchStats.events++; watchStats.lastEventAt = new Date().toISOString(); watchStats.lastEventFile = String(filename);
       if (root) lhRecordDisk(root, toPosix(String(filename)), 'changed on disk');
       if (usageIndex) usageIndex.invalidate();
+      if (symbolIndex) symbolIndex.invalidate();
       if (springIndex) springIndex.invalidate();
       feed.event(); // never dropped, not even while the gates run
     });
@@ -264,7 +277,7 @@ function startPoller() {
       if (root !== r) return;
       if (sig === null) { watchStats.lastPollError = 'git status failed'; return; }
       watchStats.polls++; watchStats.lastPollAt = new Date().toISOString(); watchStats.lastPollFiles = sig ? sig.split('\n').length : 0; watchStats.lastPollError = null;
-      if (lastSig !== null && sig !== lastSig) { watchStats.pollChanges++; if (usageIndex) usageIndex.invalidate(); if (springIndex) springIndex.invalidate(); send('fs:changed', { poll: true }); }
+      if (lastSig !== null && sig !== lastSig) { watchStats.pollChanges++; if (usageIndex) usageIndex.invalidate(); if (symbolIndex) symbolIndex.invalidate(); if (springIndex) springIndex.invalidate(); send('fs:changed', { poll: true }); }
       lastSig = sig;
     } catch (err) { watchStats.lastPollError = String((err && err.message) || err); } finally { pollBusy = false; }
   }, 4000);
@@ -273,8 +286,9 @@ function startPoller() {
 }
 
 function setRoot(dir) {
-  usageIndex = null; springIndex = null;
+  usageIndex = null; symbolIndex = null; springIndex = null;
   if (lsp) { lsp.dispose().catch(() => {}); lsp = null; }
+  if (dapSession) { dapSession.stop().catch(() => {}); dapSession = null; }
   // canonicalize (resolves symlinks, e.g. macOS /var -> /private/var): `git worktree list` reports paths already
   // resolved this way, so without this, switching back from a run's worktree to a root opened via its unresolved
   // form fails the exact-string match in project:switch ("Not a known agent run of this repository").
@@ -1403,6 +1417,21 @@ function registerIpc() {
   ipcMain.handle('agent:testCancel', () => { if (modelTestJob) modelTestJob.cancel(); return true; });
   ipcMain.handle('ollama:list', async (_e, baseUrl) => ollama.status(baseUrl || ollama.DEFAULT_URL));
   ipcMain.handle('ollama:warm', async (_e, { baseUrl, model, keepAlive } = {}) => { try { await ollama.warm(baseUrl || ollama.DEFAULT_URL, String(model || ''), String(keepAlive || '15m'), 60000); return { ok: true }; } catch (err) { return { ok: false, error: err.message }; } });
+  // AI inline completion (ghost text): off unless a project turns it on. Empty baseUrl/model in settings = use the
+  // first configured agent that already talks to an Ollama-style server, the same target the agent terminal uses.
+  ipcMain.handle('ai:complete', (_e, { prefix, suffix } = {}) => safe(async () => {
+    const r = requireRoot();
+    const cfg = loadConfigSafe(r);
+    const ic = withDefaults(cfg, 'inlineCompletion');
+    if (!ic.enabled) return { skip: true };
+    let { baseUrl, model } = ic;
+    if (!baseUrl || !model) {
+      const found = (cfg.agents || []).map((a) => ollama.localTarget(a)).find((t) => t && t.model);
+      if (!found) return { skip: true, reason: 'No agent in Settings points at an Ollama-style model server, and no baseUrl/model is set under inlineCompletion.' };
+      baseUrl = baseUrl || found.baseUrl; model = model || found.model;
+    }
+    try { return await ollama.complete(baseUrl, { model, prompt: String(prefix || ''), suffix: String(suffix || '') }); } catch (err) { return { error: err.message }; }
+  }));
   // updates (electron-updater): checks by default, then download on request, then restart to install - never automatic past the check
   let autoUpdater = null;
   const updateState = { status: 'idle', info: null };
@@ -1459,7 +1488,38 @@ function registerIpc() {
   ipcMain.handle('lsp:open', (_e, rel, text) => safe(async () => { resolveInRoot(rel); return ensureLsp().open(String(rel), String(text)); }));
   ipcMain.on('lsp:change', (_e, rel, text) => { if (lsp) lsp.change(String(rel), String(text)); });
   ipcMain.on('lsp:close', (_e, rel) => { if (lsp) lsp.close(String(rel)); });
-  ipcMain.handle('lsp:request', (_e, rel, kind, pos) => safe(async () => ({ result: await ensureLsp().request(String(rel), String(kind), pos || {}, { includeDeclaration: pos && pos.includeDeclaration }) })));
+  ipcMain.handle('lsp:request', (_e, rel, kind, pos) => safe(async () => ({ result: await ensureLsp().request(String(rel), String(kind), pos || {}, { includeDeclaration: pos && pos.includeDeclaration, newName: pos && pos.newName }) })));
+  ipcMain.handle('lsp:workspaceSymbols', (_e, query) => safe(async () => ({ result: await ensureLsp().workspaceSymbols(String(query || '')) })));
+
+  // real debugger (breakpoints, step, call stack, variables), via the Debug Adapter Protocol - one session at a
+  // time. Python only for now (debugpy.adapter, spawned directly; see core/dap.js). Every DAP event is pushed to
+  // the renderer as-is on 'dap:event'; it decides what a 'stopped'/'terminated'/'output' event means for the UI.
+  ipcMain.handle('dap:start', (_e, { rel } = {}) => safe(async () => {
+    const r = requireRoot();
+    const abs = resolveInRoot(rel);
+    if (!/\.py$/i.test(String(rel))) return { error: 'Debugging is only wired up for Python right now (debugpy.adapter). Other languages still get "Debug this test" (Settings → a Debug lens), which waits for your own IDE’s debugger to attach.' };
+    if (dapSession) { await dapSession.stop().catch(() => {}); dapSession = null; }
+    const session = new dap.DapSession();
+    session.on('event', (event, body) => send('dap:event', event, body));
+    dapSession = session;
+    try {
+      const res = await session.start({ adapter: dap.pythonAdapter(process.platform), program: abs, cwd: r });
+      return { ok: true, capabilities: res.capabilities };
+    } catch (err) { dapSession = null; return { error: err.message }; }
+  }));
+  const requireDap = () => { if (!dapSession) throw new Error('No debug session is running.'); return dapSession; };
+  ipcMain.handle('dap:setBreakpoints', (_e, { rel, lines } = {}) => safe(async () => ({ breakpoints: await requireDap().setBreakpoints(resolveInRoot(rel), (lines || []).map(Number)) })));
+  ipcMain.handle('dap:configurationDone', () => safe(async () => { await requireDap().configurationDone(); return { ok: true }; }));
+  ipcMain.handle('dap:continue', (_e, threadId) => safe(async () => { await requireDap().continue_(threadId); return { ok: true }; }));
+  ipcMain.handle('dap:next', (_e, threadId) => safe(async () => { await requireDap().next(threadId); return { ok: true }; }));
+  ipcMain.handle('dap:stepIn', (_e, threadId) => safe(async () => { await requireDap().stepIn(threadId); return { ok: true }; }));
+  ipcMain.handle('dap:stepOut', (_e, threadId) => safe(async () => { await requireDap().stepOut(threadId); return { ok: true }; }));
+  ipcMain.handle('dap:pause', (_e, threadId) => safe(async () => { await requireDap().pause(threadId); return { ok: true }; }));
+  ipcMain.handle('dap:threads', () => safe(async () => ({ threads: await requireDap().threads() })));
+  ipcMain.handle('dap:stackTrace', (_e, threadId) => safe(async () => ({ frames: await requireDap().stackTrace(threadId) })));
+  ipcMain.handle('dap:scopes', (_e, frameId) => safe(async () => ({ scopes: await requireDap().scopes(frameId) })));
+  ipcMain.handle('dap:variables', (_e, variablesReference) => safe(async () => ({ variables: await requireDap().variables(variablesReference) })));
+  ipcMain.handle('dap:stop', () => safe(async () => { if (dapSession) { await dapSession.stop(); dapSession = null; } return { ok: true }; }));
 
   // run-this-test
   ipcMain.handle('tests:find', (_e, rel, content) => { const dbgOk = testcmd.canDebug(String(rel), String(content)); return testcmd.findTests(String(rel), String(content)).map((t) => ({ line: t.line, name: t.name, kind: t.kind, suite: t.suite, debuggable: dbgOk && t.kind === 'test' })); });
@@ -1654,6 +1714,14 @@ function registerIpc() {
       usages: lenses.usages ? usageIndex.usages(s.name, { declarations: declared.get(s.name) }).count : null,
       blame: blame ? symbols.symbolBlame(blame, s) : null,
     })) };
+  }));
+  // "Go to symbol in workspace" (quick open): every class/method/function in the project, built once and kept
+  // fresh by the same file-watcher invalidation as the usages index; the renderer fuzzy-filters the flat list.
+  ipcMain.handle('symbols:workspaceAll', () => safe(async () => {
+    const r = requireRoot();
+    const idx = getSymbolIndex(r);
+    await idx.refresh();
+    return { symbols: idx.all() };
   }));
   // semantic diff: what happened to each class/method/function between two versions of a file - added, removed,
   // renamed, moved or changed - instead of raw line deletes and inserts. Pure text in, so it works for any diff
@@ -2018,4 +2086,4 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => { stopWatcher(); if (ptys) ptys.killAll(); app.quit(); });
-app.on('before-quit', () => { toolProxies.closeAll().catch(() => {}); stopWatcher(); if (ptys) ptys.killAll(); if (lsp) lsp.dispose().catch(() => {}); });
+app.on('before-quit', () => { toolProxies.closeAll().catch(() => {}); stopWatcher(); if (ptys) ptys.killAll(); if (lsp) lsp.dispose().catch(() => {}); if (dapSession) dapSession.stop().catch(() => {}); });

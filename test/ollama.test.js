@@ -248,3 +248,36 @@ test('agentprep hands the configured longest reply to the environment, and the t
   const advice = require('../src/core/modeltest').diagnose('Context limit reached · /compact or /clear to continue').join(' ');
   assert.match(advice, /reserves room for the model's reply/);
 });
+
+test('complete(): fill-in-the-middle, prompt and suffix sent as-is, the raw continuation text comes back', async () => {
+  const calls = [];
+  const srv = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      calls.push(JSON.parse(body));
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ response: '    return a + b;\n' }));
+    });
+  });
+  await new Promise((resolve) => srv.listen(0, '127.0.0.1', resolve));
+  try {
+    const url = `http://127.0.0.1:${srv.address().port}`;
+    const res = await ollama.complete(url, { model: 'qwen2.5-coder', prompt: 'function add(a, b) {\n', suffix: '\n}\n' });
+    assert.equal(res.text, '    return a + b;\n');
+    assert.equal(calls[0].model, 'qwen2.5-coder');
+    assert.equal(calls[0].prompt, 'function add(a, b) {\n');
+    assert.equal(calls[0].suffix, '\n}\n');
+    assert.equal(calls[0].stream, false);
+  } finally { srv.close(); }
+});
+
+test('complete(): a non-string/missing response never throws, just gives empty text', async () => {
+  const srv = http.createServer((_req, res) => { res.end(JSON.stringify({ done: true })); });
+  await new Promise((resolve) => srv.listen(0, '127.0.0.1', resolve));
+  try {
+    const url = `http://127.0.0.1:${srv.address().port}`;
+    const res = await ollama.complete(url, { model: 'x', prompt: 'a' });
+    assert.equal(res.text, '');
+  } finally { srv.close(); }
+});

@@ -260,8 +260,24 @@ label.check { display: inline-flex; align-items: center; gap: 4px; color: var(--
 #bottom { height: var(--bottom-h); min-height: 80px; display: flex; flex-direction: column; background: var(--bg); }
 #bottom-tabs { display: flex; overflow-x: auto; background: var(--bg-2); border-bottom: 1px solid var(--line); min-height: 28px; }
 #bottom-body { flex: 1; position: relative; min-height: 0; }
-#terms, #problems, #debug { position: absolute; inset: 0; }
+#terms, #problems, #debug, #debugger { position: absolute; inset: 0; }
 #debug { display: none; flex-direction: column; }
+#debugger { display: none; flex-direction: column; }
+.dbgr-toolbar { display: flex; align-items: center; padding: 4px 8px; border-bottom: 1px solid var(--line); gap: 8px; }
+.dbgr-toolbar button.icon:disabled { opacity: .35; cursor: default; }
+.dbgr-toolbar button.icon.danger .i { color: var(--err); }
+.dbgr-body { flex: 1; display: flex; overflow: hidden; }
+.dbgr-col { flex: 1; min-width: 0; overflow: auto; padding: 4px 10px; border-right: 1px solid var(--line); font-size: 12px; }
+.dbgr-col:last-child { border-right: none; }
+.dbgr-frame { padding: 3px 4px; border-radius: 4px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dbgr-frame:hover { background: var(--bg-3); }
+.dbgr-frame.sel { background: var(--accent-bg); color: var(--accent); }
+.dbgr-scope { font-weight: 600; color: var(--muted); margin: 8px 0 2px; }
+.dbgr-scope:first-child { margin-top: 0; }
+.dbgr-var { display: flex; align-items: baseline; gap: 2px; font-family: var(--mono, monospace); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dbgr-caret { width: 14px; flex: none; display: inline-flex; cursor: pointer; }
+.dbgr-caret .i { width: 12px; height: 12px; }
+.dbgr-output { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: var(--mono, monospace); font-size: 12px; user-select: text; }
 .dbg-bar { display: flex; gap: 6px; align-items: center; padding: 4px 8px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .dbg-filters { display: flex; gap: 2px; flex: 1; flex-wrap: wrap; }
 .dbg-f { padding: 2px 8px; }
@@ -521,6 +537,9 @@ button.toggle.on { border-color: var(--accent); color: var(--accent); }
 /* review comments on diff lines */
 .bazinga-comment-line { background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .bazinga-comment-glyph { background: var(--accent); border-radius: 3px; margin-left: 3px; width: 8px !important; height: 8px !important; margin-top: 6px; }
+.bp-dot { background: var(--err); border-radius: 50%; margin-left: 5px; width: 9px !important; height: 9px !important; margin-top: 5px; }
+.debug-current-arrow { background: var(--accent); margin-left: 3px; width: 8px !important; height: 8px !important; margin-top: 6px; clip-path: polygon(0 0, 100% 50%, 0 100%); }
+.debug-current-line { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 .badge.warnbadge { color: var(--warn); font-weight: 600; }
 
 /* terminal scrollback search */

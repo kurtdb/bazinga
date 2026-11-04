@@ -267,7 +267,7 @@ class LspManager extends EventEmitter {
   }
 
   /**
-   * kind: hover | definition | references | completion | signatureHelp; pos: { line, character } (0-based).
+   * kind: hover | definition | references | completion | signatureHelp | rename; pos: { line, character } (0-based).
    * Locations come back as { rel, range } and are dropped when they point outside the project (JDK sources, node_modules typings...).
    */
   async request(rel, kind, pos, opts = {}) {
@@ -285,8 +285,43 @@ class LspManager extends EventEmitter {
       case 'references': return toLocations(await call('textDocument/references', { context: { includeDeclaration: opts.includeDeclaration !== false } }));
       case 'completion': return call('textDocument/completion', { context: { triggerKind: 1 } });
       case 'signatureHelp': return call('textDocument/signatureHelp');
+      case 'rename': return this._toRelEdits(await call('textDocument/rename', { newName: String(opts.newName || '') }));
       default: throw new Error(`Unsupported language server request: ${kind}`);
     }
+  }
+
+  /** LSP WorkspaceEdit (changes and/or documentChanges) -> { rel: TextEdit[] }, project-relative, or null when there is nothing to apply. */
+  _toRelEdits(we) {
+    const out = new Map();
+    const add = (uri, edits) => {
+      const rel = this._rel(uri);
+      if (!rel || !Array.isArray(edits) || !edits.length) return;
+      out.set(rel, [...(out.get(rel) || []), ...edits]);
+    };
+    if (we && we.changes) for (const [uri, edits] of Object.entries(we.changes)) add(uri, edits);
+    if (we && Array.isArray(we.documentChanges)) {
+      for (const dc of we.documentChanges) if (dc.textDocument && Array.isArray(dc.edits)) add(dc.textDocument.uri, dc.edits);
+    }
+    return out.size ? Object.fromEntries(out) : null;
+  }
+
+  /** workspace/symbol, asked only of servers already running (a search should never be the reason one starts). Merges and caps results. */
+  async workspaceSymbols(query, { max = 200 } = {}) {
+    const out = [];
+    await Promise.all(Object.keys(this.resolved()).map(async (name) => {
+      const entry = this.servers.get(name);
+      if (!entry || entry.state !== 'ready') return;
+      try {
+        const res = await entry.client.request('workspace/symbol', { query: String(query || '') }, 4000);
+        for (const s of (res || [])) {
+          const loc = s.location || {};
+          const rel = this._rel(loc.uri);
+          if (!rel || !loc.range) continue;
+          out.push({ name: s.name, kind: s.kind, rel, range: loc.range, containerName: s.containerName || null });
+        }
+      } catch { /* unsupported or timed out: this server contributes nothing */ }
+    }));
+    return out.slice(0, max);
   }
 
   /**

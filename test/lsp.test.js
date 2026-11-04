@@ -109,7 +109,32 @@ test('server housekeeping requests are answered (workspace/configuration) and a 
 test('unsupported request kinds are rejected', async () => {
   const { mgr } = project(fakeServer);
   await mgr.open('a.py', 'x');
-  await assert.rejects(() => mgr.request('a.py', 'rename', { line: 0, character: 0 }), /Unsupported/);
+  await assert.rejects(() => mgr.request('a.py', 'foldingRange', { line: 0, character: 0 }), /Unsupported/);
+  await mgr.dispose();
+});
+
+test('rename: a WorkspaceEdit comes back keyed by project-relative path, every occurrence in the file', async () => {
+  const { root, mgr } = project(fakeServer);
+  const text = fs.readFileSync(path.join(root, 'a.py'), 'utf8');
+  await mgr.open('a.py', text);
+  const edits = await mgr.request('a.py', 'rename', { line: 0, character: 5 }, { newName: 'renamed' });
+  assert.deepStrictEqual(Object.keys(edits), ['a.py']);
+  assert.strictEqual(edits['a.py'].length, 2); // the declaration and the one call site
+  assert.ok(edits['a.py'].every((e) => e.newText === 'renamed'));
+  // no identifier under the cursor: nothing to rename
+  assert.strictEqual(await mgr.request('a.py', 'rename', { line: 1, character: 0 }, { newName: 'x' }), null);
+  await mgr.dispose();
+});
+
+test('workspace/symbol: merged across ready servers only, outside-project results would be dropped the same way as definition', async () => {
+  const { mgr } = project(fakeServer);
+  assert.deepStrictEqual(await mgr.workspaceSymbols('target'), [], 'no server started yet: nothing to ask');
+  await mgr.open('a.py', 'def target():\n    return 1\n');
+  const syms = await mgr.workspaceSymbols('target');
+  assert.strictEqual(syms.length, 1);
+  assert.strictEqual(syms[0].name, 'target');
+  assert.strictEqual(syms[0].rel, 'a.py');
+  assert.deepStrictEqual(await mgr.workspaceSymbols('nope'), []);
   await mgr.dispose();
 });
 

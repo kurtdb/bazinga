@@ -95,6 +95,21 @@ function warm(baseUrl, model, keepAlive = '15m', timeoutMs = 180000) {
   return request(baseUrl, 'POST', '/api/generate', { model, prompt: '', stream: false, keep_alive: keepAlive }, timeoutMs);
 }
 
+/**
+ * Fill-in-the-middle inline completion: the text before the cursor (prompt) and after it (suffix, same file),
+ * answered with just the continuation - Ollama's native /api/generate `suffix` field (codellama/qwen2.5-coder/
+ * starcoder-style models honour it; a model without FIM training just answers as if suffix were not given, which
+ * still works for end-of-line/end-of-file completions, only less well mid-function). No chat framing, no markdown
+ * fencing: the raw continuation text is returned exactly as the model wrote it, suggestion ghost-text wants nothing else.
+ */
+async function complete(baseUrl, { model, prompt, suffix, numPredict = 128, timeoutMs = 6000 } = {}) {
+  const res = await request(baseUrl, 'POST', '/api/generate', {
+    model, prompt: String(prompt || ''), suffix: suffix ? String(suffix) : undefined, stream: false,
+    options: { num_predict: numPredict, temperature: 0.2 },
+  }, timeoutMs);
+  return { text: typeof res.response === 'string' ? res.response : '' };
+}
+
 function serveCommand(platform = process.platform) {
   if (platform === 'win32') return '$env:OLLAMA_CONTEXT_LENGTH=32768; $env:OLLAMA_FLASH_ATTENTION=1; $env:OLLAMA_KV_CACHE_TYPE="q8_0"; ollama serve   (stop the Ollama tray app first)';
   return 'OLLAMA_CONTEXT_LENGTH=32768 OLLAMA_FLASH_ATTENTION=1 OLLAMA_KV_CACHE_TYPE=q8_0 ollama serve   (quit the Ollama menu bar app first)';
@@ -173,4 +188,4 @@ function claudeEnv(model, context, { maxOutput } = {}) {
 
 const contextLabel = (n) => (n ? `${Math.round(n / 1024)}k` : '');
 
-module.exports = { notes, claudeEnv, maxOutputTokens, isClaudeCommand, isModelServerUrl, normalizeBaseUrl, DEFAULT_URL, MIN_CONTEXT, modelOf, localTarget, request, status, warm, problems, serveCommand, sameModel, contextLabel };
+module.exports = { notes, claudeEnv, maxOutputTokens, isClaudeCommand, isModelServerUrl, normalizeBaseUrl, DEFAULT_URL, MIN_CONTEXT, modelOf, localTarget, request, status, warm, complete, problems, serveCommand, sameModel, contextLabel };

@@ -36,6 +36,25 @@ function handle(m) {
     }
     case 'textDocument/completion': send({ id: m.id, result: { isIncomplete: false, items: [{ label: 'fakeCompletion', kind: 3, detail: 'fake()', insertText: 'fakeCompletion()' }, { label: 'other', kind: 6 }] } }); break;
     case 'textDocument/signatureHelp': send({ id: m.id, result: { signatures: [{ label: 'fake(a, b)', parameters: [{ label: 'a' }, { label: 'b' }] }], activeSignature: 0, activeParameter: 0 } }); break;
+    case 'textDocument/rename': {
+      // renames every whole-word occurrence of the word under the cursor, in this one document - enough to exercise the client's WorkspaceEdit handling
+      const text = docs.get(p.textDocument.uri) || '';
+      const w = wordAt(text, p.position.line, p.position.character);
+      const edits = [];
+      if (w) text.split('\n').forEach((l, i) => {
+        const re = new RegExp(`\\b${w}\\b`, 'g');
+        let mm; while ((mm = re.exec(l))) edits.push({ range: { start: { line: i, character: mm.index }, end: { line: i, character: mm.index + w.length } }, newText: p.newName });
+      });
+      send({ id: m.id, result: edits.length ? { changes: { [p.textDocument.uri]: edits } } : null });
+      break;
+    }
+    case 'workspace/symbol': {
+      const q = String(p.query || '').toLowerCase();
+      const result = [];
+      for (const uri of docs.keys()) if (!q || 'target'.includes(q)) result.push({ name: 'target', kind: 12, location: { uri, range: { start: { line: 0, character: 4 }, end: { line: 0, character: 10 } } } });
+      send({ id: m.id, result });
+      break;
+    }
     default: if (m.id !== undefined) send({ id: m.id, result: null });
   }
 }
