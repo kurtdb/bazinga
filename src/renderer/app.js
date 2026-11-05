@@ -4265,7 +4265,14 @@
         el('div', { class: 'skill-actions' },
           isGit ? el('button', { title: 'Fetch the source again and replace this skill when it changed', onclick: async () => {
             setStatus(`Updating ${s.name}…`);
-            const r = await api.skills.update({ level, name: s.name });
+            let r = await api.skills.update({ level, name: s.name });
+            if (r && !r.error && (r.findings || []).length) {
+              const lines = r.findings.map((f) => `${f.file}:${f.line} — ${f.message}`).join('\n');
+              if (!window.confirm(`The updated ${s.name} (${r.from.slice(0, 7)} → ${r.to.slice(0, 7)}) scanned with ${r.findings.length} finding${r.findings.length === 1 ? '' : 's'}:\n\n${lines}\n\nThis is a heuristic scan, not a security review. Install the update anyway?`)) {
+                setStatus(`${s.name} not updated.`); return;
+              }
+              r = await api.skills.update({ level, name: s.name, token: r.token, force: true });
+            }
             setStatus(r.error ? r.error : r.unchanged ? `${s.name} is up to date.` : `${s.name} updated.`); await draw();
           } }, ic('refresh-cw'), 'Update') : null,
           el('button', { class: 'icon danger', title: 'Remove this skill', 'aria-label': `Remove ${s.name}`, onclick: async () => {
@@ -4314,7 +4321,15 @@
               k.description ? el('div', { class: 'skill-desc', text: k.description }) : null,
               el('div', { class: 'skill-badges' },
                 skBadge(`${k.fileCount} file${k.fileCount === 1 ? '' : 's'}`, 'ghost', 'files'),
-                k.hasScripts ? skBadge('Contains scripts', 'danger', 'triangle-alert', 'Other than text - an agent may run them. Read them before you install.') : null))),
+                k.hasScripts ? skBadge('Contains scripts', 'danger', 'triangle-alert', 'Other than text - an agent may run them. Read them before you install.') : null,
+                (k.findings || []).length ? skBadge(
+                  `${k.findings.length} scan finding${k.findings.length === 1 ? '' : 's'}`,
+                  k.findings.some((f) => f.severity === 'error') ? 'danger' : 'warnchip',
+                  'triangle-alert',
+                  'A read-only pattern scan of this skill’s own files (hidden/invisible characters, download-and-execute commands, prompt-injection phrasing). This is heuristic, not a security review - read the findings yourself before installing.',
+                ) : null))),
+          (k.findings || []).length ? el('details', { class: 'skill-scan-findings' }, el('summary', { text: `Scan findings (${k.findings.length})` }),
+            ...k.findings.map((f) => el('div', { class: 'finding' }, el('span', { class: `sev ${f.severity}`, text: f.severity === 'error' ? '!' : '?' }), el('span', { text: `${f.file}:${f.line} — ${f.message}` })))) : null,
           el('details', null, el('summary', { text: 'Preview SKILL.md' }), el('pre', { class: 'detail', text: `${k.files.join('\n')}\n\n${k.preview}` })))),
         el('div', { class: 'actions' },
           el('button', { onclick: () => { dropPending(); fill(fetchHost); } }, ic('x'), 'Cancel'),
@@ -4322,7 +4337,9 @@
             const names = checks.filter((c) => c.checked).map((c) => c.dataset.name);
             if (!names.length) return;
             const level = levelSel.value;
-            if (!window.confirm(`Install ${names.join(', ')} for ${level === 'ide' ? 'all projects' : 'this project'}?\n\nSkills are instructions (and sometimes scripts) your agent will follow. Only install ones you trust.`)) return;
+            const flagged = res.skills.filter((k) => names.includes(k.name) && (k.findings || []).length);
+            const scanNote = flagged.length ? `\n\n⚠ The read-only scan flagged ${flagged.reduce((n, k) => n + k.findings.length, 0)} thing${flagged.length === 1 && flagged[0].findings.length === 1 ? '' : 's'} in ${flagged.map((k) => k.name).join(', ')} - see “Scan findings” above before installing.` : '';
+            if (!window.confirm(`Install ${names.join(', ')} for ${level === 'ide' ? 'all projects' : 'this project'}?\n\nSkills are instructions (and sometimes scripts) your agent will follow. Only install ones you trust.${scanNote}`)) return;
             const r = await api.skills.install({ token: res.token, names, level, replace: true });
             pending = null; fill(fetchHost);
             setStatus(r.error ? r.error : `Installed ${r.installed.join(', ')}.`); await draw();

@@ -49,6 +49,36 @@ is done, delete it rather than leaving a struck-through retrospective in its pla
   and found **zero** of the six findings `p/default` catches (an unauthenticated `semgrep scan` gets a reduced,
   non-Pro rule set from that pack specifically) - switching would have been a regression dressed up as a fix.
 
+## Bundled grill-with-docs / grilling / domain-modeling — known, deliberate gap
+- **`grill-with-docs` calls its two sibling skills by name, with no enforcement that they're installed
+  together.** Bazinga's bundled-skill install is per-skill (one folder, one `Install` click); there's no
+  "this skill needs these other skills too" dependency concept. Installing `grill-with-docs` alone leaves
+  it calling the `Skill` tool for `grilling`/`domain-modeling` and finding nothing. Noted in each skill's
+  own description/NOTICE.md; not enforced in the UI.
+
+## Bundled EGM skills — known, deliberate gap
+- **Reviewer/worker isolation is instruction-level only, not tool-restricted.** Upstream EGM's Claude Code
+  plugin registers each reviewer persona as a named subagent type with a hard `tools: [Read, Grep, Glob]`
+  restriction (enforced by Claude Code itself) via `.claude-plugin/plugin.json`. This bundled copy (no
+  plugin install - see `docs/DOCUMENTATION.md`) has no equivalent registration mechanism, so a spawned
+  reviewer is a general-purpose subagent told to read its persona file and stay read-only - the persona's
+  own "you are a strictly read-only agent" instruction, not an enforced tool list. Bundling a real
+  `.claude/agents/*.md` registration would need a new install mechanism in `src/core/skills.js` beyond its
+  current "one self-contained skill folder" model - not pursued here as out of scope for "bundle the skill".
+
+## Fetched-skill scan (`core/skillscan.js`) — known, deliberate limits
+- **Pattern-matching, not a security review.** Catches the shapes it has a rule for (hidden/invisible
+  Unicode, download-and-execute, destructive commands, prompt-injection phrasing) - a sufficiently
+  obfuscated or novel attempt can still pass clean, the same caveat the secrets gate already carries.
+  `Fetch` and `Update` are both gated on it now (closed the earlier gap where an update bypassed the scan
+  entirely); normalization (homoglyph/zero-width stripping) and one-level base64 decode-and-rescan raise
+  the bar against trivial evasion but don't close it - the confusables map is a small hand-picked subset
+  of Latin-lookalike Cyrillic/Greek letters, not the full Unicode confusables table, and the base64 rescan
+  is one level deep only (a double-encoded or differently-encoded payload still passes clean).
+- **Recommended (bundled) skills are not scanned at list/install time** - they ship with the app and are
+  reviewed once by whoever adds them, not fetched from an untrusted source on every open. Covered instead
+  by a one-time regression test (`test/skillscan.test.js`) asserting the bundled set stays clean.
+
 ## "Dependency problems" (Usage & insights) — known, deliberate gaps
 - **OWASP dependency-check was considered for the Maven vulnerability check and deliberately not used**: its first
   run downloads a large NVD CVE mirror (minutes to hours without an NVD API key), which doesn't fit a quick

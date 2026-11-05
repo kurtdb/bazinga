@@ -69,6 +69,7 @@ const toolProxies = toolproxy.manager(); // helpers between Claude Code and a lo
 const containerCore = require('../core/container');
 const workflowCore = require('../core/workflow');
 const skillsCore = require('../core/skills');
+const skillscan = require('../core/skillscan');
 const budgetCore = require('../core/budget');
 const { scrubEnv } = require('../core/envscrub');
 const journalCore = require('../core/journal');
@@ -942,7 +943,9 @@ function registerIpc() {
     const skills = found.map((k) => {
       let preview = '';
       try { preview = fs.readFileSync(path.join(got.checkout, k.dir, 'SKILL.md'), 'utf8').slice(0, 4000); } catch { /* unreadable */ }
-      return { name: k.name, description: k.description, files: k.files.slice(0, 40), fileCount: k.files.length, hasScripts: k.hasScripts, bytes: k.bytes, preview };
+      // Read-only scan of this candidate's own files - run before anyone installs anything, see core/skillscan.js.
+      const findings = skillscan.scanSkillFiles(path.join(got.checkout, k.dir), k.files);
+      return { name: k.name, description: k.description, files: k.files.slice(0, 40), fileCount: k.files.length, hasScripts: k.hasScripts, bytes: k.bytes, preview, findings };
     });
     return { token, label: parsed.label, commit: got.commit, skills };
   }));
@@ -968,15 +971,29 @@ function registerIpc() {
     const cur = skillsCore.listInstalled(target).find((x) => x.name === opts.name);
     if (!cur || !cur.provenance || !cur.provenance.url) throw new Error('This skill has no recorded source, so it cannot be updated.');
     const prov = cur.provenance;
-    const got = await skillsCore.fetchSource({ url: prov.url, branch: prov.branch, label: prov.label });
-    try {
-      const k = skillsCore.findSkills(got.checkout).find((x) => x.dir === prov.skillDir);
-      if (!k) throw new Error('The skill is no longer in its source repository.');
-      if (got.commit === prov.commit) return { unchanged: true };
-      skillsCore.installEverywhere(got.checkout, { ...k, name: opts.name }, skillDirs(opts.level), { replace: true, source: { label: prov.label, url: prov.url, branch: prov.branch, commit: got.commit } });
-      if (opts.level === 'project') refreshSkillIndex();
-      return { updated: true, from: prov.commit, to: got.commit };
-    } finally { fs.rmSync(got.tmp, { recursive: true, force: true }); }
+    // Re-fetching is the same "something else changed since we last trusted this" moment `skills:fetch`
+    // scans for - an update is not exempt just because this skill was trusted before (its upstream repo,
+    // or its maintainer's account, can turn over after the fact). Findings pause here (same token-based
+    // "fetched but not yet installed" handoff `skills:fetch`/`skills:install` already use) until the
+    // caller re-sends `force: true`.
+    let got;
+    let token = opts.token;
+    if (token && skillCheckouts.has(token)) got = skillCheckouts.get(token);
+    else {
+      got = await skillsCore.fetchSource({ url: prov.url, branch: prov.branch, label: prov.label });
+      token = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      skillCheckouts.set(token, got);
+      setTimeout(() => dropCheckout(token), 15 * 60 * 1000).unref();
+    }
+    const k = skillsCore.findSkills(got.checkout).find((x) => x.dir === prov.skillDir);
+    if (!k) { dropCheckout(token); throw new Error('The skill is no longer in its source repository.'); }
+    if (got.commit === prov.commit) { dropCheckout(token); return { unchanged: true }; }
+    const findings = skillscan.scanSkillFiles(path.join(got.checkout, k.dir), k.files);
+    if (findings.length && !opts.force) return { findings, token, from: prov.commit, to: got.commit };
+    skillsCore.installEverywhere(got.checkout, { ...k, name: opts.name }, skillDirs(opts.level), { replace: true, source: { label: prov.label, url: prov.url, branch: prov.branch, commit: got.commit } });
+    dropCheckout(token);
+    if (opts.level === 'project') refreshSkillIndex();
+    return { updated: true, from: prov.commit, to: got.commit };
   }));
   ipcMain.handle('runs:prepareReview', (_e, id) => safe(() => runs.prepareReview(requireRoot(), id)));
   ipcMain.handle('runs:merge', (_e, opts = {}) => safe(async () => {

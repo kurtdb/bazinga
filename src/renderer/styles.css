@@ -569,6 +569,9 @@ button.toggle.on { border-color: var(--accent); color: var(--accent); }
 .skill-cand { flex-direction: column; align-items: stretch; }
 .skill-cand-row { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
 .skill-cand pre.detail { margin: 6px 0 0 42px; }
+.skill-cand .skill-scan-findings { margin: 6px 0 0 42px; font-size: 12px; }
+.skill-cand .skill-scan-findings .finding { padding: 2px 0; cursor: default; }
+.skill-cand .skill-scan-findings .finding:hover { background: none; }
 .skill-ico { width: 30px; height: 30px; border-radius: 8px; flex: none; display: flex; align-items: center; justify-content: center; }
 .skill-ico .i { width: 16px; height: 16px; }
 .skill-ico.src-bundled { background: var(--accent-bg); color: var(--accent); }
