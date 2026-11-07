@@ -66,6 +66,36 @@ is done, delete it rather than leaving a struck-through retrospective in its pla
   `.claude/agents/*.md` registration would need a new install mechanism in `src/core/skills.js` beyond its
   current "one self-contained skill folder" model - not pursued here as out of scope for "bundle the skill".
 
+## Agent configuration panel (`core/agentconfig.js`) — known, deliberate limits
+- **Global (home-directory) scanning is real but uneven across runners**, each item tagged `scope:
+  'project'`/`'global'` and grouped under a "Global (~, every project on this machine)" divider in the
+  dialog. Claude's side (`~/.claude/skills`, `~/.claude/agents`, `~/.claude/settings*.json`,
+  `~/.claude/CLAUDE.md`) is verified against this project's own `skills.js` convention and against a
+  real `~/.claude` on a dev machine. Codex's `~/.codex/config.toml`/`hooks.json` and Gemini's
+  `~/.gemini/settings.json` are the tools' documented home-level config locations but weren't checked
+  against a live installation here (neither was present on the machine this was built on). Copilot's
+  global agents (`~/.copilot/agents/*.md`) are verified real; its global MCP file
+  (`~/.copilot/mcp-config.json`, read the same `servers` shape as the project-level `.vscode/mcp.json`)
+  is **unverified** - no such file existed to check on this machine, so the filename and key name are
+  a best guess, not a confirmed source. Claude Code also keeps a *third*, project-scoped-but-personal
+  MCP record per project inside `~/.claude.json` (`projects["<abs path>"].mcpServers`, confirmed on a
+  real `~/.claude.json` - the top level has no flat global `mcpServers` key at all, despite that being
+  the more obvious guess) - deliberately not surfaced here, since it's neither "this project's committed
+  config" nor "applies to every project," and folding it into either scope would misrepresent it.
+- **Codex's project `.codex/config.toml` tiering is third-party-sourced** (blogs, a config-generator
+  site), not confirmed against OpenAI's own documentation - the reader degrades gracefully (skips,
+  doesn't crash) if the file is absent or shaped differently than expected, but the location/precedence
+  itself hasn't been verified against an official source.
+- **The TOML reader is a narrow hand-rolled subset** (table headers plus simple `key = "value"` /
+  `key = [...]` lines), not a general TOML parser - multi-line strings, inline tables, and dotted keys
+  are silently skipped rather than guessed at.
+- **Copilot's `applyTo` frontmatter sniff is best-effort.** `.github/instructions/*.instructions.md`'s
+  scoping field is read with the same crude single-line frontmatter parser used everywhere else in this
+  codebase (see `parseSkillMd`'s own limit) - a multi-line or oddly formatted `applyTo` is not read.
+- **Gemini CLI's manifest-based extensions** (`~/.gemini/extensions/*/gemini-extension.json`) aren't
+  scanned - they use a different mechanism (a manifest, not a settings key) than the `mcpServers` entries
+  this panel does read from `settings.json` at both levels.
+
 ## Fetched-skill scan (`core/skillscan.js`) — known, deliberate limits
 - **Pattern-matching, not a security review.** Catches the shapes it has a rule for (hidden/invisible
   Unicode, download-and-execute, destructive commands, prompt-injection phrasing) - a sufficiently

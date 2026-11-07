@@ -2066,6 +2066,7 @@
       ['Show the debug log (what the agents and workflows are doing)', 'bug', () => showDebug()],
       ['Work items (Azure Boards or Jira): start an agent run from one…', 'workflow', () => openWorkItems((text, item) => openRunDialog({ task: text, name: `${item.ref || `AB#${item.id}`} ${item.title}`.slice(0, 60) }), null)],
       ['Agent skills (IDE and project level)…', 'package', openSkills],
+      ['Agent configuration (MCP servers, skills, agents, hooks)…', 'link', openAgentConfig],
       ['Check for updates…', 'refresh-cw', openUpdates],
       ['Capture real traffic (hooks, telemetry, model replies, ACP): turn on or off', 'bug', async () => { const st = await api.capture.toggle(); setStatus(st.enabled ? `Capture is ON. Use your agents as usual, then run “Capture: show the files”. Only shapes are kept: every text is replaced by its length.` : 'Capture is off.'); }],
       ['Capture: show the files (to send them)…', 'bug', async () => { const r = await api.capture.bundle(); setStatus(r.file ? `One file with everything captured: ${r.file}. Nothing readable is in it, only shapes (${r.status.total} records).` : 'Nothing captured yet. Turn capture on first, then use an agent.'); }],
@@ -3222,6 +3223,18 @@
     return a.name;
   }
 
+  // Toolbar agent buttons tint their icon by which known CLI they launch, so the cluster
+  // isn't four identical bot icons differing only in label text. Unknown/local-model/custom
+  // agents fall through to the default accent color, same as before.
+  function agentKind(a) {
+    const cmd = (a.command || '').toLowerCase();
+    if (/^claude\b/.test(cmd)) return 'claude';
+    if (/^copilot\b/.test(cmd)) return 'copilot';
+    if (/^codex\b/.test(cmd)) return 'codex';
+    if (/^gemini\b/.test(cmd)) return 'gemini';
+    return '';
+  }
+
   // Standing instructions for small local models: they drop tool arguments and try tools they cannot use.
   const LOCAL_HINT = 'Tool rules: always pass every required argument, spelled exactly: Read needs file_path. Write needs file_path and content. Edit needs file_path, old_string and new_string. Bash needs command. Glob and Grep need pattern. file_path is the full absolute path, built from the working directory (create parent folders with Bash first when they do not exist). Never call a tool without all of its required arguments. If you do not know a path, list the directory first. If a tool call fails with invalid parameters, read the error and call it again with the corrected arguments.';
   const localClaudeCmd = (model) => `claude --model ${model} --tools Read,Write,Edit,Bash,Glob,Grep`; // few tools: a small model picks and formats calls better, and the web tools it cannot use are gone
@@ -3366,7 +3379,7 @@
   function renderAgents() {
     const agents = (state.project && state.project.config && state.project.config.agents) || [];
     $('#agents').replaceChildren(...agents.map((a) => el('button', {
-      title: `Run “${a.command}” in a new terminal`, class: 'agent-btn',
+      title: `Run “${a.command}” in a new terminal`, class: `agent-btn${agentKind(a) ? ` agent-${agentKind(a)}` : ''}`,
       onclick: async () => {
         const cfg = state.project && state.project.config;
         rememberAgent(a.name);
@@ -3604,6 +3617,7 @@
           el('span', { class: 'fl-time muted', text: r.state === 'exited' ? `ran ${r.elapsedText}` : `${r.elapsedText}${r.state === 'stale' ? ` · quiet ${r.quietText}` : ''}` })),
         el('div', { class: `fl-bar lv-${r.level}`, title: pctText }, el('div', { class: 'fl-fill', style: `width:${Math.min(100, Math.round((r.pct || 0) * 100))}%` })),
         el('div', { class: 'fl-sub muted' }, `${pctText} · ${r.tokensText} · ${r.requests} request${r.requests === 1 ? '' : 's'}`, r.cost !== null ? ` · ~$${r.cost.toFixed(2)}` : ''),
+        open && r.cloud ? el('div', { class: 'fl-sub muted', title: 'What the session total above is made of: tokens read fresh from your messages and files, tokens served from the prompt cache, tokens written to the cache, and what the model produced' }, `${fmtK(r.cloud.input)} new in · ${fmtK(r.cloud.cacheRead)} cache read · ${fmtK(r.cloud.cacheCreate)} cache write · ${fmtK(r.cloud.output)} out`) : null,
         r.blowout && r.state !== 'exited' ? el('div', { class: 'fl-warn', text: 'The conversation has outgrown the model’s context. The agent starts forgetting earlier instructions. Start a fresh run, or raise the context window (Agent settings).' }) : null,
         r.state === 'stale' ? el('div', { class: 'fl-warn', text: `No output and no model request for ${r.quietText}. The agent may be stuck.` }) : null,
         open && r.subagents.length ? el('div', { class: 'fl-subs' }, ...r.subagents.slice().reverse().map((a) => el('div', { class: 'fl-sub-row' }, el('span', { class: `fl-dot ${a.endedAt ? 'st-exited' : 'st-running'}` }), el('b', { text: ` ${a.type}` }), el('span', { class: 'muted', text: ` ${a.endedAt ? `done in ${fmtMs(a.endedAt - a.startedAt)}` : 'working'}${a.text ? `: ${a.text.slice(0, 160)}` : ''}` })))) : null,
@@ -3936,7 +3950,7 @@
       case 'thought': acpAppend(entry, 'thought', e.text); break;
       case 'tool': {
         entry.current = null;
-        const row = el('div', { class: `acp-tool st-${e.status}` }, el('span', { class: 'chip', text: e.kind }), el('span', { class: 'acp-tool-title', text: ` ${e.title}` }), el('span', { class: 'acp-tool-status muted', text: ` ${e.status}` }), e.paths.length ? el('div', { class: 'muted small', text: e.paths.join(', ') }) : null);
+        const row = el('div', { class: `acp-tool st-${e.status}` }, el('span', { class: 'chip', text: e.kind }), el('span', { class: 'acp-tool-title', text: ` ${e.title}` }), el('span', { class: 'acp-tool-status', text: ` ${e.status}` }), e.paths.length ? el('div', { class: 'muted small', text: e.paths.join(', ') }) : null);
         entry.blocks.set(e.id, row); log.append(row); log.scrollTop = log.scrollHeight;
         fleetEvent(entry, 'tool', `${e.kind}: ${e.title}`.slice(0, 120));
         break;
@@ -4047,6 +4061,7 @@
         el('button', { id: 'a-score', class: 'icon', title: 'Scorecard: which agent does which kind of task well, from your own merges and discards', 'aria-label': 'Scorecard', onclick: openScorecard }, ic('trophy')),
         el('button', { id: 'a-compare', title: 'Compare two runs: files changed, size, gate result', onclick: openCompare }, ic('git-compare'), 'Compare…'),
         el('button', { id: 'a-skills', class: 'icon', title: 'Agent skills: IDE level and project level', 'aria-label': 'Skills', onclick: openSkills }, ic('package')),
+        el('button', { id: 'a-agentconfig', class: 'icon', title: 'Agent configuration: MCP servers, skills, agents and hooks, across every runner found in this project', 'aria-label': 'Agent configuration', onclick: openAgentConfig }, ic('link')),
         el('button', { class: 'icon', title: 'Refresh', onclick: refreshRuns }, ic('refresh-cw')))),
       el('div', { id: 'a-bestof', class: 'bestof-list' }),
       el('div', { id: 'a-fleet', class: 'fleet' }),
@@ -4394,6 +4409,107 @@
         el('button', { class: 'primary', onclick: () => { dropPending(); close(); } }, ic('check'), 'Close')));
     $('#modal').classList.remove('hidden');
     await draw();
+  }
+
+  // ---------------------------------------------------------------- agent configuration: MCP servers, skills, agents,
+  // hooks and instructions files, aggregated across every runner found in the project (core/agentconfig.js)
+  async function openAgentConfig() {
+    const close = () => { if (unsub) unsub(); $('#modal').classList.add('hidden'); };
+    let unsub = null;
+    let last = null; // last api.agentconfig.scan() result, so filtering re-renders without re-scanning
+    let query = '';
+    const RUNNER_LABEL = { claude: 'Claude Code', codex: 'Codex', copilot: 'GitHub Copilot', gemini: 'Gemini CLI' };
+    const CATEGORY = {
+      mcp: { label: 'MCP servers', icon: 'link' },
+      skill: { label: 'Skills', icon: 'package' },
+      agent: { label: 'Agents', icon: 'bot' },
+      hook: { label: 'Hooks', icon: 'command' },
+      instructions: { label: 'Instructions', icon: 'file-text' },
+    };
+    const acIco = (name) => el('div', { class: 'skill-ico src-manual' }, ic(name));
+    const DESC_CUT = 140; // past this length, descriptions (often third-party SKILL.md text) collapse to one rendered line until "more" is clicked
+    const descNode = (text) => {
+      if (!text) return null;
+      const line = el('div', { class: 'skill-desc clamp', text });
+      if (text.length <= DESC_CUT) return line;
+      let open = false;
+      const btn = el('button', { class: 'desc-more', type: 'button', text: 'more', onclick: (e) => {
+        e.stopPropagation();
+        open = !open;
+        line.classList.toggle('clamp', !open);
+        btn.textContent = open ? 'less' : 'more';
+      } });
+      return el('div', {}, line, btn);
+    };
+    // a hook's command is implementation detail (a raw shell string, often with local absolute paths) - not prose,
+    // so it stays behind a toggle instead of being shown inline as if it were a human-written description
+    const hookCmdNode = (cmds) => {
+      if (!cmds || !cmds.length) return null;
+      const pre = el('code', { class: 'hook-cmd hidden', text: cmds.join('\n') });
+      const btn = el('button', { class: 'desc-more', type: 'button', text: `view command${cmds.length > 1 ? 's' : ''}`, onclick: (e) => {
+        e.stopPropagation();
+        const open = pre.classList.toggle('hidden') === false;
+        btn.textContent = open ? `hide command${cmds.length > 1 ? 's' : ''}` : `view command${cmds.length > 1 ? 's' : ''}`;
+      } });
+      return el('div', {}, btn, pre);
+    };
+    const itemMatches = (item) => !query || `${item.name} ${item.description || ''} ${item.file || ''}`.toLowerCase().includes(query);
+    const itemRow = (item) => {
+      const hookCmds = item.category === 'hook' && item.detail && item.detail.commands ? item.detail.commands.filter(Boolean) : null;
+      return el('div', { class: 'skill-row' },
+        acIco((CATEGORY[item.category] || {}).icon || 'file'),
+        el('div', { class: 'skill-main' },
+          el('div', { class: 'skill-title' }, el('b', { text: item.name })),
+          descNode(item.description),
+          hookCmdNode(hookCmds),
+          el('div', { class: 'skill-badges' }, el('span', { class: 'chip ghost', text: item.file }))));
+    };
+    const byCategory = (its) => {
+      const byCat = new Map();
+      for (const it of its) { if (!byCat.has(it.category)) byCat.set(it.category, []); byCat.get(it.category).push(it); }
+      return [...byCat.entries()].flatMap(([cat, g]) => [el('div', { class: 'sk-head' }, ic((CATEGORY[cat] || {}).icon || 'file'), el('span', { text: (CATEGORY[cat] || {}).label || cat })), ...g.map(itemRow)]);
+    };
+    const listHost = el('div', { class: 'skills-list' });
+    const render = () => {
+      if (!last) return;
+      if (last.error) { fill(listHost, el('div', { class: 'hint danger', text: last.error })); return; }
+      const runners = last.runners || {};
+      const blocks = [];
+      let anyMatch = false;
+      const shared = (last.shared || []).filter(itemMatches);
+      if (shared.length) { anyMatch = true; blocks.push(el('details', { open: true }, el('summary', null, ic('file-text'), ' Shared across agents'), ...shared.map(itemRow))); }
+      for (const key of ['claude', 'codex', 'copilot', 'gemini']) {
+        const items = (runners[key] && runners[key].items) || [];
+        const project = items.filter((it) => it.scope !== 'global' && itemMatches(it));
+        const global = items.filter((it) => it.scope === 'global' && itemMatches(it));
+        if (query && !project.length && !global.length) continue; // hide runners with no match while filtering
+        if (project.length || global.length) anyMatch = true;
+        const body = items.length
+          ? [
+              ...byCategory(project),
+              global.length ? el('details', { class: 'ac-global', open: query ? true : undefined }, el('summary', null, ic('globe'), ` Global (~, every project on this machine) · ${global.length}`), ...byCategory(global)) : null,
+            ].filter(Boolean)
+          : [el('div', { class: 'muted', text: 'No config detected.' })];
+        const openByDefault = query ? (project.length || global.length) : !!project.length;
+        blocks.push(el('details', openByDefault ? { open: true } : null, el('summary', null, ic('bot'), ` ${RUNNER_LABEL[key]} (${items.length})`), ...body));
+      }
+      if (query && !anyMatch) blocks.push(el('div', { class: 'muted', text: `No matches for "${query}".` }));
+      fill(listHost, ...blocks);
+    };
+    const draw = async () => {
+      last = await api.agentconfig.scan();
+      render();
+    };
+    const filterInput = el('input', { class: 'ac-filter', type: 'search', placeholder: 'Filter by name, description or file…', oninput: (e) => { query = e.target.value.trim().toLowerCase(); render(); } });
+    $('#dialog').replaceChildren(el('div', { class: 'ac-wrap' },
+      el('h3', { class: 'ico-head' }, ic('link'), ' Agent configuration'),
+      el('div', { class: 'hint', text: 'MCP servers, skills, agents, hooks and instructions files found for Claude Code, Codex, GitHub Copilot and Gemini CLI - both this project’s own config and each tool’s global, home-directory config. Refreshes automatically when a config file changes.' }),
+      filterInput,
+      listHost,
+      el('div', { class: 'actions' }, el('button', { class: 'primary', onclick: close }, ic('check'), 'Close'))));
+    $('#modal').classList.remove('hidden');
+    await draw();
+    unsub = api.fs.onChanged(() => draw());
   }
 
   // ---------------------------------------------------------------- workflows: chained agent steps (core/workflow.js)
@@ -5158,7 +5274,7 @@
   const saveSetting = async (patch) => { const cur = await api.settings.get(); await api.settings.save({ ...cur.settings, ...patch }); await loadProject(); };
   async function healthAct(row, btn) {
     const a = row.action; if (!a) return;
-    if (a.copy) { try { await navigator.clipboard.writeText(a.copy); } catch { /* no clipboard */ } btn.textContent = 'Copied: paste it in a terminal'; return; }
+    if (a.copy) { await api.copy(a.copy); btn.textContent = 'Copied: paste it in a terminal'; return; }
     btn.disabled = true;
     try {
       const cc = (state.project.config && state.project.config.agentContainer) || {};
@@ -7746,6 +7862,7 @@
         mk('smoke-wait', { prompt: { text: 'Allow edit?', at: Date.now() } }),
         mk('smoke-stale', { lastData: Date.now() - 9 * 60000 }),
         mk('smoke-armed', { runId: 'smoke-armed-run' }),
+        mk('smoke-cloud', { fleet: { model: 'claude-sonnet-5', cloud: { input: 500, output: 300, cacheRead: 7000, cacheCreate: 1200, messages: 3, lastContext: 8700, model: 'claude-sonnet-5' } } }),
       ];
       for (const t of fake) state.terms.set(t.key, t);
       // runs:list's autoMergeArmed (main.js) reaches the card through fleetSnapshot() -> api.fleetView() -> fleet.row();
@@ -7765,7 +7882,10 @@
         const armedCard = [...document.querySelectorAll('#a-fleet .fl-card')].find((c) => c.textContent.includes('smoke-armed'));
         const armed = !!armedCard && !!armedCard.querySelector('.chip.armed') && /auto-merge armed/.test(armedCard.textContent);
         const notArmed = !full.querySelector('.chip.armed'); // a run with no autoMergeArmed never gets the chip
-        return ok1 && ok2 && only && timeline && armed && notArmed ? true : JSON.stringify({ ok1, ok2, only, timeline, armed, notArmed, cards: cards.length, text: full && full.textContent });
+        fleetUi.open.add('smoke-cloud'); await renderFleet();
+        const cloudCard = [...document.querySelectorAll('#a-fleet .fl-card')].find((c) => c.textContent.includes('smoke-cloud'));
+        const cloudBreakdown = !!cloudCard && cloudCard.textContent.replace(/\s+/g, ' ').includes('500 new in · 7k cache read · 1k cache write · 300 out');
+        return ok1 && ok2 && only && timeline && armed && notArmed && cloudBreakdown ? true : JSON.stringify({ ok1, ok2, only, timeline, armed, notArmed, cloudBreakdown, cards: cards.length, text: full && full.textContent });
       } finally { for (const t of fake) state.terms.delete(t.key); fleetUi.open.clear(); fleetUi.filter = 'all'; state.runs = savedRuns; await renderFleet(); }
     });
 

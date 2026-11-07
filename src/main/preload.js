@@ -184,6 +184,7 @@ contextBridge.exposeInMainWorld('api', {
     listBundled: () => invoke('skills:listBundled'),
     installBundled: (opts) => invoke('skills:installBundled', opts),
   },
+  agentconfig: { scan: () => invoke('agentconfig:scan') },
   doctor: () => invoke('doctor:run'),
   springMap: { overview: () => invoke('spring:overview') },
   symbols: { info: (rel, content, opts) => invoke('symbols:info', rel, content, opts), diff: (opts) => invoke('symbols:diff', opts), workspaceAll: () => invoke('symbols:workspaceAll') },

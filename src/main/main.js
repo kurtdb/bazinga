@@ -70,6 +70,7 @@ const containerCore = require('../core/container');
 const workflowCore = require('../core/workflow');
 const skillsCore = require('../core/skills');
 const skillscan = require('../core/skillscan');
+const agentconfig = require('../core/agentconfig');
 const budgetCore = require('../core/budget');
 const { scrubEnv } = require('../core/envscrub');
 const journalCore = require('../core/journal');
@@ -995,6 +996,8 @@ function registerIpc() {
     if (opts.level === 'project') refreshSkillIndex();
     return { updated: true, from: prov.commit, to: got.commit };
   }));
+  // ---------- agent configuration (MCP servers, skills, agents, hooks, instructions) across every runner found in the project ----------
+  ipcMain.handle('agentconfig:scan', () => safe(() => agentconfig.scanAll(root)));
   ipcMain.handle('runs:prepareReview', (_e, id) => safe(() => runs.prepareReview(requireRoot(), id)));
   ipcMain.handle('runs:merge', (_e, opts = {}) => safe(async () => {
     const base = requireRoot();
