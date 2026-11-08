@@ -6073,7 +6073,9 @@
       if (!hidden) {
         prevFocus = document.activeElement;
         if (!content.contains(document.activeElement)) {
-          const first = content.querySelector(focusableSel);
+          // querySelector alone would also match an element inside a currently-hidden tab panel (e.g. Settings'
+          // non-active tabs): .focus() on a display:none element is a silent no-op, so initial focus never landed.
+          const first = [...content.querySelectorAll(focusableSel)].find((el) => el.offsetParent !== null);
           if (first) first.focus();
         }
       } else if (prevFocus && document.body.contains(prevFocus) && typeof prevFocus.focus === 'function') {
