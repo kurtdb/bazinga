@@ -4271,13 +4271,13 @@
       el('div', { class: 'c-head' }, el('div', { class: 'line wrap' },
         el('button', { class: 'primary', id: 'a-new', onclick: openRunDialog }, ic('plus'), 'New agent run…'),
         el('button', { id: 'a-workflow', title: 'Chain agent steps with gates and approvals', onclick: openWorkflows }, ic('workflow'), 'Workflow…'),
-        el('button', { id: 'a-debug', class: 'icon', title: 'Debug log: what the workflow and the agents are doing', 'aria-label': 'Debug log', onclick: () => showDebug() }, ic('bug')),
+        el('button', { id: 'a-debug', title: 'Debug log: what the workflow and the agents are doing', onclick: () => showDebug() }, ic('bug'), 'Debug log'),
         el('button', { id: 'a-board', title: 'Board: backlog, running, needs you, ready to review', onclick: () => openBoard() }, ic('layout-dashboard'), 'Board'),
-        el('button', { id: 'a-score', class: 'icon', title: 'Scorecard: which agent does which kind of task well, from your own merges and discards', 'aria-label': 'Scorecard', onclick: openScorecard }, ic('trophy')),
+        el('button', { id: 'a-score', title: 'Scorecard: which agent does which kind of task well, from your own merges and discards', onclick: openScorecard }, ic('trophy'), 'Scorecard'),
         el('button', { id: 'a-compare', title: 'Compare two runs: files changed, size, gate result', onclick: openCompare }, ic('git-compare'), 'Compare…'),
-        el('button', { id: 'a-skills', class: 'icon', title: 'Agent skills: IDE level and project level', 'aria-label': 'Skills', onclick: openSkills }, ic('package')),
-        el('button', { id: 'a-agentconfig', class: 'icon', title: 'Agent configuration: MCP servers, skills, agents and hooks, across every runner found in this project', 'aria-label': 'Agent configuration', onclick: openAgentConfig }, ic('link')),
-        el('button', { class: 'icon', title: 'Refresh', onclick: refreshRuns }, ic('refresh-cw')))),
+        el('button', { id: 'a-skills', title: 'Agent skills: IDE level and project level', onclick: openSkills }, ic('package'), 'Skills'),
+        el('button', { id: 'a-agentconfig', title: 'Agent configuration: MCP servers, skills, agents and hooks, across every runner found in this project', onclick: openAgentConfig }, ic('link'), 'Config'),
+        el('button', { title: 'Refresh', onclick: refreshRuns }, ic('refresh-cw'), 'Refresh'))),
       el('div', { id: 'a-bestof', class: 'bestof-list' }),
       el('div', { id: 'a-fleet', class: 'fleet' }),
       el('div', { id: 'a-workflows', class: 'wf-list' }),
@@ -8053,8 +8053,18 @@
         }
       }
       offStatus(); offMerged();
-      const replayed = stillThere ? await api.runs.replay(r.run.id) : { steps: [] };
-      const dryRunLogged = (replayed.steps || []).some((s) => s.kind === 'automerge-dryrun');
+      // tryAutoMerge (main process: guard+scorecard, then the journal write) runs as its own async chain off the
+      // same 'done' event, signalled to nothing the renderer awaits - same "can lag behind under load" reasoning
+      // as the verdictReady retry above, so this also polls instead of reading the journal exactly once.
+      let dryRunLogged = false;
+      if (stillThere) {
+        const end2 = Date.now() + 10000;
+        while (Date.now() < end2 && !dryRunLogged) {
+          const replayed = await api.runs.replay(r.run.id);
+          dryRunLogged = (replayed.steps || []).some((s) => s.kind === 'automerge-dryrun');
+          if (!dryRunLogged) await sleep(500);
+        }
+      }
       await switchRoot(mainRoot);
       if (stillThere) await api.runs.discard(r.run.id, 'skip');
       await api.settings.save(prevSettings);

@@ -40,7 +40,7 @@ const fs = require('fs');
 const files = process.argv.slice(2);
 fs.appendFileSync(process.env.LOG || 'lint.log', files.length + '\\n');
 for (const f of files) console.log(f + ':1:1: error: bad thing');
-process.exit(files.length ? 1 : 0);
+process.exitCode = files.length ? 1 : 0; // not process.exit(): under load, a forced exit can race ahead of stdout still draining to the pipe and truncate the last line(s)
 `;
 const REGEX = '^(?<file>.+?):(?<line>\\\\d+):(?<column>\\\\d+): (?<severity>\\\\w+): (?<message>.*)$';
 
