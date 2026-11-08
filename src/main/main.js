@@ -6,6 +6,8 @@ const { PtyManager } = require('./pty');
 const G = require('../core/git');
 const { runChecks } = require('../core/checks');
 const { search, replaceInText } = require('../core/search');
+const todos = require('../core/todos');
+const restclient = require('../core/restclient');
 const { runReview } = require('../core/review');
 const scope = require('../core/scope');
 const { fixPath } = require('./shellenv');
@@ -773,6 +775,12 @@ function registerIpc() {
   ipcMain.handle('files:all', () => safe(async () => ({ files: await G.projectFiles(requireRoot()) })));
 
   ipcMain.handle('search:run', (_e, opts) => safe(() => search(requireRoot(), opts)));
+
+  ipcMain.handle('todos:scan', () => safe(() => todos.scan(requireRoot())));
+
+  ipcMain.handle('rest:send', (_e, req) => safe(() => restclient.send(req)));
+  ipcMain.handle('rest:list', () => safe(() => restclient.loadCollection(requireRoot())));
+  ipcMain.handle('rest:save', (_e, reqs) => safe(() => restclient.saveCollection(requireRoot(), reqs)));
 
   // git
   // null = git failed just now (index busy, repository mid-operation): the UI keeps the list it has instead of showing "no changes"

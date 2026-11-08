@@ -260,6 +260,7 @@
     search: { regex: false, caseSensitive: false },
     quick: { files: [], stale: true, sel: 0, items: [], symbols: [] },
     review: { used: false, running: false, output: '', error: '' },
+    todos: { items: [], scanning: false, truncated: false },
     commitMsg: '',
     task: { allow: '', summary: '', baseline: null, reviewed: {}, started: null },
     scope: null,
@@ -324,6 +325,7 @@
       renderWhitespace: 'none', glyphMargin: true,
     };
     editor = monaco.editor.create($('#editor'), { ...common, model: null });
+    monaco.editor.onDidChangeMarkers((uris) => { for (const u of uris) if (u.scheme === 'file') applyErrorLens(u.path.slice(1)); });
     editor.addAction({ id: 'bazinga.localHistory', label: 'Local history of this file…', contextMenuGroupId: 'navigation', contextMenuOrder: 9, run: () => { const t = activeTab(); if (t && t.kind === 'file') openLocalHistory(t.rel); } });
     diffEditor = monaco.editor.createDiffEditor($('#diff'), { ...common, renderSideBySide: true, originalEditable: false });
     diffEditor.onDidUpdateDiff(updateDiffBar);
@@ -398,12 +400,47 @@
   }
   const applyAllMarkers = () => { for (const rel of state.models.keys()) applyMarkers(rel); };
 
+  // ---------------------------------------------------------------- error lens (each diagnostic inline at the end of its line, not only a squiggly underline)
+  const errorLensIds = new Map(); // rel -> decoration ids, so the next pass can replace rather than pile up
+  const errorLensOn = () => { const cfg = state.project && state.project.config && state.project.config.errorLens; return !cfg || cfg.enabled !== false; };
+  function applyErrorLens(rel) {
+    const m = state.models.get(rel);
+    if (!m) return;
+    const prev = errorLensIds.get(rel) || [];
+    if (!errorLensOn()) { if (prev.length) errorLensIds.set(rel, m.model.deltaDecorations(prev, [])); return; }
+    const markers = monaco.editor.getModelMarkers({ resource: m.model.uri });
+    const bestPerLine = new Map(); // line -> worst marker on it
+    const rank = { [monaco.MarkerSeverity.Error]: 3, [monaco.MarkerSeverity.Warning]: 2, [monaco.MarkerSeverity.Info]: 1, [monaco.MarkerSeverity.Hint]: 0 };
+    for (const mk of markers) {
+      const cur = bestPerLine.get(mk.startLineNumber);
+      if (!cur || (rank[mk.severity] || 0) > (rank[cur.severity] || 0)) bestPerLine.set(mk.startLineNumber, mk);
+    }
+    const sevClass = { [monaco.MarkerSeverity.Error]: 'error', [monaco.MarkerSeverity.Warning]: 'warning', [monaco.MarkerSeverity.Info]: 'info', [monaco.MarkerSeverity.Hint]: 'info' };
+    const decos = [...bestPerLine.entries()].map(([line, mk]) => ({
+      range: new monaco.Range(line, 1, line, 1),
+      options: {
+        isWholeLine: true,
+        after: { content: `  ${mk.message.split('\n')[0].slice(0, 120)}`, inlineClassName: `errorlens-${sevClass[mk.severity] || 'info'}` },
+      },
+    }));
+    errorLensIds.set(rel, m.model.deltaDecorations(prev, decos));
+  }
+  const refreshErrorLens = () => { for (const rel of state.models.keys()) applyErrorLens(rel); };
+
   // ---------------------------------------------------------------- tabs
   const activeTab = () => state.tabs.find((t) => t.id === state.activeTab) || null;
 
   function renderTabs() {
     const bar = $('#tabbar');
     bar.replaceChildren(...state.tabs.map((t) => {
+      if (t.kind === 'rest') {
+        const tab = el('div', { class: `tab${t.id === state.activeTab ? ' active' : ''}`, title: t.url || 'New HTTP request' },
+          ic('globe', 'tab-ico'), el('span', { text: t.title || 'HTTP request' }),
+          el('span', { class: 'x', onclick: (e) => { e.stopPropagation(); closeTab(t.id); } }, ic('x')));
+        tab.addEventListener('click', () => activateTab(t.id));
+        tab.addEventListener('auxclick', (e) => { if (e.button === 1) closeTab(t.id); });
+        return tab;
+      }
       const m = state.models.get(t.rel);
       const name = t.rel.split('/').pop() + (t.ro ? ` @ ${t.title}` : '');
       const tab = el('div', { class: `tab${t.id === state.activeTab ? ' active' : ''}`, title: t.rel },
@@ -538,6 +575,8 @@
     $('#diffbar').classList.toggle('hidden', !tab || tab.kind !== 'diff');
     $('#editor-host').classList.toggle('with-bar', !!tab && tab.kind === 'diff');
     $('#diffbar').classList.toggle('ro', !!(tab && tab.ro));
+    $('#rest').classList.toggle('hidden', !tab || tab.kind !== 'rest');
+    if (tab && tab.kind === 'rest') { renderRestTab(tab); renderTabs(); scheduleSessionSave(); return; }
     if (tab) {
       const m = tab.ro ? null : state.models.get(tab.rel);
       if (tab.kind === 'file') {
@@ -2042,6 +2081,8 @@
       ['Terminal: find in scrollback', 'search', () => { const t = currentTerminal(); if (t) openTermFind(t); else setStatus('Open a terminal tab first.'); }],
       ['Folders: detect source and test folders', 'folder', detectFolders],
       ['Show: Scripts', 'scroll-text', () => setSideTab('scripts')],
+      ['Show: Todos (TODO/FIXME/HACK/XXX comments)', 'list-checks', () => showBottom('todos')],
+      ['New HTTP request', 'globe', () => openRestTab()],
       ['Spring: endpoints and beans…', 'globe', openSpringOverview],
       ['Git: stash changes…', 'archive', () => { setSideTab('history'); const m = window.prompt('Stash message (optional):', ''); if (m !== null) stashAction('push', m); }],
       [`Git: line blame ${state.blame.on ? 'off' : 'on'}`, 'user', toggleBlame],
@@ -2304,6 +2345,8 @@
       tabs.push(el('div', { class: `btab${state.bottom === 'review' ? ' active' : ''}`, onclick: () => showBottom('review') },
         ic('sparkles'), 'Review', state.review.running ? el('span', { class: 'badge', text: '…' }) : null));
     }
+    tabs.push(el('div', { class: `btab${state.bottom === 'todos' ? ' active' : ''}`, onclick: () => showBottom('todos') },
+      ic('list-checks'), 'Todos', state.todos.items.length ? el('span', { class: 'badge', text: `(${state.todos.items.length})` }) : null));
     if (state.debug.open) tabs.push(el('div', { class: `btab${state.bottom === 'debug' ? ' active' : ''}`, onclick: () => showBottom('debug') }, ic('bug'), 'Debug', el('span', { class: 'x', onclick: (e) => { e.stopPropagation(); closeDebug(); } }, ic('x'))));
     if (state.debugger.open) tabs.push(el('div', { class: `btab${state.bottom === 'debugger' ? ' active' : ''}`, onclick: () => showBottom('debugger') }, ic('octagon-pause'), 'Run & Debug', el('span', { class: 'x', onclick: (e) => { e.stopPropagation(); closeDebugger(); } }, ic('x'))));
     for (const t of state.terms.values()) {
@@ -2323,10 +2366,12 @@
     hideTermFindUnless(key);
     $('#problems').style.display = key === 'problems' ? 'block' : 'none';
     $('#review').style.display = key === 'review' ? 'block' : 'none';
+    $('#todos').style.display = key === 'todos' ? 'block' : 'none';
+    if (key === 'todos' && !state.todos.items.length && !state.todos.scanning) scanTodos();
     $('#debug').style.display = key === 'debug' ? 'flex' : 'none';
     if (key === 'debug') pollDebug();
     $('#debugger').style.display = key === 'debugger' ? 'flex' : 'none';
-    const isTerm = key !== 'problems' && key !== 'review' && key !== 'debug' && key !== 'debugger';
+    const isTerm = key !== 'problems' && key !== 'review' && key !== 'todos' && key !== 'debug' && key !== 'debugger';
     $('#terms').style.display = isTerm ? 'block' : 'none';
     for (const t of state.terms.values()) t.container.classList.toggle('active', t.key === key);
     renderBottomTabs();
@@ -2569,6 +2614,169 @@
     renderBottomTabs();
   }
 
+  // ---------------------------------------------------------------- Todos (TODO/FIXME/HACK/XXX comments, project-wide)
+  const TODO_TAG_ICON = { TODO: 'info', FIXME: 'warning', HACK: 'warning', XXX: 'error' };
+  async function scanTodos() {
+    if (!state.project || !state.project.root) return;
+    state.todos.scanning = true;
+    renderTodos();
+    const res = await api.todos.scan();
+    state.todos.scanning = false;
+    if (res.error) { setStatus(res.error); state.todos.items = []; state.todos.truncated = false; }
+    else { state.todos.items = res.items; state.todos.truncated = !!res.truncated; }
+    renderTodos();
+  }
+  function renderTodos() {
+    const host = $('#todos');
+    const head = el('div', { class: 'p-head' });
+    const body = el('div');
+    if (state.todos.scanning) {
+      head.append(el('span', { class: 'muted', text: 'Scanning…' }));
+    } else {
+      head.append(el('span', { class: 'p-summary', text: `${state.todos.items.length} TODO/FIXME/HACK/XXX comment(s)${state.todos.truncated ? ' (truncated)' : ''}` }),
+        el('span', { class: 'spacer' }),
+        el('button', { title: 'Scan the project again', onclick: scanTodos }, ic('refresh-cw'), 'Refresh'));
+      let lastFile;
+      for (const t of state.todos.items) {
+        if (t.file !== lastFile) { body.append(el('div', { class: 'p-file', text: t.file })); lastFile = t.file; }
+        body.append(el('div', { class: 'finding', onclick: () => openFile(t.file, t.line, t.column) },
+          el('span', { class: `sev ${TODO_TAG_ICON[t.tag] || 'info'}`, title: t.tag }, ic(TODO_TAG_ICON[t.tag] === 'error' ? 'circle-alert' : TODO_TAG_ICON[t.tag] === 'warning' ? 'triangle-alert' : 'info')),
+          el('span', { class: 'loc', text: `${t.line}` }),
+          el('span', { text: `${t.tag}${t.text ? `: ${t.text}` : ''}` })));
+      }
+      if (!state.todos.items.length) body.append(el('div', { class: 'empty', text: 'No TODO, FIXME, HACK or XXX comments found.' }));
+    }
+    host.replaceChildren(head, body);
+    renderBottomTabs();
+  }
+
+  // ---------------------------------------------------------------- REST client (a saved-request HTTP tab, Thunder-Client-style)
+  let restTabSeq = 0;
+  let restCollection = null; // cached .ide/requests.yaml, re-fetched after loadProject() or a save
+  const REST_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
+  async function restSaved() {
+    if (!restCollection) restCollection = await api.rest.list();
+    return restCollection;
+  }
+  function openRestTab(preset) {
+    if (!state.project || !state.project.root) { setStatus('Open a project first.'); return; }
+    const id = `rest:${++restTabSeq}`;
+    const tab = {
+      id, kind: 'rest',
+      title: (preset && preset.name) || 'New request',
+      method: (preset && preset.method) || 'GET',
+      url: (preset && preset.url) || '',
+      headers: preset && preset.headers ? Object.entries(preset.headers).map(([key, value]) => ({ key, value })) : [],
+      body: (preset && preset.body) || '',
+      response: null, sending: false,
+    };
+    state.tabs.push(tab);
+    activateTab(id);
+  }
+  function renderRestResponse(box, tab) {
+    if (!tab.response) { fill(box); return; }
+    const r = tab.response;
+    if (!r.ok) { fill(box, el('div', { class: 'rest-error', text: `Error: ${r.error}` })); return; }
+    const sevClass = r.status >= 200 && r.status < 300 ? 'ok' : r.status >= 400 ? 'danger' : 'info';
+    let pretty = r.body;
+    try { pretty = JSON.stringify(JSON.parse(r.body), null, 2); } catch { /* not JSON, show as-is */ }
+    fill(box,
+      el('div', { class: 'rest-status' },
+        el('span', { class: `chip ${sevClass}`, text: `${r.status} ${r.statusText || ''}`.trim() }),
+        el('span', { class: 'muted', text: `${r.timeMs} ms` }),
+        el('span', { class: 'muted', text: `${new Blob([r.body || '']).size} bytes` })),
+      el('pre', { class: 'rest-body-out', text: pretty }));
+  }
+  async function sendRestRequest(tab) {
+    if (!tab.url.trim()) { setStatus('Enter a URL first.'); return; }
+    tab.sending = true;
+    if (state.activeTab === tab.id) renderRestTab(tab);
+    const headers = {};
+    for (const h of tab.headers) if (h.key.trim()) headers[h.key.trim()] = h.value;
+    const res = await api.rest.send({ method: tab.method, url: tab.url.trim(), headers, body: tab.body });
+    tab.sending = false;
+    tab.response = res;
+    if (state.activeTab === tab.id) renderRestTab(tab);
+  }
+  async function saveRestRequest(tab) {
+    const name = window.prompt('Save this request as:', tab.title && tab.title !== 'New request' ? tab.title : '');
+    if (!name) return;
+    const list = await restSaved();
+    const headers = {};
+    for (const h of tab.headers) if (h.key.trim()) headers[h.key.trim()] = h.value;
+    const entry = { name, method: tab.method, url: tab.url.trim(), headers, body: tab.body };
+    const i = list.findIndex((r) => r.name === name);
+    if (i >= 0) list[i] = entry; else list.push(entry);
+    await api.rest.save(list);
+    restCollection = list;
+    tab.title = name;
+    renderRestTab(tab); renderTabs();
+    setStatus(`Saved “${name}”.`);
+  }
+  function renderRestTab(tab) {
+    const host = $('#rest');
+    const methodSel = el('select', { class: 'rest-method' }, ...REST_METHODS.map((m) => el('option', { value: m, text: m })));
+    methodSel.value = tab.method;
+    const urlIn = el('input', { type: 'text', class: 'rest', placeholder: 'https://api.example.com/...', value: tab.url, spellcheck: 'false' });
+    urlIn.addEventListener('input', () => { tab.url = urlIn.value; });
+    urlIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendRestRequest(tab); });
+    const sendBtn = el('button', { class: 'primary', title: 'Send (Enter in the URL field)', onclick: () => sendRestRequest(tab) }, ic('send'), tab.sending ? 'Sending…' : 'Send');
+    sendBtn.disabled = tab.sending;
+    const saveBtn = el('button', { title: 'Save this request into .ide/requests.yaml', onclick: () => saveRestRequest(tab) }, ic('check'), 'Save');
+    const bodyIn = el('textarea', { class: 'rest-body', rows: '6', placeholder: 'Request body (JSON, form data, …)', spellcheck: 'false' });
+    bodyIn.value = tab.body;
+    bodyIn.disabled = /^(GET|HEAD)$/.test(tab.method);
+    bodyIn.addEventListener('input', () => { tab.body = bodyIn.value; });
+    methodSel.addEventListener('change', () => { tab.method = methodSel.value; bodyIn.disabled = /^(GET|HEAD)$/.test(tab.method); });
+    const bar = el('div', { class: 'rest-bar' }, methodSel, urlIn, sendBtn, saveBtn);
+
+    const headerRows = el('div', { class: 'rest-headers' });
+    const drawHeaders = () => {
+      headerRows.replaceChildren(...tab.headers.map((h, i) => {
+        const k = el('input', { type: 'text', class: 'rest', placeholder: 'Header', value: h.key, spellcheck: 'false' });
+        const v = el('input', { type: 'text', class: 'rest', placeholder: 'Value', value: h.value, spellcheck: 'false' });
+        k.addEventListener('input', () => { h.key = k.value; });
+        v.addEventListener('input', () => { h.value = v.value; });
+        return el('div', { class: 'rest-header-row' }, k, v, el('button', { class: 'icon', title: 'Remove this header', onclick: () => { tab.headers.splice(i, 1); drawHeaders(); } }, ic('x')));
+      }), el('button', { class: 'icon', title: 'Add a header', onclick: () => { tab.headers.push({ key: '', value: '' }); drawHeaders(); } }, ic('plus'), 'Header'));
+    };
+    drawHeaders();
+
+    const respBox = el('div', { class: 'rest-response' });
+    renderRestResponse(respBox, tab);
+
+    const sideList = el('div', { class: 'rest-list' });
+    restSaved().then((list) => {
+      if (state.activeTab !== tab.id) return; // the user moved on before this resolved
+      const rows = list.map((r) => {
+        const loadSaved = () => {
+          tab.title = r.name; tab.method = r.method; tab.url = r.url;
+          tab.headers = Object.entries(r.headers || {}).map(([key, value]) => ({ key, value }));
+          tab.body = r.body || ''; tab.response = null;
+          renderRestTab(tab); renderTabs();
+        };
+        const removeSaved = async (e) => {
+          e.stopPropagation();
+          if (!window.confirm(`Delete the saved request “${r.name}”?`)) return;
+          const next = list.filter((x) => x.name !== r.name);
+          await api.rest.save(next);
+          restCollection = next;
+          renderRestTab(tab);
+        };
+        return el('div', { class: 'rest-saved-item', title: `${r.method} ${r.url}`, onclick: loadSaved },
+          el('span', { class: 'rest-saved-method', text: r.method }), el('span', { text: r.name }),
+          el('span', { class: 'spacer' }),
+          el('button', { class: 'icon', title: 'Delete this saved request', onclick: removeSaved }, ic('x')));
+      });
+      sideList.replaceChildren(...rows);
+      if (!list.length) sideList.append(el('div', { class: 'empty', text: 'No saved requests yet.' }));
+    });
+
+    host.replaceChildren(el('div', { class: 'rest-pane' },
+      el('div', { class: 'rest-side' }, el('div', { class: 'rest-side-head', text: 'Saved requests' }), sideList),
+      el('div', { class: 'rest-main' }, bar, headerRows, bodyIn, respBox)));
+  }
+
   async function runChecks(tier) {
     if (state.checksRunning || !state.project || !state.project.root) return null;
     state.checksRunning = true;
@@ -2761,6 +2969,7 @@
     const lensUsages = el('input', { type: 'checkbox' }); lensUsages.checked = lensCur.usages !== false;
     const lensBlame = el('input', { type: 'checkbox' }); lensBlame.checked = lensCur.blame !== false;
     const lensSpring = el('input', { type: 'checkbox' }); lensSpring.checked = lensCur.spring !== false;
+    const elOn = el('input', { type: 'checkbox' }); elOn.checked = (settings.errorLens || {}).enabled !== false;
     const lspCur = settings.lsp || {};
     const lspOn = el('input', { type: 'checkbox' }); lspOn.checked = !!lspCur.enabled;
     const LSP_DEFAULTS = { java: 'jdtls', python: 'pyright-langserver', typescript: 'typescript-language-server', go: 'gopls', rust: 'rust-analyzer', csharp: 'csharp-ls' };
@@ -2835,12 +3044,14 @@
         next.oversight = lvlSel.value;
         delete next.fixLoop; delete next.mergeGuard; delete next.autoMerge;
       } else delete next.oversight;
+      next.errorLens = { enabled: elOn.checked };
       await api.settings.save(next);
       close();
       const keepAuto = state.autoCheck;
       await loadProject();
       state.autoCheck = auto.checked !== !!defaults.autoCheck ? auto.checked : keepAuto;
       $('#auto').checked = state.autoCheck;
+      refreshErrorLens();
       setStatus('Settings saved.');
     };
     const AGENT_PRESETS = [
@@ -2990,6 +3201,8 @@
         el('label', { class: 'check' }, lensUsages, ' Show how often the name is used in the project'),
         el('label', { class: 'check' }, lensBlame, ' Show who changed it last (git blame of its lines); click opens the commit'),
         el('label', { class: 'check' }, lensSpring, ' Java/Kotlin: show the HTTP route above Spring handlers and “N implementations” above interfaces')),
+      errorLens: el('div', { class: 'field' }, el('div', { class: 'agent-head', text: 'Diagnostics' }),
+        el('label', { class: 'check' }, elOn, ' Error lens: show each diagnostic inline at the end of its line, not only as a squiggly underline')),
       notifications: el('div', { class: 'field' }, el('label', { class: 'check' }, notif, ' Notify me (OS notification) when an agent needs me and the IDE is in the background')),
       fontSize: el('div', { class: 'field' }, el('label', { text: 'Font' }), el('div', { class: 'line' }, fontFam), el('label', { text: 'Font size (px): editor / terminal' }), el('div', { class: 'line' }, edFont, termFont)),
       scrollback: el('div', { class: 'field' }, el('label', { text: 'Terminal scrollback (lines kept per terminal; each one costs memory)' }), scrollback),
@@ -3004,7 +3217,7 @@
       ['review', 'Review & checks', ['reviewCommand', 'autoCheck'], 'shield-check'],
       ['oversight', 'Oversight', ['humanInLoop', 'fixLoop', 'mergeGuard', 'autoMerge'], 'eye'],
       ['safety', 'Safety', ['agentSafety'], 'lock'],
-      ['editor', 'Editor', ['languageServers', 'aiCompletion', 'codeLenses'], 'file-code'],
+      ['editor', 'Editor', ['languageServers', 'aiCompletion', 'codeLenses', 'errorLens'], 'file-code'],
     ];
     const used = new Set(TABS.flatMap((t) => t[2]).concat(['title', 'footnote', 'actions']));
     const stray = Object.keys(f).filter((k) => !used.has(k));
@@ -3132,8 +3345,8 @@
     return {
       ui: { sideW: cs.getPropertyValue('--side-w').trim(), bottomH: cs.getPropertyValue('--bottom-h').trim() },
       project: {
-        tabs: state.tabs.filter((t) => !t.ro).map((t) => ({ kind: t.kind, rel: t.rel })),
-        active: (state.tabs.find((t) => t.id === state.activeTab && !t.ro) || {}).id || null,
+        tabs: state.tabs.filter((t) => !t.ro && t.kind !== 'rest').map((t) => ({ kind: t.kind, rel: t.rel })),
+        active: (state.tabs.find((t) => t.id === state.activeTab && !t.ro && t.kind !== 'rest') || {}).id || null,
         expanded: [...state.expanded],
         sideTab: state.sideTab,
         onlyMine: state.onlyMine,
@@ -3394,6 +3607,7 @@
   }
 
   async function loadProject() {
+    restCollection = null;
     state.project = await api.project.get();
     const p = state.project;
     $('#project-name').textContent = p.root ? p.name : 'Open folder…';
@@ -3420,6 +3634,7 @@
     await renderTree();
     await refreshChanges();
     refreshCheckpoints();
+    if (p.root) scanTodos().catch(() => {});
     setStatus(p.error ? `Config problem: ${p.error}` : p.root || '');
   }
 
@@ -5709,6 +5924,7 @@
 
   // ---------------------------------------------------------------- wiring
   let autoTimer = null;
+  let todosTimer = null;
   const showWatcher = (ok) => { const e = $('#status-watch'); if (e) { e.textContent = ok ? '● live' : '⚠ polling'; e.style.cursor = 'pointer'; e.title = (ok ? 'File watching is on.' : 'Live file watching stopped (the IDE keeps checking every few seconds and when you return to the window) and is being restarted.') + ' Click for details.'; } };
   $('#status-watch').addEventListener('click', async () => {
     const d = await api.fs.diagnostics();
@@ -5738,6 +5954,10 @@
     if (!(info && info.poll) && state.autoCheck && !state.checksRunning) {
       clearTimeout(autoTimer);
       autoTimer = setTimeout(() => runChecks('fast'), 1200);
+    }
+    if (!(info && info.poll) && !state.todos.scanning) {
+      clearTimeout(todosTimer);
+      todosTimer = setTimeout(() => scanTodos(), 1200);
     }
   }
   api.fs.onChanged((info) => { refreshAfterChange(info); });

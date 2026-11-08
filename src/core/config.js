@@ -55,6 +55,7 @@ const DEFAULT_CONFIG = {
   protectedPaths: null, // null = built-in list (guardrules.DEFAULT_PROTECTED)
   // Lenses above classes and methods: how often the name is used in the project (counted by name) and who last changed it.
   symbolParser: 'auto',  // 'auto' = tree-sitter (Java, Kotlin, TS/JS, Python, Go, Rust, C#) with the line patterns as fallback; 'regex' = line patterns only
+  errorLens: { enabled: true }, // show each diagnostic inline at the end of its line, not only as a squiggly underline (every marker owner: lsp + quality-gate)
   symbolLenses: { usages: true, blame: true, spring: true },
   // Work items mentioned in a run (branch, task, commits): #123 and AB#123 link to GitHub issues / Azure Boards; ticket keys like PROJ-12 link when jiraBaseUrl is set.
   workItems: { jiraBaseUrl: '' },

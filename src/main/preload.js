@@ -44,6 +44,14 @@ contextBridge.exposeInMainWorld('api', {
     run: (opts) => invoke('search:run', opts),
     replace: (opts) => invoke('search:replace', opts),
   },
+  todos: {
+    scan: () => invoke('todos:scan'),
+  },
+  rest: {
+    send: (req) => invoke('rest:send', req),
+    list: () => invoke('rest:list'),
+    save: (reqs) => invoke('rest:save', reqs),
+  },
   git: {
     changes: () => invoke('git:changes'),
     head: (rel) => invoke('git:head', rel),
