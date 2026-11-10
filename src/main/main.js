@@ -2078,6 +2078,11 @@ function createWindow() {
     },
   });
   if (!SMOKE) watchStartup(win);
+  // a window spawned as a background child process (smoke.js) never becomes the OS's active app on its own -
+  // document.hasFocus() stays false forever, breaking every focus-restore check regardless of how long they poll.
+  // Real users launch this app directly (Dock/Finder/shell foreground), where that's already true; forcing it
+  // is scoped to SMOKE so it never steals focus from something else during normal use.
+  if (SMOKE) win.once('ready-to-show', () => { win.show(); win.focus(); if (process.platform === 'darwin') app.focus({ steal: true }); });
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', (e) => e.preventDefault());

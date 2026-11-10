@@ -1569,6 +1569,7 @@
       items.push(
         { label: 'New file…', onclick: () => createEntry(rel, false) },
         { label: 'New folder…', onclick: () => createEntry(rel, true) },
+        { label: 'New HTTP request…', onclick: () => openRestTab() },
         '-',
         { label: 'Mark as source folder', checked: own === 'source', onclick: () => markFolder(rel, 'source') },
         { label: 'Mark as test folder', checked: own === 'tests', onclick: () => markFolder(rel, 'tests') },
@@ -7539,7 +7540,7 @@
         const md2 = (await api.fs.read('AGENTS.md')).content || '';
         const gone = !/bazinga:folders/.test(md2);
         const cfgAfter = JSON.parse((await api.fs.read('.ide/config.json')).content || '{}');
-        const ok = labels.length === 10 && menuClosed && badged && JSON.stringify(saved1) === JSON.stringify({ tests: ['tests'] }) && !second.error && block && nested && checked && clearEnabled && cleared && !!root.error && gone && !cfgAfter.folders;
+        const ok = labels.length === 11 && menuClosed && badged && JSON.stringify(saved1) === JSON.stringify({ tests: ['tests'] }) && !second.error && block && nested && checked && clearEnabled && cleared && !!root.error && gone && !cfgAfter.folders;
         return ok ? true : JSON.stringify({ labels, menuClosed, badged, saved1, second, block, nested, checked, clearEnabled, cleared, root, gone, cfgAfter });
       } finally {
         await api.fs.write('.ide/config.json', origCfg || '{}\n');
@@ -7747,22 +7748,31 @@
     });
 
     await step('dialog focus: opening a modal moves focus inside it, Tab wraps, closing gives focus back to the opener', async () => {
+      // a focus-restore check is meaningless without real window focus (a real user always has it while
+      // interacting with the dialog) - this run can be launched without OS focus, so claim it explicitly first.
+      window.focus();
       const opener = $('#btn-settings');
       opener.focus();
       await openSettings();
-      await sleep(0);
       const dialog = $('#dialog');
-      const focusedInsideOnOpen = dialog.contains(document.activeElement);
+      // wireDialogFocus moves focus from a MutationObserver callback on the class change, not synchronously
+      // within openSettings() - under load that callback can lag a flat sleep(0), so poll instead.
+      let focusedInsideOnOpen = dialog.contains(document.activeElement);
+      const end0 = Date.now() + 10000;
+      while (!focusedInsideOnOpen && Date.now() < end0) { await sleep(50); focusedInsideOnOpen = dialog.contains(document.activeElement); }
       const items = [...dialog.querySelectorAll('input, textarea, select, button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')].filter((el) => el.offsetParent !== null);
       const first = items[0], last = items[items.length - 1];
       last.focus();
       $('#modal').dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
       const wrappedToFirst = document.activeElement === first;
       $('#modal').classList.add('hidden');
-      await sleep(0);
-      const restored = document.activeElement === opener;
+      // same race as the open side above: the close-branch focus restore also runs from the MutationObserver
+      // callback, not synchronously here, so this needs the same poll instead of a single sleep(0).
+      let restored = document.activeElement === opener;
+      const end1 = Date.now() + 10000;
+      while (!restored && Date.now() < end1) { await sleep(50); restored = document.activeElement === opener; }
       const ok = focusedInsideOnOpen && wrappedToFirst && restored;
-      return ok ? true : JSON.stringify({ focusedInsideOnOpen, wrappedToFirst, restored });
+      return ok ? true : JSON.stringify({ focusedInsideOnOpen, wrappedToFirst, restored, bodyHasFocus: document.hasFocus() });
     });
 
     await step('history graph + commit diff + blame', async () => {
@@ -8058,7 +8068,10 @@
       // as the verdictReady retry above, so this also polls instead of reading the journal exactly once.
       let dryRunLogged = false;
       if (stillThere) {
-        const end2 = Date.now() + 10000;
+        // the idle-detect -> real quality-gate checks -> 'done' -> tryAutoMerge -> journal-write chain this polls
+        // for all runs on the main process's single event loop, competing with every other IPC handler - under
+        // heavy load the whole chain can take much longer than the verdictReady retry above already assumed.
+        const end2 = Date.now() + 30000;
         while (Date.now() < end2 && !dryRunLogged) {
           const replayed = await api.runs.replay(r.run.id);
           dryRunLogged = (replayed.steps || []).some((s) => s.kind === 'automerge-dryrun');
