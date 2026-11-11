@@ -338,10 +338,10 @@ pre.detail { margin: 2px 10px 6px 40px; padding: 6px 8px; background: var(--bg-3
 #d-info { margin-left: 6px; }
 
 .searchbox { display: flex; gap: 4px; padding: 6px 8px; }
-.searchbox input, .palette input, .dialog input[type=text], input.rest, textarea.rest-body { flex: 1; min-width: 0; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; font: inherit; outline: none; }
-.searchbox input:focus, .palette input:focus, .dialog input[type=text]:focus, input.rest:focus, textarea.rest-body:focus { border-color: var(--accent); }
+.searchbox input, .palette input, .dialog input[type=text], input.rest { flex: 1; min-width: 0; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; font: inherit; outline: none; }
+.searchbox input:focus, .palette input:focus, .dialog input[type=text]:focus, input.rest:focus { border-color: var(--accent); }
 
-/* REST client tab: method/URL/send bar, a flat key/value header editor, a body textarea, and a response pane - no Monaco, by design (v1 scope) */
+/* REST client tab: method/URL/send bar, a flat key/value header editor, a Monaco body editor, and a response pane */
 .rest-pane { display: flex; height: 100%; }
 .rest-side { width: 220px; flex: none; border-right: 1px solid var(--line); overflow: auto; }
 .rest-side-head { padding: 8px 10px; font-weight: 600; color: var(--muted); border-bottom: 1px solid var(--line); }
@@ -351,15 +351,23 @@ pre.detail { margin: 2px 10px 6px 40px; padding: 6px 8px; background: var(--bg-3
 .rest-saved-method { color: var(--accent); font-weight: 600; font-size: 11px; flex: none; }
 .rest-saved-item button.icon { visibility: hidden; flex: none; }
 .rest-saved-item:hover button.icon { visibility: visible; }
+.rest-folder-head { padding: 8px 10px 2px; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .02em; }
 .rest-main { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 10px; gap: 8px; overflow: auto; }
 .rest-bar { display: flex; gap: 6px; }
 .rest-method { font: inherit; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px; }
+.rest-env { flex: none; max-width: 160px; }
+.rest-auth-row { display: flex; gap: 6px; align-items: center; }
+.rest-auth-row input.rest { flex: 1; min-width: 0; }
 .rest-headers { display: flex; flex-direction: column; gap: 4px; }
 .rest-header-row { display: flex; gap: 4px; }
-.rest-body { font-family: var(--font-mono); resize: vertical; }
+.rest-body-editor { height: 160px; flex: none; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
 .rest-response { border-top: 1px solid var(--line); padding-top: 8px; }
 .rest-status { display: flex; gap: 10px; align-items: center; margin-bottom: 6px; }
-.rest-body-out { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: var(--font-mono); font-size: 12px; user-select: text; max-height: 40vh; overflow: auto; }
+.rest-resp-headers { margin-bottom: 8px; font-size: 12px; }
+.rest-resp-headers summary { cursor: pointer; color: var(--muted); }
+.rest-resp-header-row { display: flex; gap: 6px; padding: 2px 0 2px 16px; font-family: var(--font-mono); word-break: break-word; }
+.rest-resp-header-key { color: var(--accent); flex: none; }
+.rest-resp-body-editor { height: 320px; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
 .rest-error { color: var(--err); }
 /* every input/textarea's placeholder, themed: the unstyled browser default measured well below the 4.5:1 text floor on this app's dark backgrounds */
 input::placeholder, textarea::placeholder { color: var(--muted); opacity: 1; }

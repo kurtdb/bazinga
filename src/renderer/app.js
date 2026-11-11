@@ -651,6 +651,11 @@
     const m = tab.ro ? null : state.models.get(tab.rel);
     const lastRef = state.tabs.filter((t) => t.rel === tab.rel && !t.ro).length === 1;
     if (m && m.dirty && lastRef && !window.confirm(`Discard unsaved changes to ${tab.rel}?`)) return;
+    if (tab.kind === 'rest') {
+      if (tab.sending) api.rest.cancel(tab.id); // no point letting it run to the timeout once its tab is gone
+      if (restBodyEditor && restBodyEditor.tabId === tab.id) disposeRestBodyEditor();
+      if (restRespEditor && restRespEditor.tabId === tab.id) disposeRestRespEditor();
+    }
     state.tabs.splice(i, 1);
     if (diffEditor) diffEditor.setModel(null);
     if (tab.original) tab.original.dispose();
@@ -2655,9 +2660,51 @@
   let restTabSeq = 0;
   let restCollection = null; // cached .ide/requests.yaml, re-fetched after loadProject() or a save
   const REST_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
+  const REST_HEADER_NAMES = [
+    'Accept', 'Accept-Charset', 'Accept-Encoding', 'Accept-Language', 'Authorization', 'Cache-Control',
+    'Connection', 'Content-Encoding', 'Content-Length', 'Content-Type', 'Cookie', 'Host',
+    'If-Match', 'If-Modified-Since', 'If-None-Match', 'Origin', 'Pragma', 'Range', 'Referer',
+    'User-Agent', 'X-API-Key', 'X-CSRF-Token', 'X-Forwarded-For', 'X-Request-Id', 'X-Requested-With',
+  ];
+  // not a real OAuth2 grant flow (no redirect listener, no token storage) - the same header-shorthand
+  // Basic/Bearer/API-key auth every HTTP client offers, computed into the request by core/restclient.js.
+  const REST_AUTH_TYPES = [['none', 'No auth'], ['basic', 'Basic'], ['bearer', 'Bearer token'], ['apiKey', 'API key']];
   async function restSaved() {
     if (!restCollection) restCollection = await api.rest.list();
     return restCollection;
+  }
+  // mirrors core/restclient.js's substitute() - only used client-side for the "copy as curl" text, since the
+  // actual send() always resolves {{var}} tokens in the main process against the active environment.
+  function restSubstitute(str, vars) {
+    if (typeof str !== 'string' || !vars) return str;
+    return str.replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (whole, name) => (Object.prototype.hasOwnProperty.call(vars, name) ? vars[name] : whole));
+  }
+  // request/response bodies get a real Monaco model (syntax highlighting, JSON validation) instead of a
+  // plain textarea/<pre> - only one REST tab is ever rendered into #rest at a time, so one tracked instance
+  // of each is enough; every render disposes the previous one first so switching tabs/requests never leaks.
+  let restBodyEditor = null;
+  let restRespEditor = null;
+  function disposeRestBodyEditor() { if (restBodyEditor) { restBodyEditor.editor.dispose(); restBodyEditor.model.dispose(); restBodyEditor = null; } }
+  function disposeRestRespEditor() { if (restRespEditor) { restRespEditor.editor.dispose(); restRespEditor.model.dispose(); restRespEditor = null; } }
+  function restHeaderValue(headers, name) {
+    const h = (headers || []).find((x) => x.key && x.key.trim().toLowerCase() === name);
+    return h ? h.value : null;
+  }
+  function restLangFromContentType(ct) {
+    const v = String(ct || '').toLowerCase();
+    if (!v) return null;
+    if (v.includes('json')) return 'json';
+    if (v.includes('html')) return 'html';
+    if (v.includes('xml')) return 'xml';
+    if (v.includes('javascript')) return 'javascript';
+    if (v.includes('css')) return 'css';
+    return v.includes('text/plain') ? 'plaintext' : null;
+  }
+  function restSniffLang(text) {
+    const t = String(text || '').trim();
+    if (/^[{[]/.test(t)) return 'json';
+    if (/^</.test(t)) return 'xml';
+    return 'plaintext';
   }
   function openRestTab(preset) {
     if (!state.project || !state.project.root) { setStatus('Open a project first.'); return; }
@@ -2669,24 +2716,40 @@
       url: (preset && preset.url) || '',
       headers: preset && preset.headers ? Object.entries(preset.headers).map(([key, value]) => ({ key, value })) : [],
       body: (preset && preset.body) || '',
+      auth: (preset && preset.auth) || { type: 'none' },
+      folder: (preset && preset.folder) || '',
       response: null, sending: false,
     };
     state.tabs.push(tab);
     activateTab(id);
   }
   function renderRestResponse(box, tab) {
+    disposeRestRespEditor();
     if (!tab.response) { fill(box); return; }
     const r = tab.response;
     if (!r.ok) { fill(box, el('div', { class: 'rest-error', text: `Error: ${r.error}` })); return; }
     const sevClass = r.status >= 200 && r.status < 300 ? 'ok' : r.status >= 400 ? 'danger' : 'info';
+    const headerEntries = Object.entries(r.headers || {});
+    let lang = restLangFromContentType(restHeaderValue(headerEntries.map(([key, value]) => ({ key, value })), 'content-type')) || restSniffLang(r.body);
     let pretty = r.body;
-    try { pretty = JSON.stringify(JSON.parse(r.body), null, 2); } catch { /* not JSON, show as-is */ }
+    if (lang === 'json') { try { pretty = JSON.stringify(JSON.parse(r.body), null, 2); } catch { lang = 'plaintext'; } }
+    const bodyHost = el('div', { class: 'rest-resp-body-editor' });
     fill(box,
       el('div', { class: 'rest-status' },
         el('span', { class: `chip ${sevClass}`, text: `${r.status} ${r.statusText || ''}`.trim() }),
         el('span', { class: 'muted', text: `${r.timeMs} ms` }),
         el('span', { class: 'muted', text: `${new Blob([r.body || '']).size} bytes` })),
-      el('pre', { class: 'rest-body-out', text: pretty }));
+      headerEntries.length ? el('details', { class: 'rest-resp-headers' },
+        el('summary', { text: `Headers (${headerEntries.length})` }),
+        ...headerEntries.map(([k, v]) => el('div', { class: 'rest-resp-header-row' }, el('span', { class: 'rest-resp-header-key', text: k }), el('span', { text: v })))) : null,
+      bodyHost);
+    const model = monaco.editor.createModel(pretty, lang);
+    const ed = monaco.editor.create(bodyHost, {
+      theme: MONACO_THEMES[resolvedTheme()], fontSize: 12, fontFamily: MONO, minimap: { enabled: false },
+      scrollBeyondLastLine: false, automaticLayout: true, wordWrap: 'on', readOnly: true, domReadOnly: true,
+    });
+    ed.setModel(model);
+    restRespEditor = { editor: ed, model, tabId: tab.id };
   }
   async function sendRestRequest(tab) {
     if (!tab.url.trim()) { setStatus('Enter a URL first.'); return; }
@@ -2694,7 +2757,7 @@
     if (state.activeTab === tab.id) renderRestTab(tab);
     const headers = {};
     for (const h of tab.headers) if (h.key.trim()) headers[h.key.trim()] = h.value;
-    const res = await api.rest.send({ method: tab.method, url: tab.url.trim(), headers, body: tab.body });
+    const res = await api.rest.send({ id: tab.id, method: tab.method, url: tab.url.trim(), headers, body: tab.body, auth: tab.auth });
     tab.sending = false;
     tab.response = res;
     if (state.activeTab === tab.id) renderRestTab(tab);
@@ -2702,43 +2765,127 @@
   async function saveRestRequest(tab) {
     const name = window.prompt('Save this request as:', tab.title && tab.title !== 'New request' ? tab.title : '');
     if (!name) return;
+    const folder = window.prompt('Folder (optional - groups it in the saved-requests list; leave blank for none):', tab.folder || '');
     const list = await restSaved();
     const headers = {};
     for (const h of tab.headers) if (h.key.trim()) headers[h.key.trim()] = h.value;
-    const entry = { name, method: tab.method, url: tab.url.trim(), headers, body: tab.body };
-    const i = list.findIndex((r) => r.name === name);
-    if (i >= 0) list[i] = entry; else list.push(entry);
-    await api.rest.save(list);
-    restCollection = list;
+    const entry = { name, method: tab.method, url: tab.url.trim(), headers, body: tab.body, auth: tab.auth, folder: (folder || '').trim() };
+    // renaming a saved request (the new name differs from the entry this tab was loaded as) must drop the old
+    // entry too, or it keeps living in .ide/requests.yaml as an orphaned duplicate under its old name.
+    const next = list.filter((r) => r.name !== name && r.name !== tab.savedAs);
+    next.push(entry);
+    await api.rest.save(next);
+    restCollection = next;
     tab.title = name;
+    tab.savedAs = name;
+    tab.folder = entry.folder;
     renderRestTab(tab); renderTabs();
     setStatus(`Saved “${name}”.`);
   }
+  async function restToCurl(tab) {
+    const vars = await api.env.activeVars();
+    const sub = (s) => restSubstitute(s, vars);
+    const shQuote = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
+    const parts = ['curl', '-X', tab.method];
+    let url = sub(tab.url.trim() || tab.url);
+    for (const h of tab.headers) if (h.key.trim()) parts.push('-H', shQuote(`${sub(h.key.trim())}: ${sub(h.value)}`));
+    const auth = tab.auth || { type: 'none' };
+    if (auth.type === 'basic') parts.push('-u', shQuote(`${sub(auth.username || '')}:${sub(auth.password || '')}`));
+    else if (auth.type === 'bearer' && auth.token) parts.push('-H', shQuote(`Authorization: Bearer ${sub(auth.token)}`));
+    else if (auth.type === 'apiKey' && auth.key) {
+      if (auth.in === 'query') { try { const u = new URL(url); u.searchParams.set(sub(auth.key), sub(auth.value || '')); url = u.toString(); } catch { /* leave url as-is - fetch would report the same bad URL */ } }
+      else parts.push('-H', shQuote(`${sub(auth.key)}: ${sub(auth.value || '')}`));
+    }
+    if (!/^(GET|HEAD)$/.test(tab.method) && tab.body) parts.push('-d', shQuote(sub(tab.body)));
+    parts.push(shQuote(url));
+    return parts.join(' ');
+  }
   function renderRestTab(tab) {
+    disposeRestBodyEditor();
     const host = $('#rest');
     const methodSel = el('select', { class: 'rest-method' }, ...REST_METHODS.map((m) => el('option', { value: m, text: m })));
     methodSel.value = tab.method;
     const urlIn = el('input', { type: 'text', class: 'rest', placeholder: 'https://api.example.com/...', value: tab.url, spellcheck: 'false' });
     urlIn.addEventListener('input', () => { tab.url = urlIn.value; });
     urlIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendRestRequest(tab); });
-    const sendBtn = el('button', { class: 'primary', title: 'Send (Enter in the URL field)', onclick: () => sendRestRequest(tab) }, ic('send'), tab.sending ? 'Sending…' : 'Send');
-    sendBtn.disabled = tab.sending;
+    const sendBtn = tab.sending
+      ? el('button', { title: 'Cancel this request', onclick: () => api.rest.cancel(tab.id) }, ic('x'), 'Cancel')
+      : el('button', { class: 'primary', title: 'Send (Enter in the URL field)', onclick: () => sendRestRequest(tab) }, ic('send'), 'Send');
     const saveBtn = el('button', { title: 'Save this request into .ide/requests.yaml', onclick: () => saveRestRequest(tab) }, ic('check'), 'Save');
-    const bodyIn = el('textarea', { class: 'rest-body', rows: '6', placeholder: 'Request body (JSON, form data, …)', spellcheck: 'false' });
-    bodyIn.value = tab.body;
-    bodyIn.disabled = /^(GET|HEAD)$/.test(tab.method);
-    bodyIn.addEventListener('input', () => { tab.body = bodyIn.value; });
-    methodSel.addEventListener('change', () => { tab.method = methodSel.value; bodyIn.disabled = /^(GET|HEAD)$/.test(tab.method); });
-    const bar = el('div', { class: 'rest-bar' }, methodSel, urlIn, sendBtn, saveBtn);
+    const curlBtn = el('button', { class: 'icon', title: 'Copy this request as a curl command', onclick: async () => { api.copy(await restToCurl(tab)); setStatus('Copied curl command.'); } }, ic('terminal'));
+    const envSel = el('select', { class: 'rest-method rest-env', title: 'Active environment: substitutes {{name}} tokens in the URL, headers, body and auth fields' });
+    envSel.replaceChildren(el('option', { value: '', text: 'No environment' }));
+    envSel.addEventListener('change', async () => {
+      const st = await api.env.list();
+      await api.env.save({ environments: st.environments, active: envSel.value || null });
+    });
+    api.env.list().then((st) => {
+      if (state.activeTab !== tab.id) return; // the user moved on before this resolved
+      envSel.disabled = !st.environments.length;
+      envSel.title = st.environments.length ? envSel.title : 'No environments yet - add .ide/environments.yaml (environments: [{name, vars}], active: name)';
+      envSel.replaceChildren(el('option', { value: '', text: 'No environment' }), ...st.environments.map((e) => el('option', { value: e.name, text: e.name })));
+      envSel.value = st.active || '';
+    });
+    const bodyHost = el('div', { class: 'rest-body-editor' });
+    const bodyModel = monaco.editor.createModel(tab.body, restLangFromContentType(restHeaderValue(tab.headers, 'content-type')) || restSniffLang(tab.body));
+    const bodyEd = monaco.editor.create(bodyHost, {
+      theme: MONACO_THEMES[resolvedTheme()], fontSize: 13, fontFamily: MONO, minimap: { enabled: false },
+      scrollBeyondLastLine: false, automaticLayout: true, wordWrap: 'on', readOnly: /^(GET|HEAD)$/.test(tab.method),
+    });
+    bodyEd.setModel(bodyModel);
+    restBodyEditor = { editor: bodyEd, model: bodyModel, tabId: tab.id };
+    // the content-type header decides the language when set explicitly; otherwise re-guess from the body
+    // itself on every edit, so pasting JSON into a fresh request highlights without the user touching headers.
+    const syncBodyLang = () => {
+      const explicit = restLangFromContentType(restHeaderValue(tab.headers, 'content-type'));
+      const lang = explicit || restSniffLang(tab.body);
+      if (bodyModel.getLanguageId() !== lang) monaco.editor.setModelLanguage(bodyModel, lang);
+    };
+    bodyModel.onDidChangeContent(() => { tab.body = bodyModel.getValue(); syncBodyLang(); });
+    methodSel.addEventListener('change', () => { tab.method = methodSel.value; bodyEd.updateOptions({ readOnly: /^(GET|HEAD)$/.test(tab.method) }); });
+    const bar = el('div', { class: 'rest-bar' }, methodSel, urlIn, sendBtn, saveBtn, curlBtn, envSel);
+
+    const authRow = el('div', { class: 'rest-auth-row' });
+    const drawAuth = () => {
+      const typeSel = el('select', { class: 'rest-method' }, ...REST_AUTH_TYPES.map(([v, l]) => el('option', { value: v, text: l })));
+      typeSel.value = tab.auth.type;
+      typeSel.addEventListener('change', () => {
+        tab.auth = typeSel.value === 'apiKey' ? { type: 'apiKey', key: '', value: '', in: 'header' } : { type: typeSel.value };
+        drawAuth();
+      });
+      const fields = [];
+      if (tab.auth.type === 'basic') {
+        const u = el('input', { type: 'text', class: 'rest', placeholder: 'Username', value: tab.auth.username || '', spellcheck: 'false' });
+        const p = el('input', { type: 'password', class: 'rest', placeholder: 'Password', value: tab.auth.password || '' });
+        u.addEventListener('input', () => { tab.auth.username = u.value; });
+        p.addEventListener('input', () => { tab.auth.password = p.value; });
+        fields.push(u, p);
+      } else if (tab.auth.type === 'bearer') {
+        const t = el('input', { type: 'text', class: 'rest', placeholder: 'Token', value: tab.auth.token || '', spellcheck: 'false' });
+        t.addEventListener('input', () => { tab.auth.token = t.value; });
+        fields.push(t);
+      } else if (tab.auth.type === 'apiKey') {
+        const k = el('input', { type: 'text', class: 'rest', placeholder: 'Header/param name', value: tab.auth.key || '', spellcheck: 'false' });
+        const v = el('input', { type: 'text', class: 'rest', placeholder: 'Value', value: tab.auth.value || '', spellcheck: 'false' });
+        const loc = el('select', { class: 'rest-method' }, el('option', { value: 'header', text: 'Header' }), el('option', { value: 'query', text: 'Query param' }));
+        loc.value = tab.auth.in || 'header';
+        k.addEventListener('input', () => { tab.auth.key = k.value; });
+        v.addEventListener('input', () => { tab.auth.value = v.value; });
+        loc.addEventListener('change', () => { tab.auth.in = loc.value; });
+        fields.push(k, v, loc);
+      }
+      authRow.replaceChildren(el('span', { class: 'muted', text: 'Auth' }), typeSel, ...fields);
+    };
+    drawAuth();
 
     const headerRows = el('div', { class: 'rest-headers' });
     const drawHeaders = () => {
       headerRows.replaceChildren(...tab.headers.map((h, i) => {
-        const k = el('input', { type: 'text', class: 'rest', placeholder: 'Header', value: h.key, spellcheck: 'false' });
+        const k = el('input', { type: 'text', class: 'rest', placeholder: 'Header', value: h.key, spellcheck: 'false', list: 'rest-header-names' });
         const v = el('input', { type: 'text', class: 'rest', placeholder: 'Value', value: h.value, spellcheck: 'false' });
-        k.addEventListener('input', () => { h.key = k.value; });
-        v.addEventListener('input', () => { h.value = v.value; });
-        return el('div', { class: 'rest-header-row' }, k, v, el('button', { class: 'icon', title: 'Remove this header', onclick: () => { tab.headers.splice(i, 1); drawHeaders(); } }, ic('x')));
+        k.addEventListener('input', () => { h.key = k.value; syncBodyLang(); });
+        v.addEventListener('input', () => { h.value = v.value; syncBodyLang(); });
+        return el('div', { class: 'rest-header-row' }, k, v, el('button', { class: 'icon', title: 'Remove this header', onclick: () => { tab.headers.splice(i, 1); drawHeaders(); syncBodyLang(); } }, ic('x')));
       }), el('button', { class: 'icon', title: 'Add a header', onclick: () => { tab.headers.push({ key: '', value: '' }); drawHeaders(); } }, ic('plus'), 'Header'));
     };
     drawHeaders();
@@ -2749,11 +2896,11 @@
     const sideList = el('div', { class: 'rest-list' });
     restSaved().then((list) => {
       if (state.activeTab !== tab.id) return; // the user moved on before this resolved
-      const rows = list.map((r) => {
+      const row = (r) => {
         const loadSaved = () => {
-          tab.title = r.name; tab.method = r.method; tab.url = r.url;
+          tab.title = r.name; tab.method = r.method; tab.url = r.url; tab.savedAs = r.name; tab.folder = r.folder || '';
           tab.headers = Object.entries(r.headers || {}).map(([key, value]) => ({ key, value }));
-          tab.body = r.body || ''; tab.response = null;
+          tab.body = r.body || ''; tab.auth = r.auth || { type: 'none' }; tab.response = null;
           renderRestTab(tab); renderTabs();
         };
         const removeSaved = async (e) => {
@@ -2762,20 +2909,31 @@
           const next = list.filter((x) => x.name !== r.name);
           await api.rest.save(next);
           restCollection = next;
+          if (tab.savedAs === r.name) tab.savedAs = null;
           renderRestTab(tab);
         };
         return el('div', { class: 'rest-saved-item', title: `${r.method} ${r.url}`, onclick: loadSaved },
           el('span', { class: 'rest-saved-method', text: r.method }), el('span', { text: r.name }),
           el('span', { class: 'spacer' }),
           el('button', { class: 'icon', title: 'Delete this saved request', onclick: removeSaved }, ic('x')));
-      });
+      };
+      // folder is just a string tag on each entry (no folder CRUD) - group by it for display, ungrouped first
+      const groups = new Map();
+      for (const r of list) { const key = r.folder || ''; if (!groups.has(key)) groups.set(key, []); groups.get(key).push(r); }
+      const order = [...groups.keys()].sort((a, b) => (a === '' ? -1 : b === '' ? 1 : a.localeCompare(b)));
+      const rows = [];
+      for (const key of order) {
+        if (key) rows.push(el('div', { class: 'rest-folder-head', text: key }));
+        rows.push(...groups.get(key).map(row));
+      }
       sideList.replaceChildren(...rows);
       if (!list.length) sideList.append(el('div', { class: 'empty', text: 'No saved requests yet.' }));
     });
 
     host.replaceChildren(el('div', { class: 'rest-pane' },
       el('div', { class: 'rest-side' }, el('div', { class: 'rest-side-head', text: 'Saved requests' }), sideList),
-      el('div', { class: 'rest-main' }, bar, headerRows, bodyIn, respBox)));
+      el('div', { class: 'rest-main' }, bar, authRow, headerRows, bodyHost, respBox)),
+      el('datalist', { id: 'rest-header-names' }, ...REST_HEADER_NAMES.map((name) => el('option', { value: name }))));
   }
 
   async function runChecks(tier) {
@@ -7545,6 +7703,67 @@
       } finally {
         await api.fs.write('.ide/config.json', origCfg || '{}\n');
         await loadProject(); await renderTree();
+      }
+    });
+
+    await step('REST client: body/response get Monaco syntax highlighting, language follows Content-Type over sniffing, cleaned up on close', async () => {
+      openRestTab();
+      const tab = activeTab();
+      if (!tab || tab.kind !== 'rest') return 'no rest tab opened';
+      const rendered = !!$('#rest').querySelector('.rest-body-editor .monaco-editor');
+      const defaultLang = restBodyEditor && restBodyEditor.model.getLanguageId();
+      restBodyEditor.model.setValue('{"a":1}'); // no Content-Type set yet: language should follow the body's own shape
+      const sniffedJson = restBodyEditor.model.getLanguageId();
+      tab.headers.push({ key: 'Content-Type', value: 'application/xml' }); // an explicit header wins over sniffing
+      renderRestTab(tab);
+      const explicitXml = restBodyEditor.model.getLanguageId();
+      const bodyTabId = restBodyEditor.tabId;
+      await closeTab(tab.id);
+      const disposedOnClose = restBodyEditor === null || restBodyEditor.tabId !== bodyTabId;
+      const ok = rendered && defaultLang === 'plaintext' && sniffedJson === 'json' && explicitXml === 'xml' && disposedOnClose;
+      return ok ? true : JSON.stringify({ rendered, defaultLang, sniffedJson, explicitXml, disposedOnClose });
+    });
+
+    await step('REST client: the auth helper, environment variables (.ide/environments.yaml) and folder-grouped saved requests', async () => {
+      try {
+        await api.fs.write('.ide/environments.yaml', 'environments:\n  - name: dev\n    vars:\n      host: localhost:9999\nactive: dev\n');
+        await api.rest.save([
+          { name: 'Get widgets', method: 'GET', url: 'https://example.test/widgets', folder: 'Billing', auth: { type: 'none' } },
+          { name: 'List invoices', method: 'GET', url: 'https://example.test/invoices', folder: 'Billing', auth: { type: 'bearer', token: 'x' } },
+          { name: 'Health check', method: 'GET', url: 'https://example.test/health', folder: '', auth: { type: 'none' } },
+        ]);
+        restCollection = null; // the sidebar caches .ide/requests.yaml for the session - force a re-fetch of what was just written
+        openRestTab();
+        const tab = activeTab();
+        if (!tab || tab.kind !== 'rest') return 'no rest tab opened';
+
+        // the environment picker starts with just a "No environment" option and fills in from an async IPC
+        // call after the synchronous render - wait for that, not for !disabled (false by default either way)
+        const envSelEl = await waitFor(() => { const s = $('#rest .rest-env'); return s && s.options.length > 1 ? s : null; });
+        const envOk = !!envSelEl && !envSelEl.disabled && envSelEl.value === 'dev';
+
+        // auth helper: switching type redraws its fields, and typing into them lands straight on tab.auth
+        const typeSel = $('#rest .rest-auth-row select');
+        typeSel.value = 'bearer'; typeSel.dispatchEvent(new Event('change'));
+        const tokenIn = $('#rest .rest-auth-row input.rest');
+        tokenIn.value = 'tok-abc'; tokenIn.dispatchEvent(new Event('input'));
+        const authOk = tab.auth.type === 'bearer' && tab.auth.token === 'tok-abc';
+
+        // folders: an async IPC call too, and the ungrouped request must sort before the named folder's header
+        await waitFor(() => (/Health check/.test($('#rest .rest-list').textContent) ? true : null));
+        const order = [...$('#rest .rest-list').children].map((n) => n.textContent);
+        const healthIdx = order.findIndex((t) => /Health check/.test(t));
+        const billingHeadIdx = order.findIndex((t) => t === 'Billing');
+        const widgetsIdx = order.findIndex((t) => /Get widgets/.test(t));
+        const invoicesIdx = order.findIndex((t) => /List invoices/.test(t));
+        const foldersOk = healthIdx === 0 && billingHeadIdx > healthIdx && widgetsIdx > billingHeadIdx && invoicesIdx > billingHeadIdx;
+
+        await closeTab(tab.id);
+        const ok = envOk && authOk && foldersOk;
+        return ok ? true : JSON.stringify({ envOk, authOk, foldersOk, order });
+      } finally {
+        await api.rest.save([]); restCollection = null;
+        await api.fs.delete('.ide/environments.yaml');
       }
     });
 

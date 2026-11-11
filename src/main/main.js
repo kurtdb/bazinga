@@ -8,6 +8,7 @@ const { runChecks } = require('../core/checks');
 const { search, replaceInText } = require('../core/search');
 const todos = require('../core/todos');
 const restclient = require('../core/restclient');
+const environments = require('../core/environments');
 const { runReview } = require('../core/review');
 const scope = require('../core/scope');
 const { fixPath } = require('./shellenv');
@@ -97,6 +98,7 @@ let watcher = null;
 let checksRunning = false;
 let checksAbort = null;
 let reviewAbort = null;
+const restAborts = new Map(); // tab id -> AbortController, for in-flight REST client requests
 let ptys = null;
 let fixloop = null;
 let lsp = null;
@@ -778,9 +780,20 @@ function registerIpc() {
 
   ipcMain.handle('todos:scan', () => safe(() => todos.scan(requireRoot())));
 
-  ipcMain.handle('rest:send', (_e, req) => safe(() => restclient.send(req)));
+  ipcMain.handle('rest:send', (_e, req) => safe(() => {
+    const id = req && req.id;
+    const ac = new AbortController();
+    if (id) restAborts.set(id, ac);
+    const vars = environments.activeVars(requireRoot());
+    return restclient.send({ ...req, vars }, undefined, ac.signal).finally(() => { if (id) restAborts.delete(id); });
+  }));
+  ipcMain.handle('rest:cancel', (_e, id) => { const ac = restAborts.get(id); if (ac) ac.abort(); return true; });
   ipcMain.handle('rest:list', () => safe(() => restclient.loadCollection(requireRoot())));
   ipcMain.handle('rest:save', (_e, reqs) => safe(() => restclient.saveCollection(requireRoot(), reqs)));
+
+  ipcMain.handle('env:list', () => safe(() => environments.load(requireRoot())));
+  ipcMain.handle('env:save', (_e, state) => safe(() => environments.save(requireRoot(), state)));
+  ipcMain.handle('env:activeVars', () => safe(() => environments.activeVars(requireRoot())));
 
   // git
   // null = git failed just now (index busy, repository mid-operation): the UI keeps the list it has instead of showing "no changes"
