@@ -39,6 +39,8 @@
   "chevron-right": "<path d=\"m9 18 6-6-6-6\" />",
   "chevron-down": "<path d=\"m6 9 6 6 6-6\" />",
   "chevron-left": "<path d=\"m15 18-6-6 6-6\" />",
+  "chevron-up": "<path d=\"m18 15-6-6-6 6\" />",
+  "bookmark": "<path d=\"m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z\" />",
   "circle-alert": "<circle cx=\"12\" cy=\"12\" r=\"10\" /> <line x1=\"12\" x2=\"12\" y1=\"8\" y2=\"12\" /> <line x1=\"12\" x2=\"12.01\" y1=\"16\" y2=\"16\" />",
   "triangle-alert": "<path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\" /> <path d=\"M12 9v4\" /> <path d=\"M12 17h.01\" />",
   "info": "<circle cx=\"12\" cy=\"12\" r=\"10\" /> <path d=\"M12 16v-4\" /> <path d=\"M12 8h.01\" />",
@@ -99,7 +101,10 @@
   "variable": "<path d=\"M8 21s-4-3-4-9 4-9 4-9\" /> <path d=\"M16 3s4 3 4 9-4 9-4 9\" /> <line x1=\"15\" x2=\"9\" y1=\"9\" y2=\"15\" /> <line x1=\"9\" x2=\"15\" y1=\"9\" y2=\"15\" />",
   "layers": "<path d=\"M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z\" /> <path d=\"M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12\" /> <path d=\"M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17\" />",
   "circle-dot": "<circle cx=\"12\" cy=\"12\" r=\"1\" /> <circle cx=\"12\" cy=\"12\" r=\"10\" />",
-  "text-cursor-input": "<path d=\"M12 20h-1a2 2 0 0 1-2-2 2 2 0 0 1-2 2H6\" /> <path d=\"M13 8h7a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-7\" /> <path d=\"M5 16H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h1\" /> <path d=\"M6 4h1a2 2 0 0 1 2 2 2 2 0 0 1 2-2h1\" /> <path d=\"M9 6v12\" />"
+  "text-cursor-input": "<path d=\"M12 20h-1a2 2 0 0 1-2-2 2 2 0 0 1-2 2H6\" /> <path d=\"M13 8h7a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-7\" /> <path d=\"M5 16H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h1\" /> <path d=\"M6 4h1a2 2 0 0 1 2 2 2 2 0 0 1 2-2h1\" /> <path d=\"M9 6v12\" />",
+  "columns-2": "<rect width=\"18\" height=\"18\" x=\"3\" y=\"3\" rx=\"2\" /> <path d=\"M12 3v18\" />",
+  "pin": "<path d=\"M12 17v5\" /> <path d=\"M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z\" />",
+  "list-tree": "<path d=\"M21 12h-8\" /> <path d=\"M21 6h-8\" /> <path d=\"M21 18h-8\" /> <path d=\"M3 6v4c0 1.1.9 2 2 2h3\" /> <path d=\"M3 10v6c0 1.1.9 2 2 2h3\" />"
 };
   /** An inline <svg> that inherits the text colour (stroke: currentColor), so it follows the light/dark theme. */
   window.icon = function icon(name, cls) {

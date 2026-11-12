@@ -58,6 +58,10 @@ contextBridge.exposeInMainWorld('api', {
     save: (state) => invoke('env:save', state),
     activeVars: () => invoke('env:activeVars'),
   },
+  snippets: {
+    list: () => invoke('snippets:list'),
+    save: (list) => invoke('snippets:save', list),
+  },
   git: {
     changes: () => invoke('git:changes'),
     head: (rel) => invoke('git:head', rel),

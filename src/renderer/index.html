@@ -78,31 +78,42 @@
       <section id="center">
         <div id="editor-area">
           <div id="tabbar"></div>
-          <div id="editor-host">
-            <button id="md-toggle" class="hidden" data-icon="eye" title="Show the rendered Markdown (Ctrl/Cmd+Shift+V)">Preview</button>
-            <div id="md-preview" class="hidden"></div>
-            <div id="diffbar" class="hidden">
-              <button id="d-prev" class="icon" data-icon="chevron-left" title="Previous change"></button>
-              <button id="d-next" class="icon" data-icon="chevron-right" title="Next change"></button>
-              <span id="d-info" class="muted"></span>
-              <button id="d-symbols" class="hidden" data-icon="git-compare-arrows" title="Classes, methods and functions that were added, removed, renamed or moved - a clearer summary than raw line changes"></button>
-              <span class="spacer"></span>
-              <button id="d-revert-hunk" data-icon="undo-2" title="Undo the change under the cursor (right side); save afterwards with Ctrl+S">Revert this change</button>
-              <button id="d-comment" data-icon="message-square-plus" title="Comment on the line under the cursor (right side). You can also click the gutter. Comments are sent to the agent together.">Comment</button>
-              <button id="d-send-comments" data-icon="send" class="hidden" title="Send all review comments to the agent terminal">Send comments</button>
-              <button id="d-reviewed" data-icon="check" title="Mark this file as reviewed">Mark reviewed</button>
-              <button id="d-stage-hunk" data-icon="plus" title="Stage only the change under the cursor (right side), like git add -p">Stage change</button>
-              <button id="d-unstage-hunk" data-icon="minus" title="Take the change under the cursor out of the index again">Unstage change</button>
-              <button id="d-stage" data-icon="plus" title="Stage / unstage this file">Stage file</button>
-              <button id="d-revert-file" data-icon="trash-2" title="Throw away all changes to this file">Revert file</button>
+          <div id="editor-split">
+            <div id="editor-host">
+              <button id="md-toggle" class="hidden" data-icon="eye" title="Show the rendered Markdown (Ctrl/Cmd+Shift+V)">Preview</button>
+              <div id="md-preview" class="hidden"></div>
+              <div id="diffbar" class="hidden">
+                <button id="d-prev" class="icon" data-icon="chevron-left" title="Previous change"></button>
+                <button id="d-next" class="icon" data-icon="chevron-right" title="Next change"></button>
+                <span id="d-info" class="muted"></span>
+                <button id="d-symbols" class="hidden" data-icon="git-compare-arrows" title="Classes, methods and functions that were added, removed, renamed or moved - a clearer summary than raw line changes"></button>
+                <span class="spacer"></span>
+                <button id="d-revert-hunk" data-icon="undo-2" title="Undo the change under the cursor (right side); save afterwards with Ctrl+S">Revert this change</button>
+                <button id="d-comment" data-icon="message-square-plus" title="Comment on the line under the cursor (right side). You can also click the gutter. Comments are sent to the agent together.">Comment</button>
+                <button id="d-send-comments" data-icon="send" class="hidden" title="Send all review comments to the agent terminal">Send comments</button>
+                <button id="d-reviewed" data-icon="check" title="Mark this file as reviewed">Mark reviewed</button>
+                <button id="d-stage-hunk" data-icon="plus" title="Stage only the change under the cursor (right side), like git add -p">Stage change</button>
+                <button id="d-unstage-hunk" data-icon="minus" title="Take the change under the cursor out of the index again">Unstage change</button>
+                <button id="d-stage" data-icon="plus" title="Stage / unstage this file">Stage file</button>
+                <button id="d-revert-file" data-icon="trash-2" title="Throw away all changes to this file">Revert file</button>
+              </div>
+              <div id="breadcrumbs" class="hidden"></div>
+              <div id="editor" class="hidden"></div>
+              <div id="diff" class="hidden"></div>
+              <div id="rest" class="hidden"></div>
+              <div id="welcome">
+                <h2><span data-icon="sparkles"></span>Bazinga</h2>
+                <p class="muted">Pick a file on the left (or press <b>Ctrl+P</b>), or review what your agent changed under <b>Changes</b>.</p>
+                <p class="muted">Start Claude or Copilot from the top bar, then run <b>Fast checks</b> to validate the result.</p>
+              </div>
             </div>
-            <div id="editor" class="hidden"></div>
-            <div id="diff" class="hidden"></div>
-            <div id="rest" class="hidden"></div>
-            <div id="welcome">
-              <h2><span data-icon="sparkles"></span>Bazinga</h2>
-              <p class="muted">Pick a file on the left (or press <b>Ctrl+P</b>), or review what your agent changed under <b>Changes</b>.</p>
-              <p class="muted">Start Claude or Copilot from the top bar, then run <b>Fast checks</b> to validate the result.</p>
+            <div class="splitter v" id="split-editor2"></div>
+            <div id="editor2-pane" class="hidden">
+              <div id="editor2-head">
+                <span id="editor2-title" class="muted"></span>
+                <button id="editor2-close" class="icon" data-icon="x" title="Close split"></button>
+              </div>
+              <div id="editor2"></div>
             </div>
           </div>
         </div>
@@ -113,6 +124,8 @@
             <div id="problems"></div>
             <div id="review"></div>
             <div id="todos"></div>
+            <div id="bookmarks"></div>
+            <div id="outline"></div>
             <div id="debug"></div>
             <div id="debugger"></div>
             <div id="terms"></div>

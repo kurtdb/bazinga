@@ -9,6 +9,7 @@ const { search, replaceInText } = require('../core/search');
 const todos = require('../core/todos');
 const restclient = require('../core/restclient');
 const environments = require('../core/environments');
+const snippets = require('../core/snippets');
 const { runReview } = require('../core/review');
 const scope = require('../core/scope');
 const { fixPath } = require('./shellenv');
@@ -795,6 +796,9 @@ function registerIpc() {
   ipcMain.handle('env:save', (_e, state) => safe(() => environments.save(requireRoot(), state)));
   ipcMain.handle('env:activeVars', () => safe(() => environments.activeVars(requireRoot())));
 
+  ipcMain.handle('snippets:list', () => safe(() => snippets.loadSnippets(requireRoot())));
+  ipcMain.handle('snippets:save', (_e, list) => safe(() => snippets.saveSnippets(requireRoot(), list)));
+
   // git
   // null = git failed just now (index busy, repository mid-operation): the UI keeps the list it has instead of showing "no changes"
   ipcMain.handle('git:changes', async () => {
@@ -1533,18 +1537,29 @@ function registerIpc() {
   ipcMain.handle('lsp:workspaceSymbols', (_e, query) => safe(async () => ({ result: await ensureLsp().workspaceSymbols(String(query || '')) })));
 
   // real debugger (breakpoints, step, call stack, variables), via the Debug Adapter Protocol - one session at a
-  // time. Python only for now (debugpy.adapter, spawned directly; see core/dap.js). Every DAP event is pushed to
-  // the renderer as-is on 'dap:event'; it decides what a 'stopped'/'terminated'/'output' event means for the UI.
+  // time. Python (debugpy.adapter), Go (dlv dap) and Dart (dart debug_adapter) so far, keyed by extension -
+  // every other language's single-file/single-program launch doesn't map onto a real DAP session the way these
+  // three do (compiled languages like C#/F#/Rust need a build step first; "Debug this test" - a Debug lens -
+  // covers those instead, by waiting for your own IDE's debugger to attach, same as it always has). Every DAP
+  // event is pushed to the renderer as-is on 'dap:event'; it decides what a 'stopped'/'terminated'/'output'
+  // event means for the UI.
+  const DAP_ADAPTERS = {
+    py: () => dap.pythonAdapter(process.platform),
+    go: () => dap.goAdapter(),
+    dart: () => dap.dartAdapter(),
+  };
   ipcMain.handle('dap:start', (_e, { rel } = {}) => safe(async () => {
     const r = requireRoot();
     const abs = resolveInRoot(rel);
-    if (!/\.py$/i.test(String(rel))) return { error: 'Debugging is only wired up for Python right now (debugpy.adapter). Other languages still get "Debug this test" (Settings → a Debug lens), which waits for your own IDE’s debugger to attach.' };
+    const ext = String(rel).split('.').pop().toLowerCase();
+    const makeAdapter = DAP_ADAPTERS[ext];
+    if (!makeAdapter) return { error: 'Debugging is wired up for Python, Go and Dart right now. Other languages still get "Debug this test" (a Debug lens), which waits for your own IDE’s debugger to attach.' };
     if (dapSession) { await dapSession.stop().catch(() => {}); dapSession = null; }
     const session = new dap.DapSession();
     session.on('event', (event, body) => send('dap:event', event, body));
     dapSession = session;
     try {
-      const res = await session.start({ adapter: dap.pythonAdapter(process.platform), program: abs, cwd: r });
+      const res = await session.start({ adapter: makeAdapter(), program: abs, cwd: r, opts: { cwd: r } });
       return { ok: true, capabilities: res.capabilities };
     } catch (err) { dapSession = null; return { error: err.message }; }
   }));
@@ -1747,7 +1762,7 @@ function registerIpc() {
       try { exact = await ensureLsp().usageCounts(String(rel), String(content), targets); } catch { exact = new Map(); }
     }
     return { symbols: syms.map((s) => ({
-      name: s.name, kind: s.kind, line: s.line,
+      name: s.name, kind: s.kind, line: s.line, endLine: s.endLine,
       exactUsages: exact.has(`${s.line}`) ? exact.get(`${s.line}`) : null,
       column: symbols.nameColumn(srcLines[s.line - 1] || '', s.name, s.kind),
       endpoints: spring.endpoints.filter((e) => e.line === s.line).map((e) => ({ method: e.method, path: e.path })),

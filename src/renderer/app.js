@@ -261,6 +261,7 @@
     quick: { files: [], stale: true, sel: 0, items: [], symbols: [] },
     review: { used: false, running: false, output: '', error: '' },
     todos: { items: [], scanning: false, truncated: false },
+    bookmarks: new Map(), // rel -> Set<line> - local to this machine (session.json), not git-shared
     commitMsg: '',
     task: { allow: '', summary: '', baseline: null, reviewed: {}, started: null },
     scope: null,
@@ -268,7 +269,7 @@
     runs: null,          // { main, runs, current } from the main process
     customThemes: [],    // [{ id, label, dark, seed: { bg, fg, accent }, vars }], from settings (see src/core/custompalette.js)
   };
-  let monaco; let editor; let diffEditor;
+  let monaco; let editor; let diffEditor; let editor2; let splitRel = null; // the rel shown in the split pane, or null when it's closed
   const errors = [];
   window.addEventListener('error', (e) => errors.push(String(e.message)));
 
@@ -322,11 +323,48 @@
     const common = {
       theme: MONACO_THEMES[resolvedTheme()], automaticLayout: true, minimap: { enabled: false }, fontSize: 13,
       fontFamily: MONO, scrollBeyondLastLine: false,
-      renderWhitespace: 'none', glyphMargin: true,
+      renderWhitespace: 'none', glyphMargin: true, stickyScroll: { enabled: true },
     };
     editor = monaco.editor.create($('#editor'), { ...common, model: null });
+    // Monaco's own sticky-scroll feature (pins the current function/class signature while you scroll its body)
+    // needs a DocumentSymbolProvider to know what's "current" - fed from the same per-file symbol cache
+    // (name/kind/line/endLine) breadcrumbs and the outline panel already use, via the same symbolChildren()
+    // containment logic, just shaped into Monaco's nested DocumentSymbol tree instead of a flat chain/list.
+    const MONACO_SYMBOL_KIND = { class: monaco.languages.SymbolKind.Class, method: monaco.languages.SymbolKind.Method, function: monaco.languages.SymbolKind.Function };
+    const toDocumentSymbols = (syms, parent) => symbolChildren(syms, parent).map((s) => ({
+      name: s.name, detail: '', kind: MONACO_SYMBOL_KIND[s.kind] || monaco.languages.SymbolKind.Function, tags: [],
+      range: new monaco.Range(s.line, 1, s.endLine, 1), selectionRange: new monaco.Range(s.line, 1, s.line, 1),
+      children: toDocumentSymbols(syms, s),
+    }));
+    monaco.languages.registerDocumentSymbolProvider(monaco.languages.getLanguages().map((l) => l.id), {
+      provideDocumentSymbols: (model) => {
+        if (model.uri.scheme !== 'file') return [];
+        return toDocumentSymbols(breadcrumbSymbols.get(model.uri.path.replace(/^\//, '')) || [], null);
+      },
+    });
+    // a second, plain view of whatever file is sent to it via "Split right" - shares state.models (same
+    // underlying document, edits in either pane apply to both), but intentionally has none of the main
+    // editor's own addAction()s (bookmarks, breakpoints, debug, etc.) - those are per-editor-instance in
+    // Monaco. Any *language*-registered provider (codelens, completions, markers) still applies to it too.
+    editor2 = monaco.editor.create($('#editor2'), { ...common, model: null });
+    $('#editor2-close').addEventListener('click', closeSplit);
     monaco.editor.onDidChangeMarkers((uris) => { for (const u of uris) if (u.scheme === 'file') applyErrorLens(u.path.slice(1)); });
     editor.addAction({ id: 'bazinga.localHistory', label: 'Local history of this file…', contextMenuGroupId: 'navigation', contextMenuOrder: 9, run: () => { const t = activeTab(); if (t && t.kind === 'file') openLocalHistory(t.rel); } });
+    // one provider registered against every language Monaco knows at startup, not re-registered per snippet
+    // change - it reads snippetsCache live, so editing .ide/snippets.yaml (or saving a selection) just works.
+    monaco.languages.registerCompletionItemProvider(monaco.languages.getLanguages().map((l) => l.id), {
+      provideCompletionItems: (model, position) => {
+        const lang = model.getLanguageId();
+        const word = model.getWordUntilPosition(position);
+        const range = new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn);
+        return { suggestions: snippetsCache.filter((s) => !s.language || s.language === lang).map((s) => ({
+          label: s.prefix, kind: monaco.languages.CompletionItemKind.Snippet, insertText: s.body,
+          insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+          detail: s.description || 'Snippet', range,
+        })) };
+      },
+    });
+    editor.addAction({ id: 'bazinga.saveSnippet', label: 'Save selection as snippet…', contextMenuGroupId: 'navigation', contextMenuOrder: 12, run: () => saveSelectionAsSnippet() });
     diffEditor = monaco.editor.createDiffEditor($('#diff'), { ...common, renderSideBySide: true, originalEditable: false });
     diffEditor.onDidUpdateDiff(updateDiffBar);
     const addCommentAction = { id: 'bazinga.reviewComment', label: 'Add review comment for the agent…', contextMenuGroupId: 'navigation', contextMenuOrder: 8, keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyM], run: () => commentAtCursor() };
@@ -334,11 +372,22 @@
     editor.addAction({ id: 'bazinga.mdPreview', label: 'Markdown: toggle preview', keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyV], precondition: undefined, run: () => toggleMarkdownPreview() });
     diffEditor.getModifiedEditor().addAction(addCommentAction);
     diffEditor.getModifiedEditor().onMouseDown((e) => { if (e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN && e.target.position) { const t = activeTab(); if (t && t.kind === 'diff' && !t.ro) commentOnLine(t.rel, e.target.position.lineNumber); } });
-    editor.onMouseDown((e) => { if (e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN && e.target.position) { const t = activeTab(); if (t && t.kind === 'file') toggleBreakpoint(t.rel, e.target.position.lineNumber); } });
-    editor.onDidChangeCursorPosition(() => paintBlame());
+    // the glyph margin has one job per file: a real breakpoint where a debugger could use one, a bookmark everywhere
+    // else - clicking it on a file with no debug adapter used to silently toggle a breakpoint dot that did nothing.
+    editor.onMouseDown((e) => {
+      if (e.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN || !e.target.position) return;
+      const t = activeTab(); if (!t || t.kind !== 'file') return;
+      if (canRealDebug(t.rel)) toggleBreakpoint(t.rel, e.target.position.lineNumber);
+      else toggleBookmark(t.rel, e.target.position.lineNumber);
+    });
+    editor.onDidChangeCursorPosition(() => { paintBlame(); renderBreadcrumbs(); });
     editor.onDidChangeModel(() => paintCoverage());
     for (const [id, label, which] of [['bazinga.openVsCode', 'Open in VS Code', 'vscode'], ['bazinga.openIdea', 'Open in IntelliJ IDEA', 'idea']]) editor.addAction({ id, label, contextMenuGroupId: 'navigation', contextMenuOrder: 9, run: () => openInOtherEditor(which) });
-    editor.addAction({ id: 'bazinga.debugFile', label: 'Debug this file (Python)', contextMenuGroupId: 'navigation', contextMenuOrder: 10, run: () => { const t = activeTab(); if (t && t.kind === 'file' && canRealDebug(t.rel)) startDebugging(t.rel); } });
+    editor.addAction({ id: 'bazinga.debugFile', label: 'Debug this file (Python, Go, Dart)', contextMenuGroupId: 'navigation', contextMenuOrder: 10, run: () => { const t = activeTab(); if (t && t.kind === 'file' && canRealDebug(t.rel)) startDebugging(t.rel); } });
+    editor.addAction({ id: 'bazinga.toggleBookmark', label: 'Toggle bookmark', keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyK], contextMenuGroupId: 'navigation', contextMenuOrder: 11, run: (ed) => toggleBookmarkAtCursor(ed) });
+    editor.addAction({ id: 'bazinga.nextBookmark', label: 'Go to next bookmark', keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyJ], run: () => jumpBookmark(1) });
+    editor.addAction({ id: 'bazinga.prevBookmark', label: 'Go to previous bookmark', keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyMod.Shift | monaco.KeyCode.KeyJ], run: () => jumpBookmark(-1) });
+    editor.addAction({ id: 'bazinga.splitRight', label: 'Split editor right', contextMenuGroupId: 'navigation', contextMenuOrder: 13, run: () => splitRight() });
     registerTestLenses();
     registerSymbolLenses();
     registerLspProviders();
@@ -357,14 +406,19 @@
     const text = res.content || '';
     const model = monaco.editor.createModel(text, undefined, fileUri(rel));
     m = { rel, model, saved: text, dirty: false };
+    let bcTimer = null;
     model.onDidChangeContent(() => {
       const dirty = norm(model.getValue()) !== norm(m.saved);
       if (dirty !== m.dirty) { m.dirty = dirty; renderTabs(); }
+      clearTimeout(bcTimer);
+      bcTimer = setTimeout(() => loadBreadcrumbSymbols(rel), 400);
     });
     state.models.set(rel, m);
     applyMarkers(rel);
     lspTrackModel(rel, model);
     paintBreakpoints(rel);
+    paintBookmarks(rel);
+    loadBreadcrumbSymbols(rel);
     return m;
   }
 
@@ -430,26 +484,51 @@
   // ---------------------------------------------------------------- tabs
   const activeTab = () => state.tabs.find((t) => t.id === state.activeTab) || null;
 
+  // pinned tabs sit first (in their own relative order), survive "Close others"/"Close all", and show a pin
+  // instead of being just another tab among many - the same protection VS Code's pinned tabs give you.
+  function toggleTabPin(id) {
+    const i = state.tabs.findIndex((t) => t.id === id);
+    if (i < 0) return;
+    const t = state.tabs[i];
+    t.pinned = !t.pinned;
+    state.tabs.splice(i, 1);
+    state.tabs.splice(state.tabs.filter((x) => x.pinned).length, 0, t);
+    renderTabs();
+    scheduleSessionSave();
+  }
+  async function closeOtherTabs(id) { for (const t of [...state.tabs]) if (t.id !== id && !t.pinned) await closeTab(t.id); }
+  async function closeAllTabs() { for (const t of [...state.tabs]) if (!t.pinned) await closeTab(t.id); }
+  function tabMenuItems(t) {
+    return [
+      { label: t.pinned ? 'Unpin' : 'Pin', onclick: () => toggleTabPin(t.id) },
+      { label: 'Close', onclick: () => closeTab(t.id) },
+      { label: 'Close others', onclick: () => closeOtherTabs(t.id) },
+      { label: 'Close all', onclick: () => closeAllTabs() },
+    ];
+  }
+
   function renderTabs() {
     const bar = $('#tabbar');
     bar.replaceChildren(...state.tabs.map((t) => {
       if (t.kind === 'rest') {
-        const tab = el('div', { class: `tab${t.id === state.activeTab ? ' active' : ''}`, title: t.url || 'New HTTP request' },
-          ic('globe', 'tab-ico'), el('span', { text: t.title || 'HTTP request' }),
+        const tab = el('div', { class: `tab${t.id === state.activeTab ? ' active' : ''}${t.pinned ? ' pinned' : ''}`, title: t.url || 'New HTTP request' },
+          t.pinned ? ic('pin', 'tab-ico') : ic('globe', 'tab-ico'), el('span', { text: t.title || 'HTTP request' }),
           el('span', { class: 'x', onclick: (e) => { e.stopPropagation(); closeTab(t.id); } }, ic('x')));
         tab.addEventListener('click', () => activateTab(t.id));
         tab.addEventListener('auxclick', (e) => { if (e.button === 1) closeTab(t.id); });
+        tab.addEventListener('contextmenu', (e) => { e.preventDefault(); popupMenu(e.clientX, e.clientY, tabMenuItems(t)); });
         return tab;
       }
       const m = state.models.get(t.rel);
       const name = t.rel.split('/').pop() + (t.ro ? ` @ ${t.title}` : '');
-      const tab = el('div', { class: `tab${t.id === state.activeTab ? ' active' : ''}`, title: t.rel },
-        t.kind === 'diff' ? ic('git-compare', 'tab-ico diff') : ic(fileIcon(name), 'tab-ico'),
+      const tab = el('div', { class: `tab${t.id === state.activeTab ? ' active' : ''}${t.pinned ? ' pinned' : ''}`, title: t.rel },
+        t.pinned ? ic('pin', 'tab-ico') : (t.kind === 'diff' ? ic('git-compare', 'tab-ico diff') : ic(fileIcon(name), 'tab-ico')),
         el('span', { text: name }),
         m && m.dirty ? el('span', { class: 'dirty', text: '●' }) : null,
         el('span', { class: 'x', onclick: (e) => { e.stopPropagation(); closeTab(t.id); } }, ic('x')));
       tab.addEventListener('click', () => activateTab(t.id));
       tab.addEventListener('auxclick', (e) => { if (e.button === 1) closeTab(t.id); });
+      tab.addEventListener('contextmenu', (e) => { e.preventDefault(); popupMenu(e.clientX, e.clientY, tabMenuItems(t)); });
       return tab;
     }));
   }
@@ -569,6 +648,11 @@
     $('#editor').classList.toggle('hidden', !tab || tab.kind !== 'file' || previewing);
     $('#md-toggle').classList.toggle('hidden', !mdTab);
     $('#md-preview').classList.toggle('hidden', !previewing);
+    const showCrumbs = !!tab && tab.kind === 'file' && !previewing;
+    $('#breadcrumbs').classList.toggle('hidden', !showCrumbs);
+    $('#editor-host').classList.toggle('with-crumbs', showCrumbs);
+    if (showCrumbs) renderBreadcrumbs();
+    if (state.bottom === 'outline') renderOutline();
     if (mdTab) setLabel($('#md-toggle'), previewing ? 'Edit' : 'Preview', previewing ? 'file-code' : 'eye');
     if (previewDisposable) { previewDisposable.dispose(); previewDisposable = null; }
     $('#diff').classList.toggle('hidden', !tab || tab.kind !== 'diff');
@@ -649,7 +733,8 @@
     if (i < 0) return;
     const tab = state.tabs[i];
     const m = tab.ro ? null : state.models.get(tab.rel);
-    const lastRef = state.tabs.filter((t) => t.rel === tab.rel && !t.ro).length === 1;
+    // the split pane also holds a reference to a model outside the tab list - don't dispose out from under it
+    const lastRef = state.tabs.filter((t) => t.rel === tab.rel && !t.ro).length === 1 && splitRel !== tab.rel;
     if (m && m.dirty && lastRef && !window.confirm(`Discard unsaved changes to ${tab.rel}?`)) return;
     if (tab.kind === 'rest') {
       if (tab.sending) api.rest.cancel(tab.id); // no point letting it run to the timeout once its tab is gone
@@ -1583,6 +1668,7 @@
         { label: 'Detect source and test folders', onclick: detectFolders },
       );
     }
+    if (rel && !isDir) items.push('-', { label: 'Open to the side', onclick: () => openInSplit(rel) });
     if (rel) {
       items.push('-',
         { label: 'Rename…', onclick: () => renameEntry(rel, isDir) },
@@ -2017,7 +2103,7 @@
       const items = (q ? all.map((s) => ({ s, sc: fuzzy(q, s.name) })).filter((x) => x.sc >= 0).sort((a, b) => b.sc - a.sc).map((x) => x.s) : all).slice(0, 60);
       state.quick.items = items;
       state.quick.sel = Math.min(state.quick.sel, Math.max(items.length - 1, 0));
-      $('#qo-list').replaceChildren(...(items.length ? items.map((s, i) => el('div', { class: `qo-row${i === state.quick.sel ? ' sel' : ''}`, onclick: () => pickQuick(i) },
+      $('#qo-list').replaceChildren(...(items.length ? items.map((s, i) => el('div', { class: `qo-row${i === state.quick.sel ? ' sel' : ''}`, title: `${MOD}+click: open to the side`, onclick: (e) => pickQuick(i, e) },
         ic(SYMBOL_ICON[s.kind] || 'square-function', 'qo-ico'), el('span', { text: s.name }), el('span', { class: 'dir', text: `${s.rel}:${s.line}` })))
         : [el('div', { class: 'qo-row muted', text: q ? 'No symbols match.' : 'No symbols indexed (nothing parseable, or an empty project).' })]));
       const selSym = $('#qo-list .sel');
@@ -2046,20 +2132,21 @@
     state.quick.sel = Math.min(state.quick.sel, Math.max(items.length - 1, 0));
     $('#qo-list').replaceChildren(...items.map((f, i) => {
       const slash = f.lastIndexOf('/');
-      return el('div', { class: `qo-row${i === state.quick.sel ? ' sel' : ''}`, onclick: () => pickQuick(i) },
+      return el('div', { class: `qo-row${i === state.quick.sel ? ' sel' : ''}`, title: `${MOD}+click: open to the side`, onclick: (e) => pickQuick(i, e) },
         el('span', { text: f.slice(slash + 1) }), el('span', { class: 'dir', text: slash > 0 ? f.slice(0, slash) : '' }));
     }));
     const sel = $('#qo-list .sel');
     if (sel) sel.scrollIntoView({ block: 'nearest' });
   }
 
-  function pickQuick(i) {
+  function pickQuick(i, e) {
     const f = state.quick.items[i];
     if (!f) return;
     closeQuickOpen();
     if (state.quick.mode === 'commands') { f.run(); return; }
-    if (state.quick.mode === 'symbols') { openFile(f.rel, f.line); return; }
-    openFile(f);
+    const toSide = e && (IS_MAC ? e.metaKey : e.ctrlKey);
+    if (state.quick.mode === 'symbols') { if (toSide) openInSplit(f.rel); else openFile(f.rel, f.line); return; }
+    if (toSide) openInSplit(f); else openFile(f);
   }
 
   // ---------------------------------------------------------------- command palette (Ctrl+Shift+P)
@@ -2088,7 +2175,17 @@
       ['Folders: detect source and test folders', 'folder', detectFolders],
       ['Show: Scripts', 'scroll-text', () => setSideTab('scripts')],
       ['Show: Todos (TODO/FIXME/HACK/XXX comments)', 'list-checks', () => showBottom('todos')],
+      ['Show: Bookmarks', 'bookmark', () => showBottom('bookmarks')],
+      ['Toggle bookmark', 'bookmark', () => toggleBookmarkAtCursor(editor)],
+      ['Go to next bookmark', 'chevron-down', () => jumpBookmark(1)],
+      ['Go to previous bookmark', 'chevron-up', () => jumpBookmark(-1)],
       ['New HTTP request', 'globe', () => openRestTab()],
+      ['Snippet: save selection as snippet…', 'braces', () => saveSelectionAsSnippet()],
+      ['View: split editor right', 'columns-2', () => splitRight()],
+      ['View: close split editor', 'x', () => closeSplit()],
+      ['Tab: pin/unpin active tab', 'pin', () => { const t = activeTab(); if (t) toggleTabPin(t.id); else setStatus('Open a tab first.'); }],
+      ['Tab: close other tabs', 'x', () => { const t = activeTab(); if (t) closeOtherTabs(t.id); }],
+      ['Tab: close all tabs', 'x', () => closeAllTabs()],
       ['Spring: endpoints and beans…', 'globe', openSpringOverview],
       ['Git: stash changes…', 'archive', () => { setSideTab('history'); const m = window.prompt('Stash message (optional):', ''); if (m !== null) stashAction('push', m); }],
       [`Git: line blame ${state.blame.on ? 'off' : 'on'}`, 'user', toggleBlame],
@@ -2097,7 +2194,7 @@
       ['Git: checkpoint now', 'tag', () => makeCheckpoint('manual')],
       ['Test: run the test at the cursor', 'flask-conical', runTestAtCursor],
       ['Test: run all tests in this file', 'flask-conical', () => { if (tab && tab.kind === 'file') runTestFor(tab.rel, null, true); else setStatus('Open a test file first.'); }],
-      ['Debug this file (Python)', 'octagon-pause', () => { if (tab && tab.kind === 'file' && canRealDebug(tab.rel)) startDebugging(tab.rel); else setStatus('Debugging is only wired up for Python right now (open a .py file first).'); }],
+      ['Debug this file (Python, Go, Dart)', 'octagon-pause', () => { if (tab && tab.kind === 'file' && canRealDebug(tab.rel)) startDebugging(tab.rel); else setStatus('Debugging is wired up for Python, Go and Dart right now (open one of those first).'); }],
       ['Debug: stop', 'square', () => stopDebugging()],
       [`Switch theme (now: ${themeLabel(themeSetting)})`, themeIcon(themeSetting), () => { const names = allThemeIds(); setThemeSetting(names[(names.indexOf(themeSetting) + 1) % names.length]); }],
       ['Font size: larger', 'plus', () => changeFontSize(1)],
@@ -2207,11 +2304,13 @@
   }
 
   // ---------------------------------------------------------------- real debugger (breakpoints, step, call stack, variables)
-  // Python only for now (debugpy, via core/dap.js - see its header comment for what was verified against a real
-  // debugpy.adapter session). Other languages keep the existing "Debug" lens (Settings → a Debug lens), which
-  // starts the test waiting for your own IDE's debugger to attach instead.
+  // Python (debugpy), Go (dlv dap) and Dart (dart debug_adapter) - see core/dap.js's header comment for what
+  // was verified against a real debugpy.adapter session versus what's written but unverified (Go/Dart need
+  // their own toolchains, not installed here). Other languages keep the existing "Debug" lens (Settings → a
+  // Debug lens), which starts the test waiting for your own IDE's debugger to attach instead - the right fit
+  // for compiled languages (C#/F#/Rust/...), which need a build step before anything is launchable.
   state.debugger = { open: false, status: 'idle', rel: null, breakpoints: new Map(), threadId: null, frames: [], currentFrameId: null, scopes: new Map(), variables: new Map(), expanded: new Set(), output: [] };
-  const canRealDebug = (rel) => /\.py$/i.test(String(rel || ''));
+  const canRealDebug = (rel) => /\.(py|go|dart)$/i.test(String(rel || ''));
   const bpSet = (rel) => { let s = state.debugger.breakpoints.get(rel); if (!s) { s = new Set(); state.debugger.breakpoints.set(rel, s); } return s; };
   const bpDecoIds = new Map(); // rel -> decoration ids, so a repaint replaces rather than piles up
   function paintBreakpoints(rel) {
@@ -2229,6 +2328,190 @@
     paintBreakpoints(rel);
     if (state.debugger.status !== 'idle' && state.debugger.status !== 'terminated' && state.debugger.rel === rel) api.dap.setBreakpoints({ rel, lines: [...set] });
   }
+
+  // ---------------------------------------------------------------- bookmarks (local to this machine, via session.json - not git-shared, same as open tabs/terminals)
+  const bmSet = (rel) => { let s = state.bookmarks.get(rel); if (!s) { s = new Set(); state.bookmarks.set(rel, s); } return s; };
+  const bmDecoIds = new Map(); // rel -> decoration ids, so a repaint replaces rather than piles up
+  function paintBookmarks(rel) {
+    const m = state.models.get(rel);
+    if (!m) return;
+    const lines = [...bmSet(rel)].sort((a, b) => a - b);
+    bmDecoIds.set(rel, m.model.deltaDecorations(bmDecoIds.get(rel) || [], lines.map((line) => ({
+      range: new monaco.Range(line, 1, line, 1),
+      options: { isWholeLine: false, glyphMarginClassName: 'bm-dot', glyphMarginHoverMessage: { value: 'Bookmark (click the gutter, or Toggle Bookmark, to remove)' }, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges },
+    }))));
+  }
+  function toggleBookmark(rel, line) {
+    const set = bmSet(rel);
+    if (set.has(line)) { set.delete(line); if (!set.size) state.bookmarks.delete(rel); } else set.add(line);
+    paintBookmarks(rel);
+    renderBookmarks();
+    scheduleSessionSave();
+  }
+  function toggleBookmarkAtCursor(ed) {
+    const t = activeTab();
+    const pos = ed.getPosition();
+    if (t && t.kind === 'file' && pos) toggleBookmark(t.rel, pos.lineNumber);
+  }
+  function allBookmarks() {
+    const out = [];
+    for (const [rel, lines] of state.bookmarks) for (const line of [...lines].sort((a, b) => a - b)) out.push({ rel, line });
+    out.sort((a, b) => (a.rel === b.rel ? a.line - b.line : a.rel.localeCompare(b.rel)));
+    return out;
+  }
+  function renderBookmarks() {
+    const host = $('#bookmarks');
+    const list = allBookmarks();
+    const head = el('div', { class: 'p-head' },
+      el('span', { class: 'p-summary', text: `${list.length} bookmark${list.length === 1 ? '' : 's'}` }),
+      el('span', { class: 'spacer' }),
+      el('button', { title: 'Remove every bookmark', onclick: () => {
+        const rels = [...state.bookmarks.keys()];
+        state.bookmarks.clear();
+        for (const rel of rels) paintBookmarksIfOpen(rel);
+        renderBookmarks();
+        scheduleSessionSave();
+      } }, ic('trash-2'), 'Clear all'));
+    const body = el('div');
+    let lastFile;
+    for (const b of list) {
+      if (b.rel !== lastFile) { body.append(el('div', { class: 'p-file', text: b.rel })); lastFile = b.rel; }
+      const m = state.models.get(b.rel);
+      const preview = m ? m.model.getLineContent(b.line).trim() : '';
+      body.append(el('div', { class: 'finding', onclick: () => openFile(b.rel, b.line) },
+        el('span', { class: 'loc', text: `${b.line}` }),
+        el('span', { text: preview || b.rel })));
+    }
+    if (!list.length) body.append(el('div', { class: 'empty', text: 'No bookmarks yet. Click a line’s gutter (on a file with no real debugger), or use "Toggle bookmark" from the editor’s right-click menu.' }));
+    host.replaceChildren(head, body);
+    renderBottomTabs();
+  }
+  function paintBookmarksIfOpen(rel) { if (state.models.has(rel)) paintBookmarks(rel); }
+  function jumpBookmark(dir) {
+    const list = allBookmarks();
+    if (!list.length) { setStatus('No bookmarks yet.'); return; }
+    const t = activeTab();
+    const here = t && t.kind === 'file' ? list.findIndex((b) => b.rel === t.rel && b.line === (editor.getPosition() || {}).lineNumber) : -1;
+    const idx = here >= 0 ? (here + dir + list.length) % list.length : (dir > 0 ? 0 : list.length - 1);
+    const b = list[idx];
+    openFile(b.rel, b.line);
+  }
+
+  // ---------------------------------------------------------------- breadcrumbs (path segments + symbol-containment chain above the editor)
+  const breadcrumbSymbols = new Map(); // rel -> flat [{name, kind, line, endLine}], from the same api.symbols.info() the usages/blame lenses use
+  async function loadBreadcrumbSymbols(rel) {
+    const m = state.models.get(rel);
+    if (!m) return;
+    let res;
+    try { res = await api.symbols.info(rel, m.model.getValue(), { dirty: m.dirty }); } catch { return; }
+    if (!res || res.error) return;
+    breadcrumbSymbols.set(rel, res.symbols.map((s) => ({ name: s.name, kind: s.kind, line: s.line, endLine: s.endLine || s.line })));
+    const t = activeTab();
+    if (t && t.kind === 'file' && t.rel === rel) {
+      renderBreadcrumbs();
+      if (state.bottom === 'outline') renderOutline();
+    }
+  }
+  // immediate children of `parent` (or top-level symbols when null) - derived purely from each symbol's own
+  // [line, endLine] range, with no parent pointers needed: a child is any symbol inside parent's range that
+  // isn't itself inside some other, smaller symbol that's also inside parent's range.
+  function symbolChildren(syms, parent) {
+    const within = (s, box) => s.line >= box.line && s.endLine <= box.endLine;
+    const candidates = syms.filter((s) => s !== parent && (!parent || within(s, parent)));
+    return candidates.filter((s) => !candidates.some((other) => other !== s && within(s, other) && (other.endLine - other.line) < (s.endLine - s.line)));
+  }
+  function symbolChainAt(syms, line) {
+    const chain = [];
+    let parent = null;
+    for (;;) {
+      const kids = symbolChildren(syms, parent).filter((s) => line >= s.line && line <= s.endLine);
+      if (!kids.length) break;
+      const next = kids.sort((a, b) => (a.endLine - a.line) - (b.endLine - b.line))[0];
+      chain.push(next);
+      parent = next;
+    }
+    return chain;
+  }
+  async function pathSiblingItems(dirRel) {
+    let entries; try { entries = await api.fs.list(dirRel); } catch { return []; }
+    return (entries || []).map((e) => ({ label: e.name, icon: e.dir ? 'folder' : 'file', rel: e.rel, dir: !!e.dir }));
+  }
+  function renderBreadcrumbs() {
+    const host = $('#breadcrumbs');
+    if (!host) return;
+    const t = activeTab();
+    if (!t || t.kind !== 'file') { host.replaceChildren(); return; }
+    const parts = t.rel.split('/');
+    const segs = [];
+    parts.forEach((part, i) => {
+      const dirRel = parts.slice(0, i).join('/');
+      const isFile = i === parts.length - 1;
+      segs.push(el('span', { class: 'bc-seg', onclick: async (e) => {
+        const entries = await pathSiblingItems(dirRel);
+        if (entries.length > 1) popupMenu(e.clientX, e.clientY, entries.map((it) => ({ label: it.label, onclick: () => { if (!it.dir) openFile(it.rel); } })));
+      } }, ic(isFile ? 'file-code' : 'folder', 'bc-ico'), part));
+    });
+    const syms = breadcrumbSymbols.get(t.rel) || [];
+    const pos = editor.getPosition();
+    const chain = pos ? symbolChainAt(syms, pos.lineNumber) : [];
+    let parent = null;
+    for (const s of chain) {
+      const atLevel = parent;
+      segs.push(el('span', { class: 'bc-seg bc-sym', onclick: (e) => {
+        const siblings = symbolChildren(syms, atLevel).sort((a, b) => a.line - b.line);
+        if (siblings.length > 1) popupMenu(e.clientX, e.clientY, siblings.map((sib) => ({ label: sib.name, onclick: () => openFile(t.rel, sib.line) })));
+      } }, ic(SYMBOL_ICON[s.kind] || 'square-function', 'bc-ico'), s.name));
+      parent = s;
+    }
+    host.replaceChildren(...segs.flatMap((s, i) => (i ? [el('span', { class: 'bc-sep' }, ic('chevron-right')), s] : [s])));
+  }
+
+  // ---------------------------------------------------------------- outline (bottom panel: the active file's symbol tree, same data breadcrumbs uses)
+  function renderOutline() {
+    const host = $('#outline');
+    if (!host) return;
+    const t = activeTab();
+    if (!t || t.kind !== 'file') { host.replaceChildren(el('div', { class: 'empty', text: 'Open a file to see its outline.' })); return; }
+    const syms = breadcrumbSymbols.get(t.rel) || [];
+    const rows = [];
+    const walk = (parent, depth) => {
+      for (const s of symbolChildren(syms, parent).sort((a, b) => a.line - b.line)) {
+        rows.push(el('div', { class: 'finding', style: `padding-left:${18 + depth * 14}px`, onclick: () => openFile(t.rel, s.line) },
+          ic(SYMBOL_ICON[s.kind] || 'square-function', 'qo-ico'), el('span', { text: s.name })));
+        walk(s, depth + 1);
+      }
+    };
+    walk(null, 0);
+    host.replaceChildren(
+      el('div', { class: 'p-head' }, el('span', { class: 'p-summary', text: `${rows.length} symbol${rows.length === 1 ? '' : 's'}` })),
+      el('div', {}, ...(rows.length ? rows : [el('div', { class: 'empty', text: 'No symbols found in this file.' })])));
+  }
+
+  // ---------------------------------------------------------------- split pane (a second, plain Monaco view for side-by-side reference - not a second tab group; scoped-down v1)
+  async function openInSplit(rel) {
+    const m = await ensureModel(rel);
+    if (!m || m.unsupported) { setStatus(m && m.unsupported ? m.unsupported : `Could not open ${rel}`); return; }
+    splitRel = rel;
+    editor2.setModel(m.model);
+    $('#editor2-pane').classList.remove('hidden');
+    $('#editor2-title').textContent = rel;
+  }
+  function splitRight() {
+    const t = activeTab();
+    if (!t || t.kind !== 'file') { setStatus('Open a file first.'); return; }
+    openInSplit(t.rel);
+  }
+  function closeSplit() {
+    const rel = splitRel;
+    splitRel = null;
+    editor2.setModel(null);
+    $('#editor2-pane').classList.add('hidden');
+    if (rel && !state.tabs.some((t) => t.rel === rel && !t.ro)) {
+      const m = state.models.get(rel);
+      if (m) { dropComments(rel); m.model.dispose(); state.models.delete(rel); }
+    }
+  }
+
   let currentLineDeco = { rel: null, ids: [] };
   function clearCurrentLine() {
     if (currentLineDeco.rel) { const m = state.models.get(currentLineDeco.rel); if (m) m.model.deltaDecorations(currentLineDeco.ids, []); }
@@ -2260,7 +2543,7 @@
     renderDebuggerPanel();
   }
   async function startDebugging(rel) {
-    if (!canRealDebug(rel)) { setStatus('Debugging is only wired up for Python right now.'); return; }
+    if (!canRealDebug(rel)) { setStatus('Debugging is wired up for Python, Go and Dart right now.'); return; }
     if (state.debugger.status !== 'idle' && state.debugger.status !== 'terminated') await stopDebugging();
     state.debugger.rel = rel; state.debugger.status = 'starting'; state.debugger.open = true; state.debugger.output = [];
     showBottom('debugger');
@@ -2353,6 +2636,10 @@
     }
     tabs.push(el('div', { class: `btab${state.bottom === 'todos' ? ' active' : ''}`, onclick: () => showBottom('todos') },
       ic('list-checks'), 'Todos', state.todos.items.length ? el('span', { class: 'badge', text: `(${state.todos.items.length})` }) : null));
+    { const bmCount = allBookmarks().length;
+      tabs.push(el('div', { class: `btab${state.bottom === 'bookmarks' ? ' active' : ''}`, onclick: () => showBottom('bookmarks') },
+        ic('bookmark'), 'Bookmarks', bmCount ? el('span', { class: 'badge', text: `(${bmCount})` }) : null)); }
+    tabs.push(el('div', { class: `btab${state.bottom === 'outline' ? ' active' : ''}`, onclick: () => showBottom('outline') }, ic('list-tree'), 'Outline'));
     if (state.debug.open) tabs.push(el('div', { class: `btab${state.bottom === 'debug' ? ' active' : ''}`, onclick: () => showBottom('debug') }, ic('bug'), 'Debug', el('span', { class: 'x', onclick: (e) => { e.stopPropagation(); closeDebug(); } }, ic('x'))));
     if (state.debugger.open) tabs.push(el('div', { class: `btab${state.bottom === 'debugger' ? ' active' : ''}`, onclick: () => showBottom('debugger') }, ic('octagon-pause'), 'Run & Debug', el('span', { class: 'x', onclick: (e) => { e.stopPropagation(); closeDebugger(); } }, ic('x'))));
     for (const t of state.terms.values()) {
@@ -2374,10 +2661,14 @@
     $('#review').style.display = key === 'review' ? 'block' : 'none';
     $('#todos').style.display = key === 'todos' ? 'block' : 'none';
     if (key === 'todos' && !state.todos.items.length && !state.todos.scanning) scanTodos();
+    $('#bookmarks').style.display = key === 'bookmarks' ? 'block' : 'none';
+    if (key === 'bookmarks') renderBookmarks();
+    $('#outline').style.display = key === 'outline' ? 'block' : 'none';
+    if (key === 'outline') renderOutline();
     $('#debug').style.display = key === 'debug' ? 'flex' : 'none';
     if (key === 'debug') pollDebug();
     $('#debugger').style.display = key === 'debugger' ? 'flex' : 'none';
-    const isTerm = key !== 'problems' && key !== 'review' && key !== 'todos' && key !== 'debug' && key !== 'debugger';
+    const isTerm = key !== 'problems' && key !== 'review' && key !== 'todos' && key !== 'bookmarks' && key !== 'outline' && key !== 'debug' && key !== 'debugger';
     $('#terms').style.display = isTerm ? 'block' : 'none';
     for (const t of state.terms.values()) t.container.classList.toggle('active', t.key === key);
     renderBottomTabs();
@@ -2654,6 +2945,27 @@
     }
     host.replaceChildren(head, body);
     renderBottomTabs();
+  }
+
+  // ---------------------------------------------------------------- snippets (.ide/snippets.yaml, offered as Monaco completions)
+  let snippetsCache = [];
+  async function loadSnippetsCache() { snippetsCache = state.project && state.project.root ? await api.snippets.list() : []; }
+  async function saveSelectionAsSnippet() {
+    const t = activeTab();
+    if (!t || t.kind !== 'file') { setStatus('Open a file first.'); return; }
+    const sel = editor.getSelection();
+    const body = sel && !sel.isEmpty() ? editor.getModel().getValueInRange(sel) : '';
+    if (!body.trim()) { setStatus('Select some code first.'); return; }
+    const prefix = window.prompt('Snippet prefix (what you’ll type to trigger it):', '');
+    if (!prefix) return;
+    const description = window.prompt('Description (optional):', '') || '';
+    const lang = editor.getModel().getLanguageId();
+    const scoped = window.confirm(`Scope this snippet to ${lang} files only?\n\nOK = ${lang} only, Cancel = every language.`);
+    const list = await api.snippets.list();
+    list.push({ prefix, body, language: scoped ? lang : '', description });
+    await api.snippets.save(list);
+    snippetsCache = list;
+    setStatus(`Snippet “${prefix}” saved.`);
   }
 
   // ---------------------------------------------------------------- REST client (a saved-request HTTP tab, Thunder-Client-style)
@@ -3504,7 +3816,7 @@
     return {
       ui: { sideW: cs.getPropertyValue('--side-w').trim(), bottomH: cs.getPropertyValue('--bottom-h').trim() },
       project: {
-        tabs: state.tabs.filter((t) => !t.ro && t.kind !== 'rest').map((t) => ({ kind: t.kind, rel: t.rel })),
+        tabs: state.tabs.filter((t) => !t.ro && t.kind !== 'rest').map((t) => ({ kind: t.kind, rel: t.rel, pinned: !!t.pinned })),
         active: (state.tabs.find((t) => t.id === state.activeTab && !t.ro && t.kind !== 'rest') || {}).id || null,
         expanded: [...state.expanded],
         sideTab: state.sideTab,
@@ -3514,6 +3826,7 @@
         // pending review comments: where they are and the text of that line, so they can be re-attached after a restart
         comments: [...state.comments.values()].map((c) => { const line = commentLine(c); const m = state.models.get(c.rel); return line && m ? { rel: c.rel, line, text: c.text, code: m.model.getLineContent(line) } : null; }).filter(Boolean),
         terminals: [...state.terms.values()].filter((t) => t.persist && !t.exited).map((t) => ({ title: t.title, cwd: t.cwd, agent: t.agent, runId: t.runId, container: !!t.sandboxed, exited: t.exited })),
+        bookmarks: allBookmarks(),
       },
     };
   }
@@ -3534,6 +3847,7 @@
     try {
       for (const e of sess.expanded || []) state.expanded.add(e);
       if (sess.expanded && sess.expanded.length) await renderTree();
+      for (const b of sess.bookmarks || []) { if (b && b.rel && Number.isInteger(b.line)) bmSet(b.rel).add(b.line); } // painted lazily as each file opens (ensureModel)
       if (typeof sess.onlyMine === 'boolean') state.onlyMine = sess.onlyMine;
       if (typeof sess.autoCheck === 'boolean') { state.autoCheck = sess.autoCheck; $('#auto').checked = sess.autoCheck; }
       if (sess.task && typeof sess.task === 'object') {
@@ -3543,8 +3857,12 @@
       }
       if (sess.sideTab) setSideTab(sess.sideTab);
       for (const t of sess.tabs || []) {
-        try { if (t.kind === 'diff') { if (state.changes.some((c) => c.path === t.rel)) await openDiff(t.rel); } else await openFile(t.rel); } catch { /* file vanished */ }
+        try {
+          if (t.kind === 'diff') { if (state.changes.some((c) => c.path === t.rel)) await openDiff(t.rel); } else await openFile(t.rel);
+          if (t.pinned) { const opened = state.tabs.find((x) => x.id === `${t.kind}:${t.rel}`); if (opened) opened.pinned = true; }
+        } catch { /* file vanished */ }
       }
+      renderTabs();
       if (sess.active && state.tabs.some((t) => t.id === sess.active)) await activateTab(sess.active);
       if (Array.isArray(sess.comments) && sess.comments.length) {
         try { for (const c of await api.review.anchor(sess.comments)) addCommentAt(c.rel, c.line, c.text); } catch { /* comments are a convenience: never block the restore */ }
@@ -3767,6 +4085,7 @@
 
   async function loadProject() {
     restCollection = null;
+    loadSnippetsCache().catch(() => {});
     state.project = await api.project.get();
     const p = state.project;
     $('#project-name').textContent = p.root ? p.name : 'Open folder…';
@@ -3802,6 +4121,7 @@
     const oldTabs = [...state.tabs]; const oldModels = [...state.models.values()];
     state.tabs = []; state.models.clear(); state.expanded.clear(); state.comments.clear(); refreshCommentUi();
     await activateTab(null);
+    closeSplit();
     for (const t of oldTabs) { if (t.original) t.original.dispose(); }
     for (const m of oldModels) m.model.dispose();
     if (!keepTerminals) {
@@ -6285,6 +6605,10 @@
     const rect = $('#center').getBoundingClientRect();
     document.documentElement.style.setProperty('--bottom-h', `${Math.min(Math.max(rect.bottom - e.clientY, 80), rect.height - 160)}px`);
     fitActive();
+  });
+  drag($('#split-editor2'), (e) => {
+    const rect = $('#editor-split').getBoundingClientRect();
+    document.documentElement.style.setProperty('--editor2-w', `${Math.min(Math.max(rect.right - e.clientX, 160), rect.width - 200)}px`);
   });
 
   // ---------------------------------------------------------------- memory in the status bar

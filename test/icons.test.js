@@ -39,7 +39,7 @@ test('every icon named in app.js exists', () => {
   for (const m of app.matchAll(/setLabel\([^\n]*\)/g)) for (const t of m[0].matchAll(/'([a-z0-9-]{3,})'/g)) used.add(t[1]);
   const ext = app.match(/const EXT_ICON = \{([\s\S]*?)\};/)[1];
   for (const t of ext.matchAll(/:\s*'([a-z0-9-]+)'/g)) used.add(t[1]);
-  const ignore = new Set(['diff', 'dir', 'tab-ico', 'ftype', 'twisty', 'bt-err', 'bt-ok', 'st-A', 'dirty', 'file', 'light', 'dark', 'error', 'warning', 'qo-ico', 'spin', 'on', 'danger', 'warn']);
+  const ignore = new Set(['diff', 'dir', 'tab-ico', 'ftype', 'twisty', 'bt-err', 'bt-ok', 'st-A', 'dirty', 'file', 'light', 'dark', 'error', 'warning', 'qo-ico', 'bc-ico', 'spin', 'on', 'danger', 'warn']);
   for (const n of used) if (!ignore.has(n) || n === 'file') assert.ok(names.has(n) || ignore.has(n), `app.js uses unknown icon ${n}`);
   assert.ok(used.size >= 25);
 });

@@ -26,10 +26,18 @@ is done, delete it rather than leaving a struck-through retrospective in its pla
   behavior, not something Bazinga arranges), but this hasn't been exercised against a real composite build.
 
 ## Rename / "Go to symbol in workspace" / AI inline completion / Debugger — known, deliberate gaps
-- **Debugging is Python-only (debugpy.adapter)**: Go's `dlv dap` speaks DAP too, but over a TCP socket Delve
-  opens itself, not stdio like debugpy - a different transport than `core/dap.js` implements, and there was no
-  `go`/`dlv` toolchain here to verify a stdio-vs-socket client against. Every other language keeps the existing
-  "Debug this test" lens (Settings -> a Debug lens), which waits for your own IDE's debugger to attach, instead.
+- **The real debugger (Run & Debug panel) now also covers Go (`dlv dap`, over the TCP socket Delve opens
+  itself - `core/dap.js`'s `DapClient` takes a transport abstraction now, stdio or TCP) and Dart
+  (`dart debug_adapter`, stdio). Neither was verified against a real toolchain (no `go`/`dlv` or Dart SDK in
+  the environment this was written in) - only the protocol framing and `DapSession` choreography are tested,
+  against a fake adapter (`test/dap.test.js`, including a TCP fixture).** C#/F#/Rust were deliberately left
+  out of this whole-file launch model: unlike Python/Go/Dart, none of them can launch straight from a source
+  path - they need a build step first (`dotnet build`/`cargo build`) to produce the thing a debugger actually
+  attaches to, which doesn't fit this feature's "Debug this file" shape. They keep the existing "Debug this
+  test" lens (Settings -> a Debug lens, waits for your own IDE's debugger to attach) instead, same as PHP,
+  Ruby and Scala, where no standalone DAP adapter exists at all (PHP's Xdebug speaks DBGp, a different
+  protocol - writing a DBGp-to-DAP bridge from scratch was judged too large to do unverified) or no debug
+  story was investigated (Scala - sbt's JVM-targeting problem, see the "Run this test" section above).
 - **Rename is LSP-only**: a file with no configured language server has no fallback rename - same gating
   `textDocument/rename` already uses for every other LSP-backed feature.
 - **"Go to symbol in workspace" (Ctrl+T) has no incremental cross-reference with the LSP "exact usages" lens** -
