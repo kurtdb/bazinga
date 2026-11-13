@@ -246,6 +246,7 @@
     history: { limit: 300, data: null, open: null, info: null },
     blame: { on: false, rel: null, lines: null },
     bottom: 'problems',
+    zen: false,          // distraction-free: hides the rail, sidebar, bottom panel and status bar - transient, not persisted
     focusedTerm: null,
     termSeq: 0,
     changes: [],
@@ -321,7 +322,7 @@
       'editorLineNumber.foreground': '#7a5c14', 'editorLineNumber.activeForeground': '#ffb000',
     } });
     const common = {
-      theme: MONACO_THEMES[resolvedTheme()], automaticLayout: true, minimap: { enabled: false }, fontSize: 13,
+      theme: MONACO_THEMES[resolvedTheme()], automaticLayout: true, minimap: { enabled: minimapOn() }, fontSize: 13,
       fontFamily: MONO, scrollBeyondLastLine: false,
       renderWhitespace: 'none', glyphMargin: true, stickyScroll: { enabled: true },
     };
@@ -480,6 +481,11 @@
     errorLensIds.set(rel, m.model.deltaDecorations(prev, decos));
   }
   const refreshErrorLens = () => { for (const rel of state.models.keys()) applyErrorLens(rel); };
+
+  // ---------------------------------------------------------------- minimap (off by default - see DEFAULT_CONFIG.minimap)
+  const minimapOn = () => !!(state.project && state.project.config && state.project.config.minimap && state.project.config.minimap.enabled);
+  const refreshMinimap = () => { const enabled = minimapOn(); for (const ed of [editor, editor2, diffEditor]) if (ed) ed.updateOptions({ minimap: { enabled } }); };
+  async function toggleMinimap() { await saveSetting({ minimap: { enabled: !minimapOn() } }); setStatus(`Minimap ${minimapOn() ? 'on' : 'off'}.`); }
 
   // ---------------------------------------------------------------- tabs
   const activeTab = () => state.tabs.find((t) => t.id === state.activeTab) || null;
@@ -2183,6 +2189,8 @@
       ['Snippet: save selection as snippet…', 'braces', () => saveSelectionAsSnippet()],
       ['View: split editor right', 'columns-2', () => splitRight()],
       ['View: close split editor', 'x', () => closeSplit()],
+      [`Minimap: turn ${minimapOn() ? 'off' : 'on'}`, 'map', () => toggleMinimap()],
+      [`Zen mode: turn ${state.zen ? 'off' : 'on'}`, 'square', () => toggleZen()],
       ['Tab: pin/unpin active tab', 'pin', () => { const t = activeTab(); if (t) toggleTabPin(t.id); else setStatus('Open a tab first.'); }],
       ['Tab: close other tabs', 'x', () => { const t = activeTab(); if (t) closeOtherTabs(t.id); }],
       ['Tab: close all tabs', 'x', () => closeAllTabs()],
@@ -2679,6 +2687,13 @@
   function fitActive() {
     const t = state.terms.get(state.bottom);
     if (t) { try { t.fit.fit(); } catch { /* hidden */ } }
+  }
+
+  // ---------------------------------------------------------------- zen mode (hide everything but the editor)
+  function toggleZen() {
+    state.zen = !state.zen;
+    document.body.classList.toggle('zen', state.zen);
+    setStatus(state.zen ? 'Zen mode on - Esc, or run the command again, to leave it.' : 'Zen mode off.');
   }
 
   async function newTerminal({ title = 'Terminal', cwd, initialInput, env, inlineEnv, hostEnv, sandboxed = false, runId, watch = false, noEscalate = false, label, agent = null, persist = title === 'Terminal' } = {}) {
@@ -3441,6 +3456,7 @@
     const lensBlame = el('input', { type: 'checkbox' }); lensBlame.checked = lensCur.blame !== false;
     const lensSpring = el('input', { type: 'checkbox' }); lensSpring.checked = lensCur.spring !== false;
     const elOn = el('input', { type: 'checkbox' }); elOn.checked = (settings.errorLens || {}).enabled !== false;
+    const minimapOnInput = el('input', { type: 'checkbox' }); minimapOnInput.checked = !!(settings.minimap || {}).enabled;
     const lspCur = settings.lsp || {};
     const lspOn = el('input', { type: 'checkbox' }); lspOn.checked = !!lspCur.enabled;
     const LSP_DEFAULTS = { java: 'jdtls', python: 'pyright-langserver', typescript: 'typescript-language-server', go: 'gopls', rust: 'rust-analyzer', csharp: 'csharp-ls' };
@@ -3516,6 +3532,7 @@
         delete next.fixLoop; delete next.mergeGuard; delete next.autoMerge;
       } else delete next.oversight;
       next.errorLens = { enabled: elOn.checked };
+      next.minimap = { enabled: minimapOnInput.checked };
       await api.settings.save(next);
       close();
       const keepAuto = state.autoCheck;
@@ -3523,6 +3540,7 @@
       state.autoCheck = auto.checked !== !!defaults.autoCheck ? auto.checked : keepAuto;
       $('#auto').checked = state.autoCheck;
       refreshErrorLens();
+      refreshMinimap();
       setStatus('Settings saved.');
     };
     const AGENT_PRESETS = [
@@ -3674,6 +3692,8 @@
         el('label', { class: 'check' }, lensSpring, ' Java/Kotlin: show the HTTP route above Spring handlers and “N implementations” above interfaces')),
       errorLens: el('div', { class: 'field' }, el('div', { class: 'agent-head', text: 'Diagnostics' }),
         el('label', { class: 'check' }, elOn, ' Error lens: show each diagnostic inline at the end of its line, not only as a squiggly underline')),
+      minimap: el('div', { class: 'field' }, el('div', { class: 'agent-head', text: 'Minimap' }),
+        el('label', { class: 'check' }, minimapOnInput, ' Show the code minimap on the right edge of the editor')),
       notifications: el('div', { class: 'field' }, el('label', { class: 'check' }, notif, ' Notify me (OS notification) when an agent needs me and the IDE is in the background')),
       fontSize: el('div', { class: 'field' }, el('label', { text: 'Font' }), el('div', { class: 'line' }, fontFam), el('label', { text: 'Font size (px): editor / terminal' }), el('div', { class: 'line' }, edFont, termFont)),
       scrollback: el('div', { class: 'field' }, el('label', { text: 'Terminal scrollback (lines kept per terminal; each one costs memory)' }), scrollback),
@@ -3688,7 +3708,7 @@
       ['review', 'Review & checks', ['reviewCommand', 'autoCheck'], 'shield-check'],
       ['oversight', 'Oversight', ['humanInLoop', 'fixLoop', 'mergeGuard', 'autoMerge'], 'eye'],
       ['safety', 'Safety', ['agentSafety'], 'lock'],
-      ['editor', 'Editor', ['languageServers', 'aiCompletion', 'codeLenses', 'errorLens'], 'file-code'],
+      ['editor', 'Editor', ['languageServers', 'aiCompletion', 'codeLenses', 'errorLens', 'minimap'], 'file-code'],
     ];
     const used = new Set(TABS.flatMap((t) => t[2]).concat(['title', 'footnote', 'actions']));
     const stray = Object.keys(f).filter((k) => !used.has(k));
@@ -4102,6 +4122,7 @@
     applyTheme();
     $('#fixloop').checked = !!(p.config && p.config.fixLoop && p.config.fixLoop.enabled);
     applyFonts();
+    refreshMinimap();
     initLsp();
     document.title = p.root ? `${p.name} — Bazinga` : 'Bazinga';
     state.quick.stale = true;
@@ -6578,7 +6599,7 @@
 
   window.addEventListener('keydown', (e) => {
     const k = e.key.toLowerCase();
-    if (e.key === 'Escape') { closeQuickOpen(); $('#modal').classList.add('hidden'); if (boardUi.open) closeBoard(); return; }
+    if (e.key === 'Escape') { closeQuickOpen(); $('#modal').classList.add('hidden'); if (boardUi.open) closeBoard(); else if (state.zen) toggleZen(); return; }
     const mod = IS_MAC ? e.metaKey : e.ctrlKey;
     if (mod && !e.shiftKey && k === 's') { e.preventDefault(); saveActive(); }
     else if (mod && !e.shiftKey && k === 'p') { e.preventDefault(); openQuickOpen(); }

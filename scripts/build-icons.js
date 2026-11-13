@@ -16,6 +16,7 @@ const NAMES = [
   'circle-check', 'undo-2', 'terminal', 'square-terminal', 'trash-2', 'eye', 'clipboard-copy', 'send', 'copy',
   'list-checks', 'stethoscope', 'message-square-plus', 'globe', 'shield-check', 'history', 'git-commit-horizontal', 'archive', 'archive-restore', 'tag', 'git-pull-request', 'external-link', 'flask-conical', 'bell', 'repeat', 'command', 'link', 'user', 'bug', 'timer', 'cpu', 'package', 'workflow', 'arrow-up', 'arrow-down', 'database', 'braces', 'coffee', 'hash', 'download', 'upload-cloud', 'replace-all', 'unlock', 'play-circle', 'pause', 'skip-back', 'skip-forward', 'rewind', 'git-compare-arrows', 'palette',
   'box', 'square-function', 'octagon-pause', 'step-forward', 'corner-down-right', 'variable', 'layers', 'circle-dot', 'text-cursor-input',
+  'columns-2', 'pin', 'list-tree', 'map',
 ];
 
 let dir;
