@@ -148,7 +148,7 @@ test('agentprep: marked folders that exist are written into the hint file; missi
 test('the UI and the main process are wired: right-click menu on folders, badge, palette command, IPC, config default', () => {
   const read = (...p) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
   const app = read('src', 'renderer', 'app.js');
-  assert.match(app, /row\.addEventListener\('contextmenu', \(ev\) => rowMenu\(ev, e\.rel, e\.dir\)\)/);
+  assert.match(app, /row\.addEventListener\('contextmenu', \(ev\) => rowMenu\(ev, root, e\.rel, e\.dir\)\)/);
   assert.match(app, /Mark as source folder/); assert.match(app, /Mark as test folder/); assert.match(app, /Clear mark/);
   assert.match(app, /api\.folders\.mark\(rel, role\)/);
   assert.match(app, /\['Folders: detect source and test folders'/);

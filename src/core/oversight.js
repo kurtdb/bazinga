@@ -59,7 +59,7 @@ const presetFor = (level) => (isLevel(level) ? LEVELS[level].config : {});
 
 const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
 /** Keys whose objects are merged field by field across layers; every other key is replaced as a whole. */
-const DEEP_KEYS = ['fixLoop', 'mergeGuard', 'agentContainer', 'autoMerge'];
+const DEEP_KEYS = ['fixLoop', 'mergeGuard', 'agentContainer', 'autoMerge', 'keybindings'];
 
 /**
  * @param {object[]} layers  config layers in order, later wins; each may carry `oversight`

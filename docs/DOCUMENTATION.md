@@ -485,6 +485,23 @@ A server command defined by a project asks for your approval before it runs. Res
 - If the antivirus scans `node_modules` and `.m2`, Maven and npm gates will be slow whatever the IDE does. Ask IT for exclusions.
 - Hunk revert and hunk staging work on the change under the cursor, using git's own hunks.
 
+## Checking for a long-uptime handle leak
+
+Every network call in `src/` goes through `src/core/safeFetch.js`, which always reads or cancels a response
+body (even on an error status) - the fix for a Chromium bug (crbug 378822137) where an unread `fetch()` body
+leaks a file descriptor until the process eventually freezes. `test/safeFetch.test.js` covers the helper itself
+and that no call site bypasses it, but a multi-day idle leak is not something a test suite can reasonably
+simulate. To check it by hand after a long-running session:
+
+- **macOS/Linux**: `lsof -p <main process pid> | wc -l` (find the pid in Activity Monitor/`ps aux | grep electron`,
+  or the main process - not a renderer - window's process in Task Manager-equivalent tooling). Record the count
+  at app start and again after the app has sat idle for a day; it should stay flat, not climb.
+- **Windows**: open Process Explorer, select the app's main process, and watch its Handle count the same way
+  (start vs. after a day idle).
+- Separately, a heap snapshot in DevTools (Memory tab, on a renderer window) after a day of use rules out the
+  *other* usual causes of a slow memory climb that aren't this bug: uncleaned IPC listeners, an unbounded agent
+  output buffer, or undrained child-process stdout/stderr from a long-lived pty.
+
 ## Layout
 
 ```

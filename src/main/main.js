@@ -33,6 +33,7 @@ const { HookServer } = require('../core/hooks');
 const printmode = require('../core/printmode');
 const wfselfcheck = require('../core/wfselfcheck');
 const skillsearch = require('../core/skillsearch');
+const { safeFetch } = require('../core/safeFetch');
 const dbg = (source, text) => { try { debug.add(source, text); } catch { /* ignored */ } };
 const reviewcomments = require('../core/reviewcomments');
 const dropinsert = require('../core/dropinsert');
@@ -82,6 +83,16 @@ const termsession = require('../core/termsession');
 const { LspManager } = require('../core/lsp');
 const { IGNORED_DIRS, toPosix, which, listAllFiles, runShell } = require('../core/util');
 
+// Run from source (npm start), macOS shows "Electron" as the bold menu-bar title no matter what - that label
+// is tied to the actual running Electron.app bundle (node_modules/electron/dist/Electron.app's own Info.plist),
+// not to anything app code controls; only a packaged build (npm run pack/dist), with its own correctly-named
+// .app bundle, fixes that one. setName here does fix everything Electron DOES read from app.name: the
+// About/Hide/Quit menu items, the dock tooltip, and notification titles. The userData path is pinned to the
+// pre-existing on-disk folder name explicitly (not derived from app.name), so this is a display-only change -
+// it can never move or orphan an existing settings/history profile, on any platform or filesystem.
+app.setName('Bazinga');
+app.setPath('userData', path.join(app.getPath('appData'), 'bazinga'));
+
 const SMOKE = process.argv.includes('--smoke');
 const SHOTS = process.env.BAZINGA_SHOTS || null; // directory: the screenshot script saves PNGs of the real UI here
 
@@ -94,8 +105,8 @@ if (SESSION_ARG) app.setPath('sessionData', SESSION_ARG); // an extra window kee
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 
 let win = null;
-let root = null;
-let watcher = null;
+let roots = [];        // every folder open in this workspace, in order
+let root = null;       // roots[0] - every feature that is still "one project at a time" by design reads this
 let checksRunning = false;
 let checksAbort = null;
 let reviewAbort = null;
@@ -104,18 +115,23 @@ let ptys = null;
 let fixloop = null;
 let lsp = null;
 let dapSession = null;
-let usageIndex = null;
-let symbolIndex = null;
-let springIndex = null;
+// one per open root (not one global), so editing/CodeLens-ing a file in any workspace folder is correct regardless
+// of which folder is primary - invalidated per-root by that root's own watcher/poller, cleared when it's removed.
+const usageIndexes = new Map();
+const symbolIndexes = new Map();
+const springIndexes = new Map();
+const getUsageIndex = (r) => { if (!usageIndexes.has(r)) usageIndexes.set(r, new UsageIndex(r, () => G.projectFiles(r))); return usageIndexes.get(r); };
 const getSymbolIndex = (r) => {
-  if (!symbolIndex) {
+  if (!symbolIndexes.has(r)) {
     const cfgSym = loadConfigSafe(r).symbolParser;
     const symbolsOf = async (rel, content) => (cfgSym === 'regex' ? null : await treesitter.symbols(rel, content)) || symbols.findSymbols(rel, content);
-    symbolIndex = new SymbolIndex(r, () => G.projectFiles(r), symbolsOf);
+    symbolIndexes.set(r, new SymbolIndex(r, () => G.projectFiles(r), symbolsOf));
   }
-  return symbolIndex;
+  return symbolIndexes.get(r);
 };
-const getSpringIndex = (r) => { if (!springIndex) springIndex = new SpringIndex(r, () => G.projectFiles(r)); return springIndex; };
+const getSpringIndex = (r) => { if (!springIndexes.has(r)) springIndexes.set(r, new SpringIndex(r, () => G.projectFiles(r))); return springIndexes.get(r); };
+const invalidateIndexesFor = (r) => { if (usageIndexes.has(r)) usageIndexes.get(r).invalidate(); if (symbolIndexes.has(r)) symbolIndexes.get(r).invalidate(); if (springIndexes.has(r)) springIndexes.get(r).invalidate(); };
+const dropIndexesFor = (r) => { usageIndexes.delete(r); symbolIndexes.delete(r); springIndexes.delete(r); };
 let localHistory = null;
 const lhTimers = new Map();
 
@@ -139,10 +155,17 @@ function applyNativeTheme() {
   nativeTheme.themeSource = custom && custom.dark === false ? 'light' : 'dark';
 }
 
-function pickInitialRoot() {
+function isDirSafe(p) { try { return !!p && fs.statSync(p).isDirectory(); } catch { return false; } }
+
+/** A folder named on the command line (a second window opened for one project) replaces the restored workspace;
+ * otherwise every folder from last time's `roots` is restored (older installs only have the single `lastRoot`). */
+function pickInitialRoots() {
   const arg = process.argv.slice(app.isPackaged ? 1 : 2).find((a) => !a.startsWith('-'));
-  const candidates = [arg && path.resolve(arg), !SMOKE && readState().lastRoot].filter(Boolean);
-  return candidates.find((p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } }) || null;
+  if (arg) { const p = path.resolve(arg); return isDirSafe(p) ? [p] : []; }
+  if (SMOKE) return [];
+  const state = readState();
+  const saved = Array.isArray(state.roots) && state.roots.length ? state.roots : [state.lastRoot].filter(Boolean);
+  return saved.filter(isDirSafe);
 }
 
 // ---------- helpers ----------
@@ -156,6 +179,15 @@ function requireRoot() {
 }
 
 function resolveInRoot(rel) { return appcore.resolveWithin(requireRoot(), rel); }
+
+/** The genuinely workspace-wide features (file ops, git, search, todos, local history, symbols) take an explicit
+ * root from the renderer instead of relying on a single implicit "current" one, since several can be open at once. */
+function validRoot(r) {
+  const match = roots.find((x) => x === r);
+  if (!match) throw new Error('That folder is not open in this workspace.');
+  return match;
+}
+function resolveIn(r, rel) { return appcore.resolveWithin(validRoot(r), rel); }
 
 /** Wrap an async operation so the renderer gets { error } instead of a rejected promise. */
 async function safe(fn) {
@@ -208,123 +240,178 @@ function lhRecordDisk(r, rel, label) {
   }, 500));
 }
 
-let watcherOk = false;
-let watcherRetries = 0;
-let watcherRetryTimer = null;
-let pollTimer = null;
-let pollBusy = false;
-let lastSig = null;
+let watcherOk = false; // aggregate: true only while every open root's watcher is healthy (see fs:diagnostics)
+const rootState = new Map(); // root -> { watcher, watcherOk, watcherRetries, watcherRetryTimer, pollTimer, pollBusy, lastSig }
+const stateFor = (r) => { if (!rootState.has(r)) rootState.set(r, { watcher: null, watcherOk: false, watcherRetries: 0, watcherRetryTimer: null, pollTimer: null, pollBusy: false, lastSig: null }); return rootState.get(r); };
 
 function setWatcherOk(ok) { if (watcherOk !== ok) { watcherOk = ok; send('fs:watcher', ok); } }
+function refreshWatcherOk() { setWatcherOk(roots.length > 0 && roots.every((r) => stateFor(r).watcherOk)); }
 
 /** A watcher that died (error, deleted folder, too many watches) is restarted with a growing delay; polling covers the gap. */
-function scheduleWatcherRetry() {
-  clearTimeout(watcherRetryTimer);
-  if (!root || watcherRetries >= 8) return; // give up: polling and window focus keep the IDE current
-  const delay = Math.min(30000, 1000 * 2 ** watcherRetries++);
-  watcherRetryTimer = setTimeout(() => startWatcher(true), delay);
-  if (watcherRetryTimer.unref) watcherRetryTimer.unref();
+function scheduleWatcherRetry(r) {
+  const st = stateFor(r);
+  clearTimeout(st.watcherRetryTimer);
+  if (!roots.includes(r) || st.watcherRetries >= 8) return; // give up: polling and window focus keep the IDE current
+  const delay = Math.min(30000, 1000 * 2 ** st.watcherRetries++);
+  st.watcherRetryTimer = setTimeout(() => startWatcherFor(r, true), delay);
+  if (st.watcherRetryTimer.unref) st.watcherRetryTimer.unref();
 }
 
-const feed = createFeed({ send: (...a) => { send(...a); rebaseline(); }, isChecksRunning: () => checksRunning });
+const feed = createFeed({ send: (...a) => { send(...a); rebaselineAll(); }, isChecksRunning: () => checksRunning });
 const watchStats = { events: 0, ignored: 0, lastEventAt: null, lastEventFile: null, polls: 0, pollChanges: 0, lastPollAt: null, lastPollFiles: 0, lastPollError: null, pollSkipped: null };
 
-function startWatcher(isRetry = false) {
-  stopWatcher();
-  if (!isRetry) watcherRetries = 0;
-  if (!root) return;
+function startWatcherFor(r, isRetry = false) {
+  stopWatcherFor(r);
+  const st = stateFor(r);
+  if (!isRetry) st.watcherRetries = 0;
   try {
-    watcher = fs.watch(root, { recursive: true }, (_evt, filename) => {
+    st.watcher = fs.watch(r, { recursive: true }, (_evt, filename) => {
       if (!filename) return;
       if (String(filename).split(/[\\/]/).some((part) => IGNORED_DIRS.has(part))) { watchStats.ignored++; return; }
       watchStats.events++; watchStats.lastEventAt = new Date().toISOString(); watchStats.lastEventFile = String(filename);
-      if (root) lhRecordDisk(root, toPosix(String(filename)), 'changed on disk');
-      if (usageIndex) usageIndex.invalidate();
-      if (symbolIndex) symbolIndex.invalidate();
-      if (springIndex) springIndex.invalidate();
+      lhRecordDisk(r, toPosix(String(filename)), 'changed on disk');
+      invalidateIndexesFor(r);
       feed.event(); // never dropped, not even while the gates run
     });
-    watcher.on('error', () => { stopWatcher(); setWatcherOk(false); scheduleWatcherRetry(); });
-    watcherRetries = 0;
-    setWatcherOk(true);
+    st.watcher.on('error', () => { stopWatcherFor(r); st.watcherOk = false; refreshWatcherOk(); scheduleWatcherRetry(r); });
+    st.watcherRetries = 0;
+    st.watcherOk = true;
   } catch {
-    setWatcherOk(false); // recursive watching unavailable here: polling below still works
-    scheduleWatcherRetry();
+    st.watcherOk = false; // recursive watching unavailable here: polling below still works
+    scheduleWatcherRetry(r);
   }
+  refreshWatcherOk();
 }
 
-function stopWatcher() {
-  feed.stop();
-  if (watcher) { try { watcher.close(); } catch { /* ignore */ } watcher = null; }
+function stopWatcherFor(r) {
+  const st = rootState.get(r);
+  if (!st) return;
+  if (st.watcher) { try { st.watcher.close(); } catch { /* ignore */ } st.watcher = null; }
+  // a pending retry (the watcher had died and was backing off) must not outlive this root, or it recreates a
+  // fresh rootState entry and a real fs.watch() for a folder no longer in `roots` once it eventually fires -
+  // a watcher nothing ever closes again, since stopWatchingEverything() only walks the current roots list.
+  clearTimeout(st.watcherRetryTimer);
+  st.watcherRetryTimer = null;
 }
 
-/** Remember what the working tree looks like now, so the poller only reports what happened after this. */
-function rebaseline() {
-  if (!root) return;
-  const r = root;
-  changesig.signature(r).then((s) => { if (root === r) lastSig = s; }).catch(() => {});
+/** Remember what the working tree of root r looks like now, so its poller only reports what happened after this. */
+function rebaseline(r) {
+  const st = rootState.get(r); if (!st) return;
+  changesig.signature(r).then((s) => { if (rootState.get(r) === st) st.lastSig = s; }).catch(() => {});
 }
+function rebaselineAll() { for (const r of roots) rebaseline(r); }
 
-/** Safety net next to the file watcher: every few seconds, compare a fingerprint of the changed files. */
-function startPoller() {
-  clearInterval(pollTimer);
-  lastSig = null;
+/** Safety net next to each root's file watcher: every few seconds, compare a fingerprint of its changed files. */
+function startPollerFor(r) {
+  const st = stateFor(r);
+  clearInterval(st.pollTimer);
+  st.lastSig = null;
   let tick = 0;
-  pollTimer = setInterval(async () => {
+  st.pollTimer = setInterval(async () => {
     tick++;
     // focused: every 4 s; visible but in the background (the agent usually runs in another window): every 12 s; minimized: not at all
     const gone = !win || win.isDestroyed() || win.isMinimized();
     const background = !gone && !win.isFocused();
-    if (!root || pollBusy || gone || (background && tick % 3 !== 0)) { watchStats.pollSkipped = gone ? 'window minimized' : pollBusy ? 'busy' : null; return; }
+    if (!roots.includes(r) || st.pollBusy || gone || (background && tick % 3 !== 0)) { watchStats.pollSkipped = gone ? 'window minimized' : st.pollBusy ? 'busy' : null; return; }
     watchStats.pollSkipped = null;
-    pollBusy = true;
-    const r = root;
+    st.pollBusy = true;
     try {
       const sig = await changesig.signature(r);
-      if (root !== r) return;
+      if (!roots.includes(r)) return;
       if (sig === null) { watchStats.lastPollError = 'git status failed'; return; }
       watchStats.polls++; watchStats.lastPollAt = new Date().toISOString(); watchStats.lastPollFiles = sig ? sig.split('\n').length : 0; watchStats.lastPollError = null;
-      if (lastSig !== null && sig !== lastSig) { watchStats.pollChanges++; if (usageIndex) usageIndex.invalidate(); if (symbolIndex) symbolIndex.invalidate(); if (springIndex) springIndex.invalidate(); send('fs:changed', { poll: true }); }
-      lastSig = sig;
-    } catch (err) { watchStats.lastPollError = String((err && err.message) || err); } finally { pollBusy = false; }
+      if (st.lastSig !== null && sig !== st.lastSig) { watchStats.pollChanges++; invalidateIndexesFor(r); send('fs:changed', { poll: true }); }
+      st.lastSig = sig;
+    } catch (err) { watchStats.lastPollError = String((err && err.message) || err); } finally { st.pollBusy = false; }
   }, 4000);
-  if (pollTimer.unref) pollTimer.unref();
-  rebaseline();
+  if (st.pollTimer.unref) st.pollTimer.unref();
+  rebaseline(r);
 }
 
+function stopPollerFor(r) { const st = rootState.get(r); if (st) clearInterval(st.pollTimer); }
+
+function startWatchingRoot(r) { startWatcherFor(r); startPollerFor(r); }
+function stopWatchingRoot(r) { stopWatcherFor(r); stopPollerFor(r); rootState.delete(r); dropIndexesFor(r); refreshWatcherOk(); }
+function stopWatchingEverything() { for (const r of roots) stopWatchingRoot(r); }
+
+function canonicalize(dir) {
+  // resolves symlinks, e.g. macOS /var -> /private/var: `git worktree list` reports paths already resolved this
+  // way, so without this, switching back from a run's worktree to a root opened via its unresolved form fails the
+  // exact-string match in project:switch ("Not a known agent run of this repository") and in workspace membership.
+  try { return fs.realpathSync.native(dir); } catch { return dir; } // not on disk (yet) or inaccessible: keep it as given
+}
+
+function persistRoots() {
+  const state = readState();
+  state.roots = roots;
+  state.lastRoot = roots[0] || null; // back-compat for anything still reading the single-root key
+  writeState(state);
+}
+
+/** "Open folder…": replaces the whole workspace, same as before multi-root existed. */
 function setRoot(dir) {
-  usageIndex = null; symbolIndex = null; springIndex = null;
+  stopWatchingEverything();
   if (lsp) { lsp.dispose().catch(() => {}); lsp = null; }
   if (dapSession) { dapSession.stop().catch(() => {}); dapSession = null; }
-  // canonicalize (resolves symlinks, e.g. macOS /var -> /private/var): `git worktree list` reports paths already
-  // resolved this way, so without this, switching back from a run's worktree to a root opened via its unresolved
-  // form fails the exact-string match in project:switch ("Not a known agent run of this repository").
-  try { dir = fs.realpathSync.native(dir); } catch { /* not on disk (yet) or inaccessible: keep it as given */ }
+  dir = canonicalize(dir);
+  roots = [dir];
   root = dir;
   const state = readState();
-  state.lastRoot = dir;
   state.recent = addRecent(state.recent, dir);
   writeState(state);
-  startWatcher();
-  startPoller();
+  persistRoots();
+  startWatchingRoot(dir);
 }
 
-async function describeProject() {
-  if (!root) return { root: null, config: loadConfig(path.join(app.getPath('userData'), '__none__'), readSettings()) };
-  const info = { root, name: path.basename(root), watching: watcherOk, isRepo: await G.isRepo(root), branch: null, config: null, scripts: [], checks: [], error: null };
-  if (info.isRepo) info.branch = await G.branch(root);
+/** "Add folder to workspace…": the other open folders, their terminals and their running agents are untouched. */
+function addRootToWorkspace(dir) {
+  dir = canonicalize(dir);
+  if (roots.includes(dir)) return;
+  roots = [...roots, dir];
+  root = roots[0];
+  const state = readState();
+  state.recent = addRecent(state.recent, dir);
+  writeState(state);
+  persistRoots();
+  startWatchingRoot(dir);
+}
+
+/** "Remove folder from workspace": just that folder's watcher/indexes/trust-for-this-session go away; terminals already open against it keep running. */
+function removeRootFromWorkspace(dir) {
+  dir = canonicalize(dir);
+  if (!roots.includes(dir)) return;
+  stopWatchingRoot(dir);
+  roots = roots.filter((r) => r !== dir);
+  root = roots[0] || null;
+  if (!root && lsp) { lsp.dispose().catch(() => {}); lsp = null; }
+  if (!root && dapSession) { dapSession.stop().catch(() => {}); dapSession = null; }
+  persistRoots();
+}
+
+async function describeProjectFor(r) {
+  const info = { root: r, name: path.basename(r), watching: stateFor(r).watcherOk, isRepo: await G.isRepo(r), branch: null, config: null, scripts: [], checks: [], error: null };
+  if (info.isRepo) info.branch = await G.branch(r);
   try {
-    info.config = loadConfig(root, readSettings());
-    info.configProblems = require('../core/config').configProblems(root);
-    info.taskTemplates = taskTemplates.mergeTemplates({ ide: readSettings().taskTemplates, project: [...((readJsonSafe(path.join(root, '.ide', 'config.json')) || {}).taskTemplates || []), ...taskTemplates.parseMarkdown(readTextSafe(path.join(root, '.ide', 'tasks.md')))] });
-    info.oversight = oversightCore.describe(readSettings(), readJsonSafe(path.join(root, '.ide', 'config.json')));
-    info.scripts = loadScripts(root);
-    info.checks = loadChecksConfig(root).checks.map((c) => ({ name: c.name, tier: c.tier || 'fast' }));
+    info.config = loadConfig(r, readSettings());
+    info.configProblems = require('../core/config').configProblems(r);
+    info.taskTemplates = taskTemplates.mergeTemplates({ ide: readSettings().taskTemplates, project: [...((readJsonSafe(path.join(r, '.ide', 'config.json')) || {}).taskTemplates || []), ...taskTemplates.parseMarkdown(readTextSafe(path.join(r, '.ide', 'tasks.md')))] });
+    info.oversight = oversightCore.describe(readSettings(), readJsonSafe(path.join(r, '.ide', 'config.json')));
+    info.scripts = loadScripts(r);
+    info.checks = loadChecksConfig(r).checks.map((c) => ({ name: c.name, tier: c.tier || 'fast' }));
   } catch (err) {
     info.error = err.message;
-    info.config = loadConfig(path.join(root, '__none__'), readSettings());
+    info.config = loadConfig(path.join(r, '__none__'), readSettings());
   }
   return info;
+}
+
+/** `root`/the first entry of `roots` stays the one every single-project feature (scripts, checks, Spring, the
+ * environment doctor, saved run configs, language servers...) reads - deliberately not made multi-root-aware here;
+ * see the plan's "explicitly deferred" list. `roots` is the full list, for the features that now span all of them. */
+async function describeProject() {
+  if (!roots.length) return { root: null, roots: [], config: loadConfig(path.join(app.getPath('userData'), '__none__'), readSettings()) };
+  const list = await Promise.all(roots.map(describeProjectFor));
+  return { ...list[0], roots: list };
 }
 
 // ---------- language servers (opt-in) ----------
@@ -624,7 +711,18 @@ function registerIpc() {
     setRoot(target);
     return describeProject();
   });
-  ipcMain.handle('project:recent', () => pruneRecent(readState().recent, isDir).filter((p) => p !== root));
+  ipcMain.handle('project:recent', () => pruneRecent(readState().recent, isDir).filter((p) => !roots.includes(p)));
+  // multi-root workspace: add/remove a folder without touching the others' terminals, agents or watchers
+  ipcMain.handle('project:addFolder', async (_e, dir) => {
+    const target = dir ? String(dir) : await pickFolder();
+    if (!target || !isDir(target)) return describeProject();
+    addRootToWorkspace(target);
+    return describeProject();
+  });
+  ipcMain.handle('project:removeFolder', (_e, dir) => {
+    removeRootFromWorkspace(String(dir || ''));
+    return describeProject();
+  });
   // a second window is a second process: it has its own project, terminals and agents, so nothing running here is touched
   ipcMain.handle('project:openWindow', async (_e, dir) => {
     const target = dir ? String(dir) : await pickFolder();
@@ -639,18 +737,20 @@ function registerIpc() {
   });
   ipcMain.handle('project:running', () => ptys.count ? ptys.count() : 0);
 
-  // files
-  ipcMain.handle('fs:list', (_e, rel) => {
-    const abs = resolveInRoot(rel);
+  // files - every file op takes an explicit root: several workspace folders can be open and edited at once, so
+  // there is no longer one implicit "current" project to resolve a relative path against.
+  ipcMain.handle('fs:list', (_e, rootArg, rel) => {
+    const r = validRoot(rootArg);
+    const abs = resolveIn(r, rel);
     const entries = fs.readdirSync(abs, { withFileTypes: true })
       .filter((d) => d.name !== '.git' && !(d.isDirectory() && IGNORED_DIRS.has(d.name)))
-      .map((d) => ({ name: d.name, rel: toPosix(path.relative(requireRoot(), path.join(abs, d.name))), dir: d.isDirectory() }));
+      .map((d) => ({ name: d.name, rel: toPosix(path.relative(r, path.join(abs, d.name))), dir: d.isDirectory() }));
     entries.sort((a, b) => (a.dir === b.dir ? a.name.localeCompare(b.name) : a.dir ? -1 : 1));
     return entries;
   });
 
-  ipcMain.handle('fs:read', (_e, rel) => {
-    const abs = resolveInRoot(rel);
+  ipcMain.handle('fs:read', (_e, rootArg, rel) => {
+    const abs = resolveIn(validRoot(rootArg), rel);
     let stat;
     try { stat = fs.statSync(abs); } catch { return { missing: true, content: '' }; }
     if (stat.size > MAX_FILE_BYTES) return { tooLarge: true, size: stat.size, content: '' };
@@ -659,17 +759,18 @@ function registerIpc() {
     return { content: buf.toString('utf8'), size: stat.size };
   });
 
-  ipcMain.handle('fs:write', async (_e, rel, content) => {
-    const abs = resolveInRoot(rel);
-    try { await lhBaseline(requireRoot(), toPosix(rel)); } catch { /* history is best effort */ }
+  ipcMain.handle('fs:write', async (_e, rootArg, rel, content) => {
+    const r = validRoot(rootArg);
+    const abs = resolveIn(r, rel);
+    try { await lhBaseline(r, toPosix(rel)); } catch { /* history is best effort */ }
     fs.writeFileSync(abs, content, 'utf8');
-    try { getLocalHistory().record(requireRoot(), toPosix(rel), content, { label: 'saved in the IDE' }); } catch { /* best effort */ }
+    try { getLocalHistory().record(r, toPosix(rel), content, { label: 'saved in the IDE' }); } catch { /* best effort */ }
     return true;
   });
 
-  ipcMain.handle('fs:create', (_e, rel, opts) => safe(async () => {
-    const r = requireRoot();
-    const abs = resolveInRoot(rel);
+  ipcMain.handle('fs:create', (_e, rootArg, rel, opts) => safe(async () => {
+    const r = validRoot(rootArg);
+    const abs = resolveIn(r, rel);
     if (fs.existsSync(abs)) return { error: 'A file or folder with that name already exists.' };
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     if (opts && opts.dir) fs.mkdirSync(abs);
@@ -699,9 +800,9 @@ function registerIpc() {
     } catch { /* best effort */ }
   }
 
-  ipcMain.handle('fs:delete', (_e, rel) => safe(async () => {
-    const r = requireRoot();
-    const abs = resolveInRoot(rel);
+  ipcMain.handle('fs:delete', (_e, rootArg, rel) => safe(async () => {
+    const r = validRoot(rootArg);
+    const abs = resolveIn(r, rel);
     if (abs === r) return { error: 'Cannot delete the project root.' };
     if (!fs.existsSync(abs)) return { error: 'Already gone.' };
     snapshotBeforeDelete(r, abs, toPosix(rel));
@@ -709,10 +810,10 @@ function registerIpc() {
     return { ok: true };
   }));
 
-  ipcMain.handle('fs:rename', (_e, fromRel, toRel) => safe(async () => {
-    const r = requireRoot();
-    const from = resolveInRoot(fromRel);
-    const to = resolveInRoot(toRel);
+  ipcMain.handle('fs:rename', (_e, rootArg, fromRel, toRel) => safe(async () => {
+    const r = validRoot(rootArg);
+    const from = resolveIn(r, fromRel);
+    const to = resolveIn(r, toRel);
     if (from === r) return { error: 'Cannot rename the project root.' };
     if (!fs.existsSync(from)) return { error: 'Not found.' };
     if (fs.existsSync(to)) return { error: 'A file or folder with that name already exists.' };
@@ -721,9 +822,9 @@ function registerIpc() {
     return { ok: true };
   }));
 
-  ipcMain.handle('fs:duplicate', (_e, rel) => safe(async () => {
-    const r = requireRoot();
-    const from = resolveInRoot(rel);
+  ipcMain.handle('fs:duplicate', (_e, rootArg, rel) => safe(async () => {
+    const r = validRoot(rootArg);
+    const from = resolveIn(r, rel);
     if (from === r) return { error: 'Cannot duplicate the project root.' };
     if (!fs.existsSync(from)) return { error: 'Not found.' };
     const dir = path.dirname(from);
@@ -738,35 +839,37 @@ function registerIpc() {
     return { ok: true, rel: toPosix(path.relative(r, to)) };
   }));
 
+  // "replace in files": across every open folder, same as the search it follows.
   ipcMain.handle('search:replace', (_e, opts) => safe(async () => {
-    const r = requireRoot();
-    const found = await search(r, opts, 20000);
-    if (found.error) return { error: found.error };
-    const files = [...new Set((found.results || []).map((h) => h.file))];
     let changedFiles = 0;
     let replacements = 0;
-    for (const rel of files) {
-      const abs = resolveInRoot(rel);
-      let buf;
-      try { buf = fs.readFileSync(abs); } catch { continue; }
-      if (buf.subarray(0, 8000).includes(0)) continue; // binary
-      const res = replaceInText(buf.toString('utf8'), opts);
-      if (res.error) return res;
-      if (!res.count) continue;
-      try { await lhBaseline(r, rel); } catch { /* best effort */ }
-      fs.writeFileSync(abs, res.content, 'utf8');
-      try { getLocalHistory().record(r, rel, res.content, { label: 'replace in files' }); } catch { /* best effort */ }
-      changedFiles++;
-      replacements += res.count;
+    for (const r of roots) {
+      const found = await search(r, opts, 20000);
+      if (found.error) continue;
+      const files = [...new Set((found.results || []).map((h) => h.file))];
+      for (const rel of files) {
+        const abs = resolveIn(r, rel);
+        let buf;
+        try { buf = fs.readFileSync(abs); } catch { continue; }
+        if (buf.subarray(0, 8000).includes(0)) continue; // binary
+        const res = replaceInText(buf.toString('utf8'), opts);
+        if (res.error) return res;
+        if (!res.count) continue;
+        try { await lhBaseline(r, rel); } catch { /* best effort */ }
+        fs.writeFileSync(abs, res.content, 'utf8');
+        try { getLocalHistory().record(r, rel, res.content, { label: 'replace in files' }); } catch { /* best effort */ }
+        changedFiles++;
+        replacements += res.count;
+      }
     }
     return { files: changedFiles, replacements };
   }));
 
   // local history
-  ipcMain.handle('localhistory:list', (_e, rel) => safe(async () => { resolveInRoot(rel); return { entries: getLocalHistory().list(requireRoot(), toPosix(rel)) }; }));
-  ipcMain.handle('localhistory:read', (_e, rel, id) => safe(async () => { resolveInRoot(rel); return { content: getLocalHistory().read(requireRoot(), toPosix(rel), id) }; }));
-  ipcMain.handle('localhistory:restore', (_e, rel, id) => safe(async () => {
-    const r = requireRoot(); const abs = resolveInRoot(rel); const lh = getLocalHistory();
+  ipcMain.handle('localhistory:list', (_e, rootArg, rel) => safe(async () => { const r = validRoot(rootArg); resolveIn(r, rel); return { entries: getLocalHistory().list(r, toPosix(rel)) }; }));
+  ipcMain.handle('localhistory:read', (_e, rootArg, rel, id) => safe(async () => { const r = validRoot(rootArg); resolveIn(r, rel); return { content: getLocalHistory().read(r, toPosix(rel), id) }; }));
+  ipcMain.handle('localhistory:restore', (_e, rootArg, rel, id) => safe(async () => {
+    const r = validRoot(rootArg); const abs = resolveIn(r, rel); const lh = getLocalHistory();
     const content = lh.read(r, toPosix(rel), id);
     try { lh.record(r, toPosix(rel), fs.readFileSync(abs, 'utf8'), { label: 'before restore' }); } catch { /* file did not exist */ }
     fs.mkdirSync(path.dirname(abs), { recursive: true });
@@ -775,11 +878,29 @@ function registerIpc() {
     return { restored: true };
   }));
 
-  ipcMain.handle('files:all', () => safe(async () => ({ files: await G.projectFiles(requireRoot()) })));
+  // quick open / go-to-symbol / project search / todo scan: across every open folder, each hit tagged with its root
+  ipcMain.handle('files:all', () => safe(async () => {
+    const perRoot = await Promise.all(roots.map(async (r) => (await G.projectFiles(r)).map((rel) => ({ root: r, rel }))));
+    return { files: perRoot.flat() };
+  }));
 
-  ipcMain.handle('search:run', (_e, opts) => safe(() => search(requireRoot(), opts)));
+  ipcMain.handle('search:run', (_e, opts) => safe(async () => {
+    const perRoot = await Promise.all(roots.map((r) => search(r, opts)));
+    const failed = perRoot.find((res) => res.error);
+    if (failed) return failed;
+    const truncated = perRoot.some((res) => res.truncated);
+    const results = perRoot.flatMap((res, i) => (res.results || []).map((hit) => ({ ...hit, root: roots[i] })));
+    return { results, truncated };
+  }));
 
-  ipcMain.handle('todos:scan', () => safe(() => todos.scan(requireRoot())));
+  ipcMain.handle('todos:scan', () => safe(async () => {
+    const perRoot = await Promise.all(roots.map((r) => todos.scan(r)));
+    const failed = perRoot.find((res) => res.error);
+    if (failed) return failed;
+    const truncated = perRoot.some((res) => res.truncated);
+    const items = perRoot.flatMap((res, i) => (res.items || []).map((item) => ({ ...item, root: roots[i] })));
+    return { items, truncated };
+  }));
 
   ipcMain.handle('rest:send', (_e, req) => safe(() => {
     const id = req && req.id;
@@ -799,18 +920,25 @@ function registerIpc() {
   ipcMain.handle('snippets:list', () => safe(() => snippets.loadSnippets(requireRoot())));
   ipcMain.handle('snippets:save', (_e, list) => safe(() => snippets.saveSnippets(requireRoot(), list)));
 
-  // git
-  // null = git failed just now (index busy, repository mid-operation): the UI keeps the list it has instead of showing "no changes"
+  // git - every open folder's changed files, flattened into one list tagged with `root` (same flat shape the UI
+  // and tests already key off `path` for, just with that extra field). A root whose git failed just now (index
+  // busy, mid-operation) is named in `failedRoots` instead of contributing files, so the renderer keeps what it
+  // already had for that one root rather than wiping it to "no changes".
   ipcMain.handle('git:changes', async () => {
-    if (!root) return [];
-    try { return await G.changedFilesStrict(root); } catch { return (await G.isRepo(root)) ? null : []; }
+    const files = [];
+    const failedRoots = [];
+    for (const r of roots) {
+      if (!(await G.isRepo(r))) continue;
+      try { for (const f of await G.changedFilesStrict(r)) files.push({ ...f, root: r }); } catch { failedRoots.push(r); }
+    }
+    return { files, failedRoots };
   });
-  ipcMain.handle('git:head', async (_e, rel) => G.headContent(requireRoot(), rel));
-  ipcMain.handle('git:stage', (_e, paths) => safe(() => G.stage(requireRoot(), paths)));
-  ipcMain.handle('git:unstage', (_e, paths) => safe(() => G.unstage(requireRoot(), paths)));
-  ipcMain.handle('git:stageAll', () => safe(() => G.stageAll(requireRoot())));
-  ipcMain.handle('git:commit', (_e, message) => safe(async () => ({ output: await G.commit(requireRoot(), message) })));
-  ipcMain.handle('git:revert', (_e, rel) => safe(async () => { resolveInRoot(rel); return { result: await G.revertFile(requireRoot(), rel) }; }));
+  ipcMain.handle('git:head', async (_e, rootArg, rel) => G.headContent(validRoot(rootArg), rel));
+  ipcMain.handle('git:stage', (_e, rootArg, paths) => safe(() => G.stage(validRoot(rootArg), paths)));
+  ipcMain.handle('git:unstage', (_e, rootArg, paths) => safe(() => G.unstage(validRoot(rootArg), paths)));
+  ipcMain.handle('git:stageAll', (_e, rootArg) => safe(() => G.stageAll(validRoot(rootArg))));
+  ipcMain.handle('git:commit', (_e, rootArg, message) => safe(async () => ({ output: await G.commit(validRoot(rootArg), message) })));
+  ipcMain.handle('git:revert', (_e, rootArg, rel) => safe(async () => { const r = validRoot(rootArg); resolveIn(r, rel); return { result: await G.revertFile(r, rel) }; }));
   // agent runs (git worktrees)
   ipcMain.handle('runs:list', () => safe(async () => {
     const base = requireRoot();
@@ -1421,8 +1549,8 @@ function registerIpc() {
   ipcMain.handle('runs:pr', (_e, opts = {}) => safe(async () => ({ result: await pr.createPr(requireRoot(), opts.id, { title: opts.title, body: opts.body, base: opts.base, draft: !!opts.draft }) })));
   ipcMain.handle('app:openExternal', (_e, url) => { if (/^https:\/\//.test(String(url))) { shell.openExternal(String(url)); return true; } return false; });
   ipcMain.handle('fs:diagnostics', async () => ({
-    version: app.getVersion(), platform: process.platform, root, rootReal: root ? (() => { try { return fs.realpathSync(root); } catch { return null; } })() : null,
-    isRepo: root ? await G.isRepo(root) : false, watching: watcherOk, retries: watcherRetries, focused: !!(win && win.isFocused()), ...watchStats,
+    version: app.getVersion(), platform: process.platform, root, roots, rootReal: root ? (() => { try { return fs.realpathSync(root); } catch { return null; } })() : null,
+    isRepo: root ? await G.isRepo(root) : false, watching: watcherOk, retries: root ? stateFor(root).watcherRetries : 0, focused: !!(win && win.isFocused()), ...watchStats,
   }));
   // Before an agent starts: its standing instructions go into a file for --append-system-prompt-file, and a local model is
   // checked (server running, model installed, context big enough) and loaded, so the first request is not the slow one.
@@ -1508,8 +1636,8 @@ function registerIpc() {
   ipcMain.handle('app:notify', (_e, { kind, title, body } = {}) => notify(kind, String(title || ''), String(body || '')));
 
   // hunk staging, history, blame, stash
-  ipcMain.handle('git:stageHunk', (_e, rel, line) => safe(async () => { resolveInRoot(rel); return { result: await G.stageHunk(requireRoot(), rel, line) }; }));
-  ipcMain.handle('git:unstageHunk', (_e, rel, line) => safe(async () => { resolveInRoot(rel); return { result: await G.unstageHunk(requireRoot(), rel, line) }; }));
+  ipcMain.handle('git:stageHunk', (_e, rootArg, rel, line) => safe(async () => { const r = validRoot(rootArg); resolveIn(r, rel); return { result: await G.stageHunk(r, rel, line) }; }));
+  ipcMain.handle('git:unstageHunk', (_e, rootArg, rel, line) => safe(async () => { const r = validRoot(rootArg); resolveIn(r, rel); return { result: await G.unstageHunk(r, rel, line) }; }));
   ipcMain.handle('history:log', (_e, opts = {}) => safe(async () => {
     const r = requireRoot();
     if (!(await G.isRepo(r))) return { commits: [], rows: [], stashes: [] };
@@ -1651,8 +1779,9 @@ function registerIpc() {
     return { opened: extEditor.EDITORS[id].label };
   }));
   // Usage & insights: fast facts on open, slow or networked ones only when asked. Every parser hides what it cannot read.
-  const fetchJson = async (url, headers = {}, ms = 6000) => { const r = await fetch(url, { headers, signal: AbortSignal.timeout(ms) }); if (!r.ok) throw new Error(`${r.status} ${r.statusText}`.trim()); return r.json(); };
-  const postJson = async (url, body, ms = 15000) => { const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(ms) }); if (!r.ok) throw new Error(`${r.status} ${r.statusText}`.trim()); return r.json(); };
+  // read as text (never throws) so a non-JSON error body still gets drained instead of leaking - then JSON.parse only on success, same as r.json() would have done.
+  const fetchJson = async (url, headers = {}, ms = 6000) => { const { res, body: text } = await safeFetch(url, { headers, signal: AbortSignal.timeout(ms) }, 'text'); if (!res.ok) throw new Error(`${res.status} ${res.statusText}`.trim()); return JSON.parse(text); };
+  const postJson = async (url, body, ms = 15000) => { const { res, body: text } = await safeFetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(ms) }, 'text'); if (!res.ok) throw new Error(`${res.status} ${res.statusText}`.trim()); return JSON.parse(text); };
   // OSV.dev: free, keyless, no local CVE database to download (unlike the OWASP dependency-check Maven plugin) -
   // the batch call gives ids only, so a bounded number of individual lookups fill in severity.
   const checkOsv = async (deps, label) => {
@@ -1735,20 +1864,20 @@ function registerIpc() {
     const c = insightsCore.coverageFor(covCache.map, rel);
     return { file: path.relative(r, file), at: mt, ...(c || { covered: [], missed: [], pct: null }) };
   }));
-  // lenses above classes and methods: usages (by name, whole project) and the last change (git blame of the method's lines)
-  ipcMain.handle('symbols:info', (_e, rel, content, opts = {}) => safe(async () => {
-    const r = requireRoot();
-    resolveInRoot(rel);
+  // lenses above classes and methods: usages (by name, whole project) and the last change (git blame of the method's lines).
+  // Takes an explicit root (one Monaco model per open file, and files from any open workspace folder can be live at
+  // once) - exact LSP usage counts stay primary-root only, same as the rest of the language-server integration.
+  ipcMain.handle('symbols:info', (_e, rootArg, rel, content, opts = {}) => safe(async () => {
+    const r = validRoot(rootArg);
+    resolveIn(r, rel);
     const cfgSym = loadConfigSafe(r).symbolParser;
     const syms = (cfgSym === 'regex' ? null : await treesitter.symbols(String(rel), String(content))) || symbols.findSymbols(String(rel), String(content));
     if (!syms.length) return { symbols: [] };
     const lenses = withDefaults(loadConfigSafe(r), 'symbolLenses');
     let blame = null;
     if (lenses.blame && !opts.dirty && await G.isRepo(r)) { try { blame = await history.blame(r, rel); } catch { blame = null; } } // untracked file: nothing to show
-    if (lenses.usages) {
-      if (!usageIndex) usageIndex = new UsageIndex(r, () => G.projectFiles(r));
-      await usageIndex.refresh();
-    }
+    const usageIdx = lenses.usages ? getUsageIndex(r) : null;
+    if (usageIdx) await usageIdx.refresh();
     const declared = new Map();
     for (const s of syms) declared.set(s.name, (declared.get(s.name) || 0) + 1);
     let spring = { endpoints: [], impls: {} };
@@ -1756,7 +1885,7 @@ function registerIpc() {
     // exact counts from the language server when one is configured for this file; null per symbol = could not answer (fall back to the name count)
     let exact = new Map();
     const srcLines = String(content).split('\n');
-    if (lenses.usages && lspConfigFor(r).enabled && lspSupports(rel)) {
+    if (r === root && lenses.usages && lspConfigFor(r).enabled && lspSupports(rel)) {
       const lines = srcLines;
       const targets = syms.map((s) => ({ key: `${s.line}`, line: s.line - 1, character: symbols.nameColumn(lines[s.line - 1] || '', s.name, s.kind) })).filter((t) => t.character >= 0);
       try { exact = await ensureLsp().usageCounts(String(rel), String(content), targets); } catch { exact = new Map(); }
@@ -1767,17 +1896,19 @@ function registerIpc() {
       column: symbols.nameColumn(srcLines[s.line - 1] || '', s.name, s.kind),
       endpoints: spring.endpoints.filter((e) => e.line === s.line).map((e) => ({ method: e.method, path: e.path })),
       impls: spring.impls[s.line] || null,
-      usages: lenses.usages ? usageIndex.usages(s.name, { declarations: declared.get(s.name) }).count : null,
+      usages: usageIdx ? usageIdx.usages(s.name, { declarations: declared.get(s.name) }).count : null,
       blame: blame ? symbols.symbolBlame(blame, s) : null,
     })) };
   }));
-  // "Go to symbol in workspace" (quick open): every class/method/function in the project, built once and kept
-  // fresh by the same file-watcher invalidation as the usages index; the renderer fuzzy-filters the flat list.
+  // "Go to symbol in workspace" (quick open): every class/method/function across every open folder, each tagged
+  // with its root, built once per folder and kept fresh by that folder's own file-watcher invalidation.
   ipcMain.handle('symbols:workspaceAll', () => safe(async () => {
-    const r = requireRoot();
-    const idx = getSymbolIndex(r);
-    await idx.refresh();
-    return { symbols: idx.all() };
+    const perRoot = await Promise.all(roots.map(async (r) => {
+      const idx = getSymbolIndex(r);
+      await idx.refresh();
+      return idx.all().map((s) => ({ ...s, root: r }));
+    }));
+    return { symbols: perRoot.flat() };
   }));
   // semantic diff: what happened to each class/method/function between two versions of a file - added, removed,
   // renamed, moved or changed - instead of raw line deletes and inserts. Pure text in, so it works for any diff
@@ -2117,7 +2248,7 @@ function createWindow() {
   win.on('focus', () => {
     try { win.flashFrame(false); } catch { /* ignore */ }
     // coming back to the window: whatever an agent did meanwhile (even if the watcher missed it) shows up now
-    if (root && !SMOKE) { send('fs:changed', { poll: true }); rebaseline(); }
+    if (roots.length && !SMOKE) { send('fs:changed', { poll: true }); rebaselineAll(); }
   });
   let blurredAt = 0;
   win.on('blur', () => { blurredAt = Date.now(); if (!SMOKE) { try { writeJson('settings.json', { ...readSettings(), awaySeenAt: blurredAt }); } catch { /* best effort */ } } });
@@ -2140,11 +2271,12 @@ app.whenReady().then(() => {
     { role: 'editMenu' },
     { label: 'View', submenu: [{ role: 'reload' }, { role: 'toggleDevTools' }, { type: 'separator' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' }] },
   ]));
-  const initial = pickInitialRoot();
-  if (initial) setRoot(initial);
+  roots = pickInitialRoots().map(canonicalize);
+  root = roots[0] || null;
+  for (const r of roots) startWatchingRoot(r);
   registerIpc();
   createWindow();
 });
 
-app.on('window-all-closed', () => { stopWatcher(); if (ptys) ptys.killAll(); app.quit(); });
-app.on('before-quit', () => { toolProxies.closeAll().catch(() => {}); stopWatcher(); if (ptys) ptys.killAll(); if (lsp) lsp.dispose().catch(() => {}); if (dapSession) dapSession.stop().catch(() => {}); });
+app.on('window-all-closed', () => { stopWatchingEverything(); if (ptys) ptys.killAll(); app.quit(); });
+app.on('before-quit', () => { toolProxies.closeAll().catch(() => {}); stopWatchingEverything(); if (ptys) ptys.killAll(); if (lsp) lsp.dispose().catch(() => {}); if (dapSession) dapSession.stop().catch(() => {}); });

@@ -40,7 +40,7 @@ test('search against a fake skills.sh: the CLI\'s endpoint and parameters, the o
 });
 
 test('search: errors are readable (429, 500, not JSON, unreachable)', async () => {
-  const mk = (status, body) => ({ fetchFn: async () => ({ ok: status < 300, status, json: async () => { if (body === 'bad') throw new Error('x'); return body; } }) });
+  const mk = (status, body) => ({ fetchFn: async () => ({ ok: status < 300, status, text: async () => (body === 'bad' ? 'not json' : JSON.stringify(body)) }) });
   assert.match((await S.search('react', mk(429, {}))).error, /slow down/);
   assert.match((await S.search('react', mk(500, {}))).error, /error \(500\)/);
   assert.match((await S.search('react', mk(200, 'bad'))).error, /not JSON/);

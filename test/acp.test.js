@@ -149,3 +149,19 @@ test('wire format: a bare JSON-RPC agent (no SDK) can ask for permission and the
   assert.ok(events.some((e) => e.type === 'text' && e.text === 'chosen n'));
   await r.close(); rmTmp(cwd);
 });
+
+test('close() escalates to SIGKILL when the agent ignores SIGTERM, instead of leaving it running forever', async () => {
+  // Bypasses open()'s real spawn + ACP handshake entirely - this targets close()'s own signal-escalation logic
+  // in isolation, against a stub that deliberately never reports exit() no matter what signal it is sent except SIGKILL.
+  const { EventEmitter } = require('node:events');
+  const r = new A.AcpRun({ command: 'x', cwd: tmp() });
+  const child = new EventEmitter();
+  child.exitCode = null; child.signalCode = null;
+  child.kills = [];
+  child.kill = (sig = 'SIGTERM') => { child.kills.push(sig); if (sig === 'SIGKILL') setImmediate(() => child.emit('exit', null)); };
+  r.child = child;
+  const t0 = Date.now();
+  await r.close();
+  assert.ok(Date.now() - t0 < 3500, `close() must not hang waiting on a process that ignores SIGTERM (took ${Date.now() - t0}ms)`);
+  assert.deepStrictEqual(child.kills, ['SIGTERM', 'SIGKILL']);
+});

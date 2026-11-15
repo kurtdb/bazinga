@@ -4,6 +4,7 @@
  * Jira Cloud: https://yourorg.atlassian.net, REST v3, email + API token (Basic). Jira Server / Data Center: REST v2, personal access token (Bearer).
  * The network call is injected (`fetchFn`), so everything here runs against a fake server in the tests.
  */
+const { safeFetch } = require('./safeFetch');
 const DONE = 'statusCategory != Done';
 const KEY_RE = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
 const FIELDS = ['summary', 'issuetype', 'status', 'assignee', 'labels', 'priority'];
@@ -104,10 +105,12 @@ function explain(status, err, conn) {
 }
 
 async function call(conn, token, pathAndQuery, fetchFn, { method = 'GET', body = null } = {}) {
-  let res;
-  try { res = await fetchFn(`${conn.baseUrl}${pathAndQuery}`, { method, headers: { Authorization: authHeader(conn, token), Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(20000) }); } catch (err) { throw new Error(explain(0, err, conn)); }
+  let res, text;
+  try {
+    ({ res, body: text } = await safeFetch(`${conn.baseUrl}${pathAndQuery}`, { method, headers: { Authorization: authHeader(conn, token), Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(20000) }, 'text', fetchFn));
+  } catch (err) { throw new Error(explain(0, err, conn)); }
   if (!res.ok) throw new Error(explain(res.status, null, conn));
-  try { return await res.json(); } catch { throw new Error('Jira answered with something that is not JSON. Is the base URL right?'); }
+  try { return JSON.parse(text); } catch { throw new Error('Jira answered with something that is not JSON. Is the base URL right?'); }
 }
 
 const NOT_SET_UP = 'Jira is not set up yet: give the base URL, your email and an API token.';

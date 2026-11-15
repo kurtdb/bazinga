@@ -8,6 +8,8 @@ const FAKE = path.join(__dirname, 'fixtures', 'fake-dap.js');
 const fakeAdapter = { command: process.execPath, args: [FAKE], launchConfig: (program, opts) => ({ program, ...opts }) };
 const FAKE_TCP = path.join(__dirname, 'fixtures', 'fake-dap-tcp.js');
 const fakeTcpAdapter = { transport: 'tcp', command: process.execPath, args: (port) => [FAKE_TCP, String(port)], launchConfig: (program, opts) => ({ program, ...opts }) };
+const FAKE_TCP_CHATTY = path.join(__dirname, 'fixtures', 'fake-dap-tcp-chatty.js');
+const fakeChattyTcpAdapter = { transport: 'tcp', command: process.execPath, args: (port) => [FAKE_TCP_CHATTY, String(port)], launchConfig: (program, opts) => ({ program, ...opts }) };
 const waitFor = async (fn, ms = 4000) => { const end = Date.now() + ms; while (Date.now() < end) { const v = fn(); if (v) return v; await new Promise((r) => setTimeout(r, 20)); } return null; };
 
 test('pythonAdapter(): picks the platform binary, builds a launch config for a script', () => {
@@ -124,6 +126,14 @@ test('TCP transport (dlv dap\'s transport): start() connects over a socket inste
   assert.equal(threads[0].name, 'MainGoroutine');
   await s.continue_(1);
   assert.ok(await waitFor(() => s.state === 'terminated'));
+  await s.stop();
+});
+
+test('TCP transport: a chatty adapter writing several MB to its own stdout (separate from the DAP socket) does not stall the session - regression for the undrained child.stdout in _startTcp', async () => {
+  const s = new DapSession();
+  const res = await s.start({ adapter: fakeChattyTcpAdapter, program: '/fake/main.go', cwd: __dirname });
+  assert.ok(res.capabilities.supportsConfigurationDoneRequest);
+  assert.equal(s.state, 'running');
   await s.stop();
 });
 

@@ -208,7 +208,11 @@ class AcpRun {
       let done = false;
       const finish = () => { if (done) return; done = true; resolve(); };
       child.once('exit', finish);
-      setTimeout(finish, 3000); // don't hang a caller forever if the child never reports its exit
+      // don't hang a caller forever if the child never reports its exit - and if it ignored SIGTERM (stuck, or
+      // deliberately), escalate instead of just giving up on waiting for it: that would leave a real zombie
+      // process running past this session. SIGKILL cannot be caught/ignored on POSIX; Windows ignores the
+      // signal argument and force-terminates regardless, so this is safe to send unconditionally.
+      setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* gone */ } finish(); }, 3000);
       try { child.kill(); } catch { /* gone */ }
     });
   }

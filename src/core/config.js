@@ -58,6 +58,7 @@ const DEFAULT_CONFIG = {
   errorLens: { enabled: true }, // show each diagnostic inline at the end of its line, not only as a squiggly underline (every marker owner: lsp + quality-gate)
   minimap: { enabled: false }, // off by default (deliberate density choice); Settings -> Editor turns it on
   symbolLenses: { usages: true, blame: true, spring: true },
+  keybindings: {}, // commandId -> chord string, or null to unbind; unset ids keep their default (see core/keybindings.js)
   // Work items mentioned in a run (branch, task, commits): #123 and AB#123 link to GitHub issues / Azure Boards; ticket keys like PROJ-12 link when jiraBaseUrl is set.
   workItems: { jiraBaseUrl: '' },
   jira: { baseUrl: '', email: '', project: '', flavor: 'cloud' }, // the token is not here: it lives encrypted in the OS key store (core/keystore.js)

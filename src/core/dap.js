@@ -243,6 +243,10 @@ class DapSession extends EventEmitter {
     try { child = spawn(adapter.command, adapter.args(port), { cwd, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }); } catch (err) {
       this.state = 'idle'; throw err;
     }
+    // the actual DAP channel is the TCP socket below - this is just the adapter's own stdout (dlv can log there).
+    // Undrained, an OS pipe buffer fills and the write blocks, stalling the adapter's whole event loop, socket
+    // included - same shape as stderr right below, which was already drained.
+    child.stdout.on('data', () => { /* adapters log a lot there */ });
     child.stderr.on('data', () => { /* adapters log a lot there */ });
     // if the binary is missing or exits before it ever starts listening, fail fast instead of waiting out the full connect timeout
     const earlyFail = new Promise((_resolve, reject) => {

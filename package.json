@@ -8,6 +8,7 @@
   "scripts": {
     "start": "electron .",
     "test": "node scripts/test.js",
+    "lint": "eslint .",
     "bazinga": "node bin/bazinga.js",
     "check": "node bin/ide-check.js",
     "guard": "node bin/ide-guard.js",

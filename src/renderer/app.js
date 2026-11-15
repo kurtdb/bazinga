@@ -92,6 +92,57 @@
   // same ids/labels as core/scorecard.js's KINDS/LABELS - kept as a literal here, same as GUARD_LABELS above, since
   // the renderer never requires core modules directly.
   const KIND_LABELS = { tests: 'Tests', bugfix: 'Bug fix', refactor: 'Refactor', feature: 'New feature', docs: 'Docs', review: 'Review / explain', other: 'Other' };
+  // mirrors core/keybindings.js's DEFAULT_KEYBINDINGS/normalizeChord/resolve/findConflicts - kept as a literal
+  // here, same as GUARD_LABELS/KIND_LABELS above, since the renderer never requires core modules directly.
+  // core/keybindings.test.js is the source of truth for this logic; keep the two in sync by hand.
+  const DEFAULT_KEYBINDINGS = [
+    { id: 'goToFile', title: 'Go to file…', chord: 'Mod+P' },
+    { id: 'goToSymbol', title: 'Go to symbol in workspace…', chord: 'Mod+T' },
+    { id: 'commandPalette', title: 'Command palette…', chord: 'Mod+Shift+P' },
+    { id: 'focusSearch', title: 'Show: Search in project', chord: 'Mod+Shift+F' },
+    { id: 'saveFile', title: 'Save file', chord: 'Mod+S' },
+    { id: 'newTerminal', title: 'New terminal', chord: 'Ctrl+`' },
+  ];
+  const KEYBIND_MOD_ORDER = ['Mod', 'Ctrl', 'Shift', 'Alt'];
+  function normalizeChord(raw) {
+    if (!raw || typeof raw !== 'string') return null;
+    const mods = new Set(); let key = null;
+    for (const part of raw.split('+').map((p) => p.trim()).filter(Boolean)) {
+      const mod = KEYBIND_MOD_ORDER.find((m) => m.toLowerCase() === part.toLowerCase());
+      if (mod) mods.add(mod); else key = part.length === 1 ? part.toUpperCase() : part;
+    }
+    return key ? [...KEYBIND_MOD_ORDER.filter((m) => mods.has(m)), key].join('+') : null;
+  }
+  function resolveKeybindings(overrides) {
+    const known = new Set(DEFAULT_KEYBINDINGS.map((k) => k.id));
+    const out = {};
+    for (const { id, chord } of DEFAULT_KEYBINDINGS) out[id] = normalizeChord(chord);
+    for (const [id, chord] of Object.entries(overrides || {})) if (known.has(id)) out[id] = chord === null ? null : normalizeChord(chord);
+    return out;
+  }
+  function findKeybindingConflicts(resolved) {
+    const byChord = new Map();
+    for (const [id, chord] of Object.entries(resolved)) {
+      if (!chord) continue;
+      if (!byChord.has(chord)) byChord.set(chord, []);
+      byChord.get(chord).push(id);
+    }
+    return [...byChord.entries()].filter(([, ids]) => ids.length > 1).map(([chord, ids]) => ({ chord, ids }));
+  }
+  /** Builds the same chord string normalizeChord() produces, from a live KeyboardEvent. */
+  function chordFromEvent(e) {
+    const mods = [];
+    if (IS_MAC ? e.metaKey : e.ctrlKey) mods.push('Mod');
+    if (IS_MAC && e.ctrlKey) mods.push('Ctrl'); // on mac, literal Ctrl is distinct from Cmd/Mod
+    if (e.shiftKey) mods.push('Shift');
+    if (e.altKey) mods.push('Alt');
+    const key = e.key.length === 1 ? e.key.toUpperCase() : e.key;
+    if (['Control', 'Meta', 'Shift', 'Alt'].includes(key)) return null; // a bare modifier is not a chord
+    return [...mods, key].join('+');
+  }
+  const resolvedKeymap = () => resolveKeybindings((state.project && state.project.config && state.project.config.keybindings) || {});
+  /** command id -> display chord, for the hint shown in the command palette and the Keyboard settings tab. */
+  const chordLabel = (chord) => (chord || '').replace('Mod', MOD);
   const THEME_META = {
     system: { label: 'System', icon: 'settings' },
     light: { label: 'Light', icon: 'sun' },
@@ -350,7 +401,7 @@
     editor2 = monaco.editor.create($('#editor2'), { ...common, model: null });
     $('#editor2-close').addEventListener('click', closeSplit);
     monaco.editor.onDidChangeMarkers((uris) => { for (const u of uris) if (u.scheme === 'file') applyErrorLens(u.path.slice(1)); });
-    editor.addAction({ id: 'bazinga.localHistory', label: 'Local history of this file…', contextMenuGroupId: 'navigation', contextMenuOrder: 9, run: () => { const t = activeTab(); if (t && t.kind === 'file') openLocalHistory(t.rel); } });
+    editor.addAction({ id: 'bazinga.localHistory', label: 'Local history of this file…', contextMenuGroupId: 'navigation', contextMenuOrder: 9, run: () => { const t = activeTab(); if (t && t.kind === 'file') openLocalHistory(t.rel, t.root); } });
     // one provider registered against every language Monaco knows at startup, not re-registered per snippet
     // change - it reads snippetsCache live, so editing .ide/snippets.yaml (or saving a selection) just works.
     monaco.languages.registerCompletionItemProvider(monaco.languages.getLanguages().map((l) => l.id), {
@@ -398,15 +449,18 @@
   const fileUri = (rel) => monaco.Uri.from({ scheme: 'file', path: `/${rel}` });
   const headUri = (rel) => monaco.Uri.from({ scheme: 'head', path: `/${rel}` });
 
-  async function ensureModel(rel) {
+  // `root` names which open workspace folder `rel` is relative to - defaults to the primary one, since most jump-to
+  // callers (bookmarks, breadcrumbs, outline, LSP go-to-definition) don't thread a root through yet. Known limitation:
+  // if two open folders both have a file at this same relative path, opening either reuses the same cached model/tab.
+  async function ensureModel(rel, root = state.project && state.project.root) {
     let m = state.models.get(rel);
     if (m) return m;
-    const res = await api.fs.read(rel);
+    const res = await api.fs.read(root, rel);
     if (res.binary) return { unsupported: 'Binary file' };
     if (res.tooLarge) return { unsupported: 'File is larger than 2 MB' };
     const text = res.content || '';
     const model = monaco.editor.createModel(text, undefined, fileUri(rel));
-    m = { rel, model, saved: text, dirty: false };
+    m = { rel, root, model, saved: text, dirty: false };
     let bcTimer = null;
     model.onDidChangeContent(() => {
       const dirty = norm(model.getValue()) !== norm(m.saved);
@@ -710,25 +764,25 @@
     scheduleSessionSave();
   }
 
-  async function openFile(rel, line, column) {
+  async function openFile(rel, line, column, root = state.project && state.project.root) {
     const id = `file:${rel}`;
     if (!state.tabs.some((t) => t.id === id)) {
-      const m = await ensureModel(rel);
+      const m = await ensureModel(rel, root);
       if (m.unsupported) { setStatus(`${rel}: ${m.unsupported}`); return false; }
-      state.tabs.push({ id, kind: 'file', rel });
+      state.tabs.push({ id, kind: 'file', rel, root });
     }
     await activateTab(id, { line, column });
     return true;
   }
 
-  async function openDiff(rel) {
+  async function openDiff(rel, root = state.project && state.project.root) {
     const id = `diff:${rel}`;
     if (!state.tabs.some((t) => t.id === id)) {
-      const m = await ensureModel(rel);
+      const m = await ensureModel(rel, root);
       if (m.unsupported) { setStatus(`${rel}: ${m.unsupported}`); return false; }
-      const originalText = await api.git.head(rel);
+      const originalText = await api.git.head(root, rel);
       const original = monaco.editor.createModel(originalText, undefined, headUri(rel));
-      state.tabs.push({ id, kind: 'diff', rel, original, originalText });
+      state.tabs.push({ id, kind: 'diff', rel, root, original, originalText });
     }
     await activateTab(id);
     return true;
@@ -758,10 +812,10 @@
     } else { renderTabs(); scheduleSessionSave(); }
   }
 
-  async function closeTabsFor(rel) {
+  async function closeTabsFor(rel, root = state.project && state.project.root) {
     const m = state.models.get(rel);
     if (m) m.dirty = false; // the caller already decided to discard edits
-    for (const t of state.tabs.filter((x) => x.rel === rel)) await closeTab(t.id);
+    for (const t of state.tabs.filter((x) => x.rel === rel && (x.root || root) === root)) await closeTab(t.id);
   }
 
   async function saveActive() {
@@ -769,7 +823,7 @@
     const m = tab && state.models.get(tab.rel);
     if (!m) return;
     const value = m.model.getValue();
-    await api.fs.write(tab.rel, value);
+    await api.fs.write(m.root, tab.rel, value);
     m.saved = value;
     m.dirty = false;
     renderTabs();
@@ -782,7 +836,7 @@
     for (const m of [...state.models.values()]) {
       if (m.dirty) continue;
       try {
-        const res = await api.fs.read(m.rel);
+        const res = await api.fs.read(m.root, m.rel);
         if (!res || res.error || res.missing || res.binary || res.tooLarge) continue;
         const text = res.content || '';
         if (norm(text) !== norm(m.saved)) { m.saved = text; m.model.setValue(text); }
@@ -791,7 +845,7 @@
     for (const t of state.tabs) {
       if (t.kind !== 'diff' || t.ro) continue;
       try {
-        const head = await api.git.head(t.rel);
+        const head = await api.git.head(t.root, t.rel);
         if (head !== t.originalText) { t.originalText = head; t.original.setValue(head); }
       } catch { /* next time */ }
     }
@@ -807,7 +861,7 @@
     $('#d-info').textContent = tab.ro ? `${tab.title || ''} · ${n} change${n === 1 ? '' : 's'}` : n ? `${n} change${n === 1 ? '' : 's'}` : 'no differences';
     $('#d-comment').disabled = !!tab.ro;
     if (tab.ro) return;
-    const c = state.changes.find((x) => x.path === tab.rel);
+    const c = state.changes.find((x) => x.path === tab.rel && x.root === tab.root);
     setLabel($('#d-stage'), c && c.staged && !c.unstaged ? 'Unstage file' : 'Stage file', c && c.staged && !c.unstaged ? 'minus' : 'plus');
     const rv = $('#d-reviewed');
     rv.disabled = !taskHash(tab.rel);
@@ -984,7 +1038,7 @@
     const m = state.models.get(tab.rel);
     if (m && m.dirty) { setStatus(`Save the file first (${MOD}+S): staging works on what is on disk.`); return false; }
     const line = diffEditor.getModifiedEditor().getPosition().lineNumber;
-    const res = unstage ? await api.git.unstageHunk(tab.rel, line) : await api.git.stageHunk(tab.rel, line);
+    const res = unstage ? await api.git.unstageHunk(tab.root, tab.rel, line) : await api.git.stageHunk(tab.root, tab.rel, line);
     if (res.error) { setStatus(res.error); return false; }
     await refreshChanges();
     const r = res.result || {};
@@ -992,20 +1046,20 @@
     return true;
   }
 
-  async function toggleStage(rel) {
-    const c = state.changes.find((x) => x.path === rel);
-    const res = c && c.staged && !c.unstaged ? await api.git.unstage([rel]) : await api.git.stage([rel]);
+  async function toggleStage(rel, root = state.project && state.project.root) {
+    const c = state.changes.find((x) => x.path === rel && x.root === root);
+    const res = c && c.staged && !c.unstaged ? await api.git.unstage(root, [rel]) : await api.git.stage(root, [rel]);
     if (res.error) setStatus(res.error);
     await refreshChanges();
   }
 
-  async function revertWholeFile(rel) {
-    const c = state.changes.find((x) => x.path === rel);
+  async function revertWholeFile(rel, root = state.project && state.project.root) {
+    const c = state.changes.find((x) => x.path === rel && x.root === root);
     const what = c && c.status === '?' ? 'delete this new file' : 'throw away ALL changes to this file';
     if (!window.confirm(`Really ${what}?\n\n${rel}\n\nThis cannot be undone (unless you made a checkpoint).`)) return;
-    const res = await api.git.revert(rel);
+    const res = await api.git.revert(root, rel);
     if (res.error) { setStatus(res.error); return; }
-    await closeTabsFor(rel);
+    await closeTabsFor(rel, root);
     await refreshChanges();
     setStatus(`Reverted ${rel}`);
   }
@@ -1241,7 +1295,7 @@
       const locs = res && !res.error && Array.isArray(res.result) ? res.result : null;
       if (!locs) { window.alert('The language server did not answer. Searching by name instead.'); setSideTab('search'); $('#q').value = name; runSearch(); return; }
       const texts = new Map();
-      for (const l of locs.slice(0, 60)) if (!texts.has(l.rel)) { try { texts.set(l.rel, (await api.fs.read(l.rel)).content.split('\n')); } catch { texts.set(l.rel, []); } }
+      for (const l of locs.slice(0, 60)) if (!texts.has(l.rel)) { try { texts.set(l.rel, (await api.fs.read(state.project.root, l.rel)).content.split('\n')); } catch { texts.set(l.rel, []); } }
       const close = () => $('#modal').classList.add('hidden');
       $('#dialog').replaceChildren(el('h3', { text: `Usages of ${name} (${locs.length})` }),
         el('div', { class: 'lh-list' }, ...(locs.length ? locs.slice(0, 200).map((l) => {
@@ -1286,7 +1340,8 @@
           if (n <= 3) setTimeout(() => lensRetryEmitter.fire(), 400 * n);
         };
         let res;
-        try { res = await api.symbols.info(rel, model.getValue(), { dirty: !!(m && m.dirty) }); } catch (err) { console.error(`symbol lenses: ${rel}`, err); log(`threw: ${err && err.message}`); retry(); return none; }
+        const lensRoot = (m && m.root) || state.project.root;
+        try { res = await api.symbols.info(lensRoot, rel, model.getValue(), { dirty: !!(m && m.dirty) }); } catch (err) { console.error(`symbol lenses: ${rel}`, err); log(`threw: ${err && err.message}`); retry(); return none; }
         if (!res || res.error) { console.error(`symbol lenses: ${rel}: ${(res && res.error) || 'no result'}`); log(`error: ${(res && res.error) || 'no result'}`); retry(); return none; }
         lensRetries.delete(rel);
         const lenses = [];
@@ -1478,30 +1533,30 @@
 
   // local history: every saved or externally changed version of a file, kept outside the project
   const fmtSize = (n) => (n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} KB`);
-  async function openLocalDiff(rel, entry) {
+  async function openLocalDiff(rel, entry, root = state.project && state.project.root) {
     const id = `lh:${rel}:${entry.id}`;
     if (!state.tabs.some((t) => t.id === id)) {
-      const old = await api.localHistory.read(rel, entry.id);
+      const old = await api.localHistory.read(root, rel, entry.id);
       if (old.error) { setStatus(old.error); return; }
-      const cur = await api.fs.read(rel);
+      const cur = await api.fs.read(root, rel);
       const mk = (scheme, text) => monaco.editor.createModel(text, undefined, monaco.Uri.from({ scheme, path: `/${entry.id}/${rel}` }));
-      state.tabs.push({ id, kind: 'diff', ro: true, rel, title: `${rel.split('/').pop()} @ ${ago(entry.time / 1000)}`, original: mk('lh-a', old.content), modified: mk('lh-b', cur.content || '') });
+      state.tabs.push({ id, kind: 'diff', ro: true, rel, root, title: `${rel.split('/').pop()} @ ${ago(entry.time / 1000)}`, original: mk('lh-a', old.content), modified: mk('lh-b', cur.content || '') });
     }
     await activateTab(id);
   }
 
-  async function openLocalHistory(rel) {
+  async function openLocalHistory(rel, root = state.project && state.project.root) {
     if (!rel) { setStatus('Open a file first.'); return; }
     const close = () => $('#modal').classList.add('hidden');
-    const res = await api.localHistory.list(rel);
+    const res = await api.localHistory.list(root, rel);
     const entries = res.entries || [];
     const rows = entries.map((e, i) => el('div', { class: 'lh-row' },
       el('span', { class: 'lh-when', title: new Date(e.time).toLocaleString(), text: ago(e.time / 1000) }),
       el('span', { class: 'lh-label muted', text: `${e.label || 'version'} · ${fmtSize(e.size)}${i === 0 ? ' · newest' : ''}` }),
       el('span', { class: 'lh-acts' },
-        el('button', { title: 'Compare this version with the file as it is now', onclick: async () => { close(); await openLocalDiff(rel, e); } }, ic('git-compare'), 'Compare'),
+        el('button', { title: 'Compare this version with the file as it is now', onclick: async () => { close(); await openLocalDiff(rel, e, root); } }, ic('git-compare'), 'Compare'),
         el('button', { title: 'Put this version back (the current content is kept in the history first)', onclick: async () => {
-          const r = await api.localHistory.restore(rel, e.id);
+          const r = await api.localHistory.restore(root, rel, e.id);
           if (r.error) { setStatus(r.error); return; }
           close(); await reloadFromDisk(); await refreshChanges(); setStatus(`Restored ${rel} to the version from ${ago(e.time / 1000)}.`);
         } }, ic('undo-2'), 'Restore'))));
@@ -1607,133 +1662,161 @@
   }
   // New file/folder, rename, duplicate, delete: every tab open under `rel` (or exactly `rel` for a file) is closed
   // first, since the path it points at is about to disappear or move.
-  async function closeTabsUnder(rel, isDir) {
+  async function closeTabsUnder(root, rel, isDir) {
     const rels = isDir
-      ? [...new Set(state.tabs.filter((t) => t.rel === rel || t.rel.startsWith(`${rel}/`)).map((t) => t.rel))]
+      ? [...new Set(state.tabs.filter((t) => t.root === root && (t.rel === rel || t.rel.startsWith(`${rel}/`))).map((t) => t.rel))]
       : [rel];
-    for (const r of rels) await closeTabsFor(r);
+    for (const r of rels) await closeTabsFor(r, root);
   }
-  async function createEntry(parentRel, isDir) {
+  async function createEntry(root, parentRel, isDir) {
     const name = window.prompt(`Name of the new ${isDir ? 'folder' : 'file'}${parentRel ? ` (in ${parentRel})` : ''}:`, '');
     if (!name) return;
     const rel = parentRel ? `${parentRel}/${name}` : name;
-    const res = await api.fs.create(rel, { dir: isDir });
+    const res = await api.fs.create(root, rel, { dir: isDir });
     if (res.error) { setStatus(res.error); return; }
     if (parentRel) state.expanded.add(parentRel);
     state.quick.stale = true;
     await renderTree();
-    if (!isDir) openFile(rel);
+    if (!isDir) openFile(rel, undefined, undefined, root);
     setStatus(`Created ${rel}.`);
   }
-  async function renameEntry(rel, isDir) {
+  async function renameEntry(root, rel, isDir) {
     const base = rel.split('/').pop();
     const name = window.prompt(`Rename "${base}" to:`, base);
     if (!name || name === base) return;
     const parent = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
     const toRel = parent ? `${parent}/${name}` : name;
-    const wasOpen = !isDir && state.tabs.some((t) => t.rel === rel && t.kind === 'file');
-    const res = await api.fs.rename(rel, toRel);
+    const wasOpen = !isDir && state.tabs.some((t) => t.rel === rel && t.root === root && t.kind === 'file');
+    const res = await api.fs.rename(root, rel, toRel);
     if (res.error) { setStatus(res.error); return; }
-    await closeTabsUnder(rel, isDir);
+    await closeTabsUnder(root, rel, isDir);
     state.quick.stale = true;
     await renderTree();
-    if (wasOpen) await openFile(toRel);
+    if (wasOpen) await openFile(toRel, undefined, undefined, root);
     setStatus(`Renamed to ${toRel}.`);
   }
-  async function duplicateEntry(rel) {
-    const res = await api.fs.duplicate(rel);
+  async function duplicateEntry(root, rel) {
+    const res = await api.fs.duplicate(root, rel);
     if (res.error) { setStatus(res.error); return; }
     state.quick.stale = true;
     await renderTree();
     setStatus(`Duplicated as ${res.rel}.`);
   }
-  async function deleteEntry(rel, isDir) {
+  async function deleteEntry(root, rel, isDir) {
     if (!window.confirm(`Delete "${rel}"?\n\n${isDir ? 'This deletes the folder and everything inside it. ' : ''}A local-history snapshot is kept first, so this can be undone from there.`)) return;
-    const res = await api.fs.delete(rel);
+    const res = await api.fs.delete(root, rel);
     if (res.error) { setStatus(res.error); return; }
-    await closeTabsUnder(rel, isDir);
+    await closeTabsUnder(root, rel, isDir);
     state.quick.stale = true;
     await renderTree();
     setStatus(`Deleted ${rel}.`);
   }
-  function rowMenu(ev, rel, isDir) {
+  function rowMenu(ev, root, rel, isDir) {
     ev.preventDefault();
+    const primary = root === state.project.root; // folder roles (.ide/config.json + AGENTS.md) stay primary-root only for now
     const items = [];
     if (isDir) {
-      const cur = folderRoleOf(rel);
+      const cur = primary && folderRoleOf(rel);
       const own = cur && cur.exact ? cur.role : null;
       items.push(
-        { label: 'New file…', onclick: () => createEntry(rel, false) },
-        { label: 'New folder…', onclick: () => createEntry(rel, true) },
+        { label: 'New file…', onclick: () => createEntry(root, rel, false) },
+        { label: 'New folder…', onclick: () => createEntry(root, rel, true) },
         { label: 'New HTTP request…', onclick: () => openRestTab() },
         '-',
-        { label: 'Mark as source folder', checked: own === 'source', onclick: () => markFolder(rel, 'source') },
-        { label: 'Mark as test folder', checked: own === 'tests', onclick: () => markFolder(rel, 'tests') },
-        { label: 'Clear mark', disabled: !own, onclick: () => markFolder(rel, null) },
-        '-',
-        { label: 'Detect source and test folders', onclick: detectFolders },
+        ...(primary ? [
+          { label: 'Mark as source folder', checked: own === 'source', onclick: () => markFolder(rel, 'source') },
+          { label: 'Mark as test folder', checked: own === 'tests', onclick: () => markFolder(rel, 'tests') },
+          { label: 'Clear mark', disabled: !own, onclick: () => markFolder(rel, null) },
+          '-',
+          { label: 'Detect source and test folders', onclick: detectFolders },
+        ] : []),
       );
     }
-    if (rel && !isDir) items.push('-', { label: 'Open to the side', onclick: () => openInSplit(rel) });
+    if (rel && !isDir) items.push('-', { label: 'Open to the side', onclick: () => openInSplit(rel, root) });
     if (rel) {
       items.push('-',
-        { label: 'Rename…', onclick: () => renameEntry(rel, isDir) },
-        { label: 'Duplicate', onclick: () => duplicateEntry(rel) },
+        { label: 'Rename…', onclick: () => renameEntry(root, rel, isDir) },
+        { label: 'Duplicate', onclick: () => duplicateEntry(root, rel) },
         { label: 'Copy relative path', onclick: () => api.copy(rel) },
         '-',
-        { label: 'Delete', onclick: () => deleteEntry(rel, isDir) });
+        { label: 'Delete', onclick: () => deleteEntry(root, rel, isDir) });
     }
     popupMenu(ev.clientX, ev.clientY, items);
   }
 
-  async function renderDir(container, rel, depth) {
+  async function renderDir(container, root, rel, depth) {
     let entries;
-    try { entries = await api.fs.list(rel); } catch (e) { container.append(el('div', { class: 'empty', text: e.message })); return; }
+    try { entries = await api.fs.list(root, rel); } catch (e) { container.append(el('div', { class: 'empty', text: e.message })); return; }
     for (const e of entries) {
+      // expand/collapse state is keyed by plain rel (same as before multi-root existed): two roots sharing a
+      // same-named folder will share its expanded/collapsed state too - a cosmetic quirk, not a correctness issue.
       const open = e.dir && state.expanded.has(e.rel);
-      const row = el('div', { class: 'row', draggable: 'true', 'data-rel': e.rel, 'data-dir': e.dir ? '1' : '0', style: `padding-left:${8 + depth * 14}px`, title: e.rel },
+      const row = el('div', { class: 'row', draggable: 'true', 'data-root': root, 'data-rel': e.rel, 'data-dir': e.dir ? '1' : '0', style: `padding-left:${8 + depth * 14}px`, title: e.rel },
         e.dir ? ic(open ? 'chevron-down' : 'chevron-right', 'twisty') : el('span', { class: 'twisty' }),
         ic(e.dir ? (open ? 'folder-open' : 'folder') : fileIcon(e.name), e.dir ? 'ftype dir' : 'ftype'),
         el('span', { class: 'name', text: e.name }),
         el('span', { class: 'role' }),
         el('span', { class: 'tag' }));
-      row.addEventListener('contextmenu', (ev) => rowMenu(ev, e.rel, e.dir));
+      row.addEventListener('contextmenu', (ev) => rowMenu(ev, root, e.rel, e.dir));
       row.addEventListener('dragstart', (ev) => { ev.dataTransfer.setData('application/x-bazinga-path', e.rel); ev.dataTransfer.effectAllowed = 'copy'; });
       row.addEventListener('click', async () => {
-        if (e.dir) { if (open) state.expanded.delete(e.rel); else state.expanded.add(e.rel); await renderTree(); scheduleSessionSave(); } else openFile(e.rel);
+        if (e.dir) { if (open) state.expanded.delete(e.rel); else state.expanded.add(e.rel); await renderTree(); scheduleSessionSave(); } else openFile(e.rel, undefined, undefined, root);
       });
       container.append(row);
-      if (open) await renderDir(container, e.rel, depth + 1);
+      if (open) await renderDir(container, root, e.rel, depth + 1);
     }
   }
 
   async function renderTree() {
     const host = $('#side-files');
-    if (!state.project || !state.project.root) { host.replaceChildren(el('div', { class: 'empty', text: 'Open a project folder to begin.' })); return; }
+    const roots = (state.project && state.project.roots) || [];
+    if (!roots.length) { host.replaceChildren(el('div', { class: 'empty', text: 'Open a project folder to begin.' })); return; }
     const top = host.scrollTop;
     const fresh = el('div');
-    await renderDir(fresh, '', 0);
+    // one open folder: no header, same look as before multi-root existed. Several: one labeled, collapsible section each.
+    if (roots.length === 1) {
+      await renderDir(fresh, roots[0].root, '', 0);
+    } else {
+      for (const p of roots) {
+        const open = !state.collapsedRoots || !state.collapsedRoots.has(p.root);
+        const head = el('div', { class: 'row tree-root-head', 'data-root': p.root },
+          ic(open ? 'chevron-down' : 'chevron-right', 'twisty'),
+          ic('folder-open', 'ftype dir'),
+          el('span', { class: 'name', text: p.root === state.project.root ? `${p.name} (primary)` : p.name }));
+        head.addEventListener('click', () => {
+          state.collapsedRoots = state.collapsedRoots || new Set();
+          if (state.collapsedRoots.has(p.root)) state.collapsedRoots.delete(p.root); else state.collapsedRoots.add(p.root);
+          renderTree(); scheduleSessionSave();
+        });
+        head.addEventListener('contextmenu', (ev) => { ev.preventDefault(); popupMenu(ev.clientX, ev.clientY, [{ label: 'Remove folder from workspace', onclick: () => removeWorkspaceFolder(p.root) }]); });
+        fresh.append(head);
+        if (open) await renderDir(fresh, p.root, '', 1);
+      }
+    }
     host.replaceChildren(fresh);
     host.scrollTop = top;
     decorateTree();
   }
 
   function decorateTree() {
-    const byPath = new Map(state.changes.map((c) => [c.path, c.status]));
     for (const row of document.querySelectorAll('#side-files .row')) {
       const rel = row.dataset.rel;
+      if (rel === undefined) continue; // a root-head row (section header for a workspace folder), not a file/dir row
+      const root = row.dataset.root || (state.project && state.project.root);
+      const changesHere = state.changes.filter((c) => c.root === root);
+      const byPath = new Map(changesHere.map((c) => [c.path, c.status]));
       const tag = $('.tag', row);
       tag.className = 'tag';
       tag.textContent = '';
       const badge = $('.role', row);
-      const fr = folderRoleOf(rel);
+      const fr = root === state.project.root && folderRoleOf(rel);
       if (badge) {
         badge.className = 'role'; badge.textContent = '';
         if (fr && fr.exact && row.dataset.dir === '1') { badge.textContent = FOLDER_ROLES[fr.role].short; badge.classList.add(`role-${fr.role}`); }
       }
       row.title = fr ? `${rel}${fr.exact ? ` — marked as a ${FOLDER_ROLES[fr.role].label}` : ` — inside the ${FOLDER_ROLES[fr.role].label} ${fr.folder}`}` : rel;
       if (row.dataset.dir === '1') {
-        if (state.changes.some((c) => c.path.startsWith(`${rel}/`))) { tag.textContent = '●'; tag.classList.add('st-M'); }
+        if (changesHere.some((c) => c.path.startsWith(`${rel}/`))) { tag.textContent = '●'; tag.classList.add('st-M'); }
       } else if (byPath.has(rel)) {
         const s = byPath.get(rel);
         tag.textContent = s === '?' ? 'U' : s;
@@ -1771,7 +1854,7 @@
         el('div', { id: 't-sum', class: 'muted' })),
       el('div', { class: 'c-head' },
         el('div', { class: 'line' },
-          el('button', { onclick: async () => { const r = await api.git.stageAll(); if (r.error) setStatus(r.error); refreshChanges(); } }, ic('plus'), 'Stage all'),
+          el('button', { onclick: async () => { for (const root of new Set(state.changes.map((c) => c.root))) { const r = await api.git.stageAll(root); if (r.error) { setStatus(r.error); break; } } refreshChanges(); } }, ic('plus'), 'Stage all'),
           el('button', { title: 'Save a snapshot of the whole working tree (including new files) that you can restore later', onclick: () => makeCheckpoint('manual') }, ic('archive'), 'Checkpoint')),
         el('div', { class: 'line' }, msg, el('button', { class: 'primary', onclick: doCommit }, ic('git-commit-horizontal'), 'Commit'))),
       el('div', { id: 'c-files' }),
@@ -1844,23 +1927,36 @@
       const sc = state.scope;
       const inTask = new Set(sc ? sc.files.map((f) => f.path) : state.changes.map((c) => c.path));
       const rank = (c) => { if (!inTask.has(c.path)) return 3; if (hasWarn(c.path)) return 0; return isReviewed(c.path) ? 2 : 1; };
-      const rows = [...state.changes].sort((a, b) => rank(a) - rank(b) || a.path.localeCompare(b.path));
-      files.replaceChildren(...rows.map((c) => {
+      const rootsWithChanges = [...new Set(state.changes.map((c) => c.root))];
+      const groupHeader = (root) => el('div', { class: 'c-title', text: root === state.project.root ? `${rootName(root)} (primary)` : rootName(root) });
+      const row = (c) => {
         const flags = (sc && sc.flags[c.path]) || [];
         const reviewed = isReviewed(c.path);
         const box = el('input', { type: 'checkbox', class: 'rev', title: inTask.has(c.path) ? 'Mark as reviewed (resets if the file changes again)' : 'Changed before the task started' });
         box.checked = reviewed; box.disabled = !inTask.has(c.path);
         box.addEventListener('click', (e) => e.stopPropagation());
         box.addEventListener('change', () => setReviewed(c.path, box.checked));
-        return el('div', { class: `row${c.staged ? ' staged' : ''}${inTask.has(c.path) ? '' : ' pre'}${reviewed ? ' reviewed' : ''}`, title: c.path, onclick: () => openDiff(c.path) },
+        return el('div', { class: `row${c.staged ? ' staged' : ''}${inTask.has(c.path) ? '' : ' pre'}${reviewed ? ' reviewed' : ''}`, title: c.path, onclick: () => openDiff(c.path, c.root) },
           box,
           el('span', { class: `tag st-${c.status}`, text: c.status === '?' ? 'U' : c.status }),
           el('span', { class: 'name', text: c.path }),
           ...flags.map((f) => el('span', { class: `flag ${f.level}`, title: f.text, text: f.kind === 'scope' ? 'scope' : f.kind === 'test' ? 'test' : 'unlisted' })),
           el('span', { class: 'acts' },
-            el('button', { class: 'icon', title: c.staged && !c.unstaged ? 'Unstage' : 'Stage', onclick: (e) => { e.stopPropagation(); toggleStage(c.path); } }, ic(c.staged && !c.unstaged ? 'minus' : 'plus')),
-            el('button', { class: 'icon', title: 'Revert this file', onclick: (e) => { e.stopPropagation(); revertWholeFile(c.path); } }, ic('undo-2'))));
-      }));
+            el('button', { class: 'icon', title: c.staged && !c.unstaged ? 'Unstage' : 'Stage', onclick: (e) => { e.stopPropagation(); toggleStage(c.path, c.root); } }, ic(c.staged && !c.unstaged ? 'minus' : 'plus')),
+            el('button', { class: 'icon', title: 'Revert this file', onclick: (e) => { e.stopPropagation(); revertWholeFile(c.path, c.root); } }, ic('undo-2'))));
+      };
+      // one open folder: no header noise, same look as before multi-root existed. Several: one group per folder.
+      if (rootsWithChanges.length <= 1) {
+        const rows = [...state.changes].sort((a, b) => rank(a) - rank(b) || a.path.localeCompare(b.path));
+        files.replaceChildren(...rows.map(row));
+      } else {
+        const nodes = [];
+        for (const root of rootsWithChanges) {
+          const rows = state.changes.filter((c) => c.root === root).sort((a, b) => rank(a) - rank(b) || a.path.localeCompare(b.path));
+          nodes.push(groupHeader(root), ...rows.map(row));
+        }
+        files.replaceChildren(...nodes);
+      }
     }
     renderScopeSummary();
     const cps = $('#c-cps');
@@ -1879,7 +1975,13 @@
   }
 
   async function refreshChanges() {
-    try { const list = await api.git.changes(); if (Array.isArray(list)) state.changes = list; /* null: git failed just now, keep what we had */ } catch { /* keep the previous list */ }
+    try {
+      const res = await api.git.changes();
+      // a root named in failedRoots had git fail just now (index busy, mid-operation): keep its old entries
+      // instead of wiping that one folder's section to "no changes" while every other root updates normally.
+      const keep = res && res.failedRoots && res.failedRoots.length ? state.changes.filter((c) => res.failedRoots.includes(c.root)) : [];
+      if (res && Array.isArray(res.files)) state.changes = [...res.files, ...keep];
+    } catch { /* keep the previous list */ }
     try { await refreshScope(); } catch { state.scope = null; }
     renderChanges();
   }
@@ -1917,14 +2019,19 @@
     const un = unreviewedCount();
     const warn = state.scope ? state.scope.warnings : 0;
     if ((un || warn) && !window.confirm(`${un} changed file${un === 1 ? ' is' : 's are'} not marked reviewed and ${warn} ${warn === 1 ? 'has a warning' : 'have warnings'} (scope, edited tests, agent summary).\n\nCommit anyway?`)) return;
-    if (!state.changes.some((c) => c.staged)) {
+    // one open folder might be mid-review while another's fully staged: commit every root that has something
+    // staged, with the same message, same as committing once per repo in a multi-repo source-control view.
+    let targets = [...new Set(state.changes.filter((c) => c.staged).map((c) => c.root))];
+    if (!targets.length) {
       if (!state.changes.length) { setStatus('Nothing to commit.'); return; }
       if (!window.confirm('Nothing is staged. Stage all changes and commit?')) return;
-      const r = await api.git.stageAll();
-      if (r.error) { setStatus(r.error); return; }
+      targets = [...new Set(state.changes.map((c) => c.root))];
+      for (const root of targets) { const r = await api.git.stageAll(root); if (r.error) { setStatus(r.error); return; } }
     }
-    const res = await api.git.commit(msg);
-    if (res.error) { window.alert(`Commit failed:\n\n${res.error}`); await refreshChanges(); return; }
+    for (const root of targets) {
+      const res = await api.git.commit(root, msg);
+      if (res.error) { window.alert(`Commit failed (${root}):\n\n${res.error}`); await refreshChanges(); return; }
+    }
     state.commitMsg = '';
     $('#commit-msg').value = '';
     setStatus(`Committed: ${msg}`);
@@ -2024,14 +2131,16 @@
     if (query !== $('#q').value) return; // a newer search is running
     if (res.error) { meta.textContent = res.error; box.replaceChildren(); return; }
     const hits = res.results || [];
-    const fileCount = new Set(hits.map((h) => h.file)).size;
+    const fileCount = new Set(hits.map((h) => `${h.root}:${h.file}`)).size;
     meta.textContent = `${hits.length}${res.truncated ? '+' : ''} result${hits.length === 1 ? '' : 's'} in ${fileCount} file${fileCount === 1 ? '' : 's'} (${res.engine})`;
+    const multiRoot = new Set(hits.map((h) => h.root)).size > 1;
     const nodes = [];
-    let lastFile;
+    let lastFile; let lastRoot;
     for (const h of hits.slice(0, 600)) {
+      if (multiRoot && h.root !== lastRoot) { nodes.push(el('div', { class: 'c-title', text: rootName(h.root) })); lastRoot = h.root; lastFile = null; }
       if (h.file !== lastFile) { nodes.push(el('div', { class: 's-file', text: h.file })); lastFile = h.file; }
       nodes.push(el('div', { class: 's-hit', title: `${h.file}:${h.line}`, onclick: async () => {
-        if (await openFile(h.file, h.line, h.column) && !state.search.regex) {
+        if (await openFile(h.file, h.line, h.column, h.root) && !state.search.regex) {
           const m = state.models.get(h.file);
           if (m && editor.getModel() === m.model) editor.setSelection(new monaco.Range(h.line, h.column, h.line, h.column + query.length));
         }
@@ -2106,11 +2215,12 @@
     const q = $('#qo-input').value.trim();
     if (state.quick.mode === 'symbols') {
       const all = state.quick.symbols || [];
+      const multiRootSym = (state.project && state.project.roots || []).length > 1;
       const items = (q ? all.map((s) => ({ s, sc: fuzzy(q, s.name) })).filter((x) => x.sc >= 0).sort((a, b) => b.sc - a.sc).map((x) => x.s) : all).slice(0, 60);
       state.quick.items = items;
       state.quick.sel = Math.min(state.quick.sel, Math.max(items.length - 1, 0));
       $('#qo-list').replaceChildren(...(items.length ? items.map((s, i) => el('div', { class: `qo-row${i === state.quick.sel ? ' sel' : ''}`, title: `${MOD}+click: open to the side`, onclick: (e) => pickQuick(i, e) },
-        ic(SYMBOL_ICON[s.kind] || 'square-function', 'qo-ico'), el('span', { text: s.name }), el('span', { class: 'dir', text: `${s.rel}:${s.line}` })))
+        ic(SYMBOL_ICON[s.kind] || 'square-function', 'qo-ico'), el('span', { text: s.name }), el('span', { class: 'dir', text: `${multiRootSym ? rootName(s.root) + ' · ' : ''}${s.rel}:${s.line}` })))
         : [el('div', { class: 'qo-row muted', text: q ? 'No symbols match.' : 'No symbols indexed (nothing parseable, or an empty project).' })]));
       const selSym = $('#qo-list .sel');
       if (selSym) selSym.scrollIntoView({ block: 'nearest' });
@@ -2122,24 +2232,29 @@
       state.quick.items = items;
       state.quick.sel = Math.min(state.quick.sel, Math.max(items.length - 1, 0));
       $('#qo-list').replaceChildren(...items.map((c, i) => el('div', { class: `qo-row${i === state.quick.sel ? ' sel' : ''}`, onclick: () => pickQuick(i) },
-        ic(c.icon, 'qo-ico'), el('span', { text: c.title }), el('span', { class: 'dir', text: c.keys ? c.keys.replace('Ctrl', MOD) : '' }))));
+        ic(c.icon, 'qo-ico'), el('span', { text: c.title }), el('span', { class: 'dir', text: c.keys || '' }))));
       const selc = $('#qo-list .sel');
       if (selc) selc.scrollIntoView({ block: 'nearest' });
       return;
     }
+    const multiRoot = (state.project && state.project.roots || []).length > 1;
     let items;
     if (!q) {
-      const open = state.tabs.filter((t) => t.kind === 'file').map((t) => t.rel);
-      items = [...new Set([...open, ...state.quick.files.slice(0, 40)])].slice(0, 40);
+      const open = state.tabs.filter((t) => t.kind === 'file').map((t) => ({ rel: t.rel, root: t.root }));
+      const all = [...state.quick.files];
+      const seen = new Set();
+      items = [...open, ...all].filter((it) => { const k = `${it.root}:${it.rel}`; if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 40);
     } else {
-      items = state.quick.files.map((f) => ({ f, s: fuzzy(q, f) })).filter((x) => x.s >= 0).sort((a, b) => b.s - a.s).slice(0, 40).map((x) => x.f);
+      items = state.quick.files.map((f) => ({ f, s: fuzzy(q, f.rel) })).filter((x) => x.s >= 0).sort((a, b) => b.s - a.s).slice(0, 40).map((x) => x.f);
     }
     state.quick.items = items;
     state.quick.sel = Math.min(state.quick.sel, Math.max(items.length - 1, 0));
-    $('#qo-list').replaceChildren(...items.map((f, i) => {
+    $('#qo-list').replaceChildren(...items.map((it, i) => {
+      const f = it.rel;
       const slash = f.lastIndexOf('/');
+      const dir = slash > 0 ? f.slice(0, slash) : '';
       return el('div', { class: `qo-row${i === state.quick.sel ? ' sel' : ''}`, title: `${MOD}+click: open to the side`, onclick: (e) => pickQuick(i, e) },
-        el('span', { text: f.slice(slash + 1) }), el('span', { class: 'dir', text: slash > 0 ? f.slice(0, slash) : '' }));
+        el('span', { text: f.slice(slash + 1) }), el('span', { class: 'dir', text: multiRoot ? `${rootName(it.root)}${dir ? ' · ' + dir : ''}` : dir }));
     }));
     const sel = $('#qo-list .sel');
     if (sel) sel.scrollIntoView({ block: 'nearest' });
@@ -2151,18 +2266,18 @@
     closeQuickOpen();
     if (state.quick.mode === 'commands') { f.run(); return; }
     const toSide = e && (IS_MAC ? e.metaKey : e.ctrlKey);
-    if (state.quick.mode === 'symbols') { if (toSide) openInSplit(f.rel); else openFile(f.rel, f.line); return; }
-    if (toSide) openInSplit(f); else openFile(f);
+    if (state.quick.mode === 'symbols') { if (toSide) openInSplit(f.rel, f.root); else openFile(f.rel, f.line, undefined, f.root); return; }
+    if (toSide) openInSplit(f.rel, f.root); else openFile(f.rel, undefined, undefined, f.root);
   }
 
   // ---------------------------------------------------------------- command palette (Ctrl+Shift+P)
   function commandList() {
     const tab = activeTab();
     const cmds = [
-      ['Go to file…', 'search', openQuickOpen, 'Ctrl+P'],
-      ['Go to symbol in workspace…', 'square-function', openGotoSymbol, 'Ctrl+T'],
+      ['Go to file…', 'search', openQuickOpen, 'goToFile'],
+      ['Go to symbol in workspace…', 'square-function', openGotoSymbol, 'goToSymbol'],
       ['Open project folder…', 'folder-open', () => $('#btn-open').click()],
-      ['New terminal', 'square-terminal', () => newTerminal({ title: 'Terminal' }), 'Ctrl+`'],
+      ['New terminal', 'square-terminal', () => newTerminal({ title: 'Terminal' }), 'newTerminal'],
       ['New agent run…', 'bot', openRunDialog],
       ['Run fast checks', 'play', () => runChecks('fast')],
       ['Run all checks', 'fast-forward', () => runChecks('all')],
@@ -2170,7 +2285,7 @@
       [`Fix loop: turn ${$('#fixloop').checked ? 'off' : 'on'}`, 'repeat', () => { $('#fixloop').checked = !$('#fixloop').checked; $('#fixloop').dispatchEvent(new Event('change')); }],
       [`Auto checks: turn ${state.autoCheck ? 'off' : 'on'}`, 'check-check', () => { $('#auto').checked = !$('#auto').checked; $('#auto').dispatchEvent(new Event('change')); }],
       ['Show: Files', 'files', () => setSideTab('files')],
-      ['Show: Search in project', 'search', focusSearch, 'Ctrl+Shift+F'],
+      ['Show: Search in project', 'search', focusSearch, 'focusSearch'],
       ['Show: Agents', 'bot', () => setSideTab('agents')],
       ['Show: Changes', 'git-compare', () => setSideTab('changes')],
       ['Show: History (commit graph)', 'history', () => setSideTab('history')],
@@ -2208,9 +2323,9 @@
       ['Font size: larger', 'plus', () => changeFontSize(1)],
       ['Font size: smaller', 'minus', () => changeFontSize(-1)],
       ['Font size: reset', 'refresh-cw', () => changeFontSize(0)],
-      ['Save file', 'check', saveActive, 'Ctrl+S'],
+      ['Save file', 'check', saveActive, 'saveFile'],
       ['Refresh everything', 'refresh-cw', () => $('#btn-refresh').click()],
-      ['Local history of this file…', 'history', () => { const t = activeTab(); openLocalHistory(t && t.kind === 'file' ? t.rel : null); }],
+      ['Local history of this file…', 'history', () => { const t = activeTab(); openLocalHistory(t && t.kind === 'file' ? t.rel : null, t && t.root); }],
       ['Setup & health: what works, what needs fixing (Claude, local models, Docker, Jev…)', 'stethoscope', openDoctor],
       ['Welcome walkthrough: pick an agent and try a first run', 'sparkles', () => openWalkthrough(0)],
       ['Start a workflow (chained agent steps)…', 'workflow', openWorkflows],
@@ -2242,7 +2357,8 @@
       ['Capture: delete the captured files', 'bug', async () => { await api.capture.clear(); setStatus('Capture files deleted.'); }],
       ['Settings…', 'settings', openSettings],
     ];
-    return cmds.map(([title, icon, run, keys]) => ({ title, icon, run, keys }));
+    const km = resolvedKeymap();
+    return cmds.map(([title, icon, run, bindId]) => ({ title, icon, run, keys: bindId ? chordLabel(km[bindId]) : undefined }));
   }
 
   async function runTestAtCursor() {
@@ -2411,7 +2527,7 @@
     const m = state.models.get(rel);
     if (!m) return;
     let res;
-    try { res = await api.symbols.info(rel, m.model.getValue(), { dirty: m.dirty }); } catch { return; }
+    try { res = await api.symbols.info(m.root || state.project.root, rel, m.model.getValue(), { dirty: m.dirty }); } catch { return; }
     if (!res || res.error) return;
     breadcrumbSymbols.set(rel, res.symbols.map((s) => ({ name: s.name, kind: s.kind, line: s.line, endLine: s.endLine || s.line })));
     const t = activeTab();
@@ -2440,8 +2556,8 @@
     }
     return chain;
   }
-  async function pathSiblingItems(dirRel) {
-    let entries; try { entries = await api.fs.list(dirRel); } catch { return []; }
+  async function pathSiblingItems(dirRel, root = state.project && state.project.root) {
+    let entries; try { entries = await api.fs.list(root, dirRel); } catch { return []; }
     return (entries || []).map((e) => ({ label: e.name, icon: e.dir ? 'folder' : 'file', rel: e.rel, dir: !!e.dir }));
   }
   function renderBreadcrumbs() {
@@ -2455,8 +2571,8 @@
       const dirRel = parts.slice(0, i).join('/');
       const isFile = i === parts.length - 1;
       segs.push(el('span', { class: 'bc-seg', onclick: async (e) => {
-        const entries = await pathSiblingItems(dirRel);
-        if (entries.length > 1) popupMenu(e.clientX, e.clientY, entries.map((it) => ({ label: it.label, onclick: () => { if (!it.dir) openFile(it.rel); } })));
+        const entries = await pathSiblingItems(dirRel, t.root);
+        if (entries.length > 1) popupMenu(e.clientX, e.clientY, entries.map((it) => ({ label: it.label, onclick: () => { if (!it.dir) openFile(it.rel, undefined, undefined, t.root); } })));
       } }, ic(isFile ? 'file-code' : 'folder', 'bc-ico'), part));
     });
     const syms = breadcrumbSymbols.get(t.rel) || [];
@@ -2467,7 +2583,7 @@
       const atLevel = parent;
       segs.push(el('span', { class: 'bc-seg bc-sym', onclick: (e) => {
         const siblings = symbolChildren(syms, atLevel).sort((a, b) => a.line - b.line);
-        if (siblings.length > 1) popupMenu(e.clientX, e.clientY, siblings.map((sib) => ({ label: sib.name, onclick: () => openFile(t.rel, sib.line) })));
+        if (siblings.length > 1) popupMenu(e.clientX, e.clientY, siblings.map((sib) => ({ label: sib.name, onclick: () => openFile(t.rel, sib.line, undefined, t.root) })));
       } }, ic(SYMBOL_ICON[s.kind] || 'square-function', 'bc-ico'), s.name));
       parent = s;
     }
@@ -2496,8 +2612,8 @@
   }
 
   // ---------------------------------------------------------------- split pane (a second, plain Monaco view for side-by-side reference - not a second tab group; scoped-down v1)
-  async function openInSplit(rel) {
-    const m = await ensureModel(rel);
+  async function openInSplit(rel, root = state.project && state.project.root) {
+    const m = await ensureModel(rel, root);
     if (!m || m.unsupported) { setStatus(m && m.unsupported ? m.unsupported : `Could not open ${rel}`); return; }
     splitRel = rel;
     editor2.setModel(m.model);
@@ -2507,7 +2623,7 @@
   function splitRight() {
     const t = activeTab();
     if (!t || t.kind !== 'file') { setStatus('Open a file first.'); return; }
-    openInSplit(t.rel);
+    openInSplit(t.rel, t.root);
   }
   function closeSplit() {
     const rel = splitRel;
@@ -2948,10 +3064,12 @@
       head.append(el('span', { class: 'p-summary', text: `${state.todos.items.length} TODO/FIXME/HACK/XXX comment(s)${state.todos.truncated ? ' (truncated)' : ''}` }),
         el('span', { class: 'spacer' }),
         el('button', { title: 'Scan the project again', onclick: scanTodos }, ic('refresh-cw'), 'Refresh'));
-      let lastFile;
+      const multiRootTodo = new Set(state.todos.items.map((t) => t.root)).size > 1;
+      let lastFile; let lastTodoRoot;
       for (const t of state.todos.items) {
+        if (multiRootTodo && t.root !== lastTodoRoot) { body.append(el('div', { class: 'c-title', text: rootName(t.root) })); lastTodoRoot = t.root; lastFile = null; }
         if (t.file !== lastFile) { body.append(el('div', { class: 'p-file', text: t.file })); lastFile = t.file; }
-        body.append(el('div', { class: 'finding', onclick: () => openFile(t.file, t.line, t.column) },
+        body.append(el('div', { class: 'finding', onclick: () => openFile(t.file, t.line, t.column, t.root) },
           el('span', { class: `sev ${TODO_TAG_ICON[t.tag] || 'info'}`, title: t.tag }, ic(TODO_TAG_ICON[t.tag] === 'error' ? 'circle-alert' : TODO_TAG_ICON[t.tag] === 'warning' ? 'triangle-alert' : 'info')),
           el('span', { class: 'loc', text: `${t.line}` }),
           el('span', { text: `${t.tag}${t.text ? `: ${t.text}` : ''}` })));
@@ -3457,6 +3575,40 @@
     const lensSpring = el('input', { type: 'checkbox' }); lensSpring.checked = lensCur.spring !== false;
     const elOn = el('input', { type: 'checkbox' }); elOn.checked = (settings.errorLens || {}).enabled !== false;
     const minimapOnInput = el('input', { type: 'checkbox' }); minimapOnInput.checked = !!(settings.minimap || {}).enabled;
+    // Keyboard tab: working copy of the overrides, mutated as the user rebinds/resets, applied to next.keybindings
+    // on Save. Only entries that differ from the default are ever kept (null = explicitly unbound), same delta
+    // storage every other setting here uses.
+    const kbOverrides = { ...(settings.keybindings || {}) };
+    const kbDefault = (id) => (DEFAULT_KEYBINDINGS.find((k) => k.id === id) || {}).chord || null;
+    const kbRows = el('div', { class: 'kb-rows' });
+    const drawKeyboardRows = () => {
+      const resolved = resolveKeybindings(kbOverrides);
+      const conflicts = new Map(findKeybindingConflicts(resolved).flatMap((c) => c.ids.map((id) => [id, c.chord])));
+      kbRows.replaceChildren(...DEFAULT_KEYBINDINGS.map(({ id, title }) => {
+        const chord = resolved[id];
+        const isCustom = Object.prototype.hasOwnProperty.call(kbOverrides, id);
+        const btn = el('button', { class: 'kb-chord', title: 'Click, then press the new key combination' }, chord ? chordLabel(chord) : 'Not set');
+        btn.addEventListener('click', () => {
+          btn.textContent = 'Press a key…'; btn.classList.add('kb-listening');
+          const capture = (e) => {
+            e.preventDefault(); e.stopPropagation();
+            if (e.key === 'Escape') { drawKeyboardRows(); cleanup(); return; }
+            const next = chordFromEvent(e);
+            if (!next) return; // a bare modifier keydown - keep listening
+            if (next === kbDefault(id)) delete kbOverrides[id]; else kbOverrides[id] = next;
+            drawKeyboardRows();
+            cleanup();
+          };
+          const cleanup = () => document.removeEventListener('keydown', capture, true);
+          document.addEventListener('keydown', capture, true);
+        });
+        const resetBtn = isCustom ? el('button', { class: 'icon', title: 'Reset to default' }, ic('refresh-cw')) : null;
+        if (resetBtn) resetBtn.addEventListener('click', () => { delete kbOverrides[id]; drawKeyboardRows(); });
+        const conflictNote = conflicts.has(id) ? el('span', { class: 'kb-conflict', title: 'Another command uses the same keys' }, ic('triangle-alert'), ' Also used elsewhere') : null;
+        return el('div', { class: 'kb-row' }, el('span', { class: 'kb-title', text: title }), btn, resetBtn, conflictNote);
+      }));
+    };
+    drawKeyboardRows();
     const lspCur = settings.lsp || {};
     const lspOn = el('input', { type: 'checkbox' }); lspOn.checked = !!lspCur.enabled;
     const LSP_DEFAULTS = { java: 'jdtls', python: 'pyright-langserver', typescript: 'typescript-language-server', go: 'gopls', rust: 'rust-analyzer', csharp: 'csharp-ls' };
@@ -3533,6 +3685,7 @@
       } else delete next.oversight;
       next.errorLens = { enabled: elOn.checked };
       next.minimap = { enabled: minimapOnInput.checked };
+      next.keybindings = { ...kbOverrides };
       await api.settings.save(next);
       close();
       const keepAuto = state.autoCheck;
@@ -3694,6 +3847,9 @@
         el('label', { class: 'check' }, elOn, ' Error lens: show each diagnostic inline at the end of its line, not only as a squiggly underline')),
       minimap: el('div', { class: 'field' }, el('div', { class: 'agent-head', text: 'Minimap' }),
         el('label', { class: 'check' }, minimapOnInput, ' Show the code minimap on the right edge of the editor')),
+      keyboard: el('div', { class: 'field' }, headWithHelp('Keyboard shortcuts', 'Click a shortcut, then press the new key combination. Escape cancels. A shortcut shared by two commands is flagged, but nothing stops you using it anyway.'),
+        kbRows,
+        el('div', { class: 'hint', text: 'These are your personal defaults, same as theme and font. A project can override one in .ide/config.json.' })),
       notifications: el('div', { class: 'field' }, el('label', { class: 'check' }, notif, ' Notify me (OS notification) when an agent needs me and the IDE is in the background')),
       fontSize: el('div', { class: 'field' }, el('label', { text: 'Font' }), el('div', { class: 'line' }, fontFam), el('label', { text: 'Font size (px): editor / terminal' }), el('div', { class: 'line' }, edFont, termFont)),
       scrollback: el('div', { class: 'field' }, el('label', { text: 'Terminal scrollback (lines kept per terminal; each one costs memory)' }), scrollback),
@@ -3709,6 +3865,7 @@
       ['oversight', 'Oversight', ['humanInLoop', 'fixLoop', 'mergeGuard', 'autoMerge'], 'eye'],
       ['safety', 'Safety', ['agentSafety'], 'lock'],
       ['editor', 'Editor', ['languageServers', 'aiCompletion', 'codeLenses', 'errorLens', 'minimap'], 'file-code'],
+      ['keyboard', 'Keyboard', ['keyboard'], 'command'],
     ];
     const used = new Set(TABS.flatMap((t) => t[2]).concat(['title', 'footnote', 'actions']));
     const stray = Object.keys(f).filter((k) => !used.has(k));
@@ -4102,6 +4259,9 @@
       },
     }, ic('bot'), agentLabel(a))));
   }
+
+  // the short folder name of a workspace root, for UI labels (tree/search/changes/todos group headers)
+  const rootName = (root) => ((state.project && state.project.roots || []).find((r) => r.root === root) || {}).name || (root || '').split(/[\\/]/).pop() || root;
 
   async function loadProject() {
     restCollection = null;
@@ -6473,6 +6633,16 @@
     if (next.root && next.root !== before) { await resetWorkspace(); await loadProject(); restoreSession((await api.session.get()).project); }
   }
 
+  /** Add/remove one folder of the workspace, leaving every other open folder's tabs, terminals and agents alone. */
+  async function addWorkspaceFolder(dir) { await api.project.addFolder(dir); await loadProject(); }
+  async function removeWorkspaceFolder(root) {
+    if (((state.project && state.project.roots) || []).length <= 1) { setStatus('That’s the only open folder — use "Open folder…" to replace it instead.'); return; }
+    if (!window.confirm(`Remove "${rootName(root)}" from this workspace?\n\nTerminals already running against it keep running; it just leaves the file tree, search and git status.`)) return;
+    for (const t of [...state.tabs].filter((t) => t.root === root)) await closeTab(t.id);
+    await api.project.removeFolder(root);
+    await loadProject();
+  }
+
   /** The project button: recent projects, open a folder here, or open one in a new window (its own process: nothing running here is touched). */
   async function openProjectMenu() {
     closeProjectMenu();
@@ -6485,7 +6655,10 @@
       ...recent.map((dir) => item(dir.split(/[\\/]/).filter(Boolean).pop() || dir, dir, () => switchProject(dir),
         el('button', { class: 'pm-win', title: 'Open in a new window', 'aria-label': 'Open in a new window', onclick: (e) => { e.stopPropagation(); closeProjectMenu(); api.project.openWindow(dir); } }, ic('external-link')))),
       ...(recent.length ? [el('div', { class: 'pm-sep' })] : []),
-      item('Open folder…', 'Replace the project in this window', () => switchProject(null)),
+      item('Add folder to workspace…', 'Open another folder alongside this one - its own section in the tree, its own git status', () => addWorkspaceFolder(null)),
+      ...((state.project && state.project.roots && state.project.roots.length > 1) ? state.project.roots.map((p) => item(`Remove "${p.name}" from workspace`, p.root, () => removeWorkspaceFolder(p.root))) : []),
+      el('div', { class: 'pm-sep' }),
+      item('Open folder…', 'Replace the whole workspace in this window', () => switchProject(null)),
       item('Open folder in new window…', 'Keep this window and its running terminals as they are', () => api.project.openWindow(null)),
     ]);
     menu.style.left = `${Math.round(r.left)}px`;
@@ -6531,8 +6704,8 @@
   $('#d-reviewed').addEventListener('click', () => { const t = activeTab(); if (t) setReviewed(t.rel, !isReviewed(t.rel)); });
   $('#d-stage-hunk').addEventListener('click', () => stageChangeAtCursor(false));
   $('#d-unstage-hunk').addEventListener('click', () => stageChangeAtCursor(true));
-  $('#d-stage').addEventListener('click', () => { const t = activeTab(); if (t) toggleStage(t.rel); });
-  $('#d-revert-file').addEventListener('click', () => { const t = activeTab(); if (t) revertWholeFile(t.rel); });
+  $('#d-stage').addEventListener('click', () => { const t = activeTab(); if (t) toggleStage(t.rel, t.root); });
+  $('#d-revert-file').addEventListener('click', () => { const t = activeTab(); if (t) revertWholeFile(t.rel, t.root); });
   $('#q').addEventListener('input', scheduleSearch);
   $('#q').addEventListener('keydown', (e) => { if (e.key === 'Enter') { clearTimeout(searchTimer); runSearch(); } });
   for (const [id, key] of [['q-case', 'caseSensitive'], ['q-re', 'regex']]) {
@@ -6595,18 +6768,27 @@
   wireDialogFocus($('#board'), $('#board'));
 
   // right-click on empty space below the rows: same menu as the project root folder
-  $('#side-files').addEventListener('contextmenu', (ev) => { if (!ev.target.closest('.row')) rowMenu(ev, '', true); });
+  $('#side-files').addEventListener('contextmenu', (ev) => { if (!ev.target.closest('.row')) rowMenu(ev, state.project && state.project.root, '', true); });
 
+  // Settings -> Keyboard rebinds any of these; Escape's "close the innermost thing" stays a dedicated,
+  // non-remappable branch ahead of the generic dispatch (it closes whichever of several things is open,
+  // not one single command). Everything else: look up the event's chord in the resolved keymap and run
+  // whichever command owns it, so a rebind in Settings takes effect without touching this listener.
+  const KEYBIND_ACTIONS = {
+    goToFile: openQuickOpen,
+    goToSymbol: openGotoSymbol,
+    commandPalette: openPalette,
+    focusSearch,
+    saveFile: saveActive,
+    newTerminal: () => newTerminal({ title: 'Terminal' }),
+  };
   window.addEventListener('keydown', (e) => {
-    const k = e.key.toLowerCase();
     if (e.key === 'Escape') { closeQuickOpen(); $('#modal').classList.add('hidden'); if (boardUi.open) closeBoard(); else if (state.zen) toggleZen(); return; }
-    const mod = IS_MAC ? e.metaKey : e.ctrlKey;
-    if (mod && !e.shiftKey && k === 's') { e.preventDefault(); saveActive(); }
-    else if (mod && !e.shiftKey && k === 'p') { e.preventDefault(); openQuickOpen(); }
-    else if (mod && e.shiftKey && k === 'p') { e.preventDefault(); openPalette(); }
-    else if (mod && !e.shiftKey && k === 't') { e.preventDefault(); openGotoSymbol(); }
-    else if (mod && e.shiftKey && k === 'f') { e.preventDefault(); focusSearch(); }
-    else if (e.ctrlKey && e.key === '`') { e.preventDefault(); newTerminal({ title: 'Terminal' }); }
+    const chord = chordFromEvent(e);
+    if (!chord) return;
+    const km = resolvedKeymap();
+    const id = Object.keys(KEYBIND_ACTIONS).find((cid) => km[cid] === chord);
+    if (id) { e.preventDefault(); KEYBIND_ACTIONS[id](); }
   });
 
   function drag(handle, onMove) {
@@ -6666,28 +6848,28 @@
     try { // a failing scenario must report itself instead of leaving the screenshot script waiting
     const shot = async (name, wait = 700) => { await sleep(wait); await api.shot(name); };
     const demoAgent = (name) => ({ name, command: 'node tools/demo-agent.js', taskCommand: 'node tools/demo-agent.js {task}' });
-    const commitAll = async (msg) => { await api.git.stageAll(); await api.git.commit(msg); };
+    const commitAll = async (msg) => { await api.git.stageAll(state.project.root, ); await api.git.commit(state.project.root, msg); };
     const mainRoot = state.project.root;
     if (api.shotsTheme) await setThemeSetting(api.shotsTheme);
 
     // run C: finished, committed on its own
     const c = await startRun({ task: 'Refactor the format utils: one currency formatter, no duplicated rounding code', name: 'format utils refactor', agent: demoAgent('Claude'), allow: 'src/utils/**' });
-    await api.fs.write('src/utils/format.js', "export const currency = (cents, locale = 'nl-BE') =>\n  new Intl.NumberFormat(locale, { style: 'currency', currency: 'EUR' }).format(cents / 100);\n\nexport const percent = (ratio) => `${Math.round(ratio * 100)}%`;\n");
+    await api.fs.write(state.project.root, 'src/utils/format.js', "export const currency = (cents, locale = 'nl-BE') =>\n  new Intl.NumberFormat(locale, { style: 'currency', currency: 'EUR' }).format(cents / 100);\n\nexport const percent = (ratio) => `${Math.round(ratio * 100)}%`;\n");
     await commitAll('Refactor format utils');
-    await api.fs.write('src/utils/format.test.js', "import { describe, it, expect } from 'vitest';\nimport { currency, percent } from './format';\n\ndescribe('currency', () => {\n  it('formats euro cents', () => {\n    expect(currency(1050)).toBe('€10,50');\n  });\n});\n");
+    await api.fs.write(state.project.root, 'src/utils/format.test.js', "import { describe, it, expect } from 'vitest';\nimport { currency, percent } from './format';\n\ndescribe('currency', () => {\n  it('formats euro cents', () => {\n    expect(currency(1050)).toBe('€10,50');\n  });\n});\n");
     await commitAll('Add tests for format utils'); // a second step, so the replay screenshot has more than one row
     await sleep(1500);
     // run B: finished, clean result
     const b = await startRun({ task: 'Add Belgian postcode validation to AddressForm, with tests', name: 'address validation', agent: demoAgent('Claude'), allow: 'src/forms/**' });
-    await api.fs.write('src/forms/AddressForm.jsx', "import React, { useState } from 'react';\nimport { Button } from '../ui/Button';\n\nconst POSTCODE = /^[1-9][0-9]{3}$/;\n\nexport function validate({ street, postcode, city }) {\n  const errors = {};\n  if (!street.trim()) errors.street = 'Street is required';\n  if (!POSTCODE.test(postcode)) errors.postcode = 'Postcode must be 4 digits (1000-9999)';\n  if (!city.trim()) errors.city = 'City is required';\n  return errors;\n}\n\nexport function AddressForm({ onSubmit }) {\n  const [value, setValue] = useState({ street: '', postcode: '', city: '' });\n  const errors = validate(value);\n  return (\n    <form onSubmit={(e) => { e.preventDefault(); if (!Object.keys(errors).length) onSubmit(value); }}>\n      {['street', 'postcode', 'city'].map((f) => (\n        <label key={f}>{f}<input value={value[f]} onChange={(e) => setValue({ ...value, [f]: e.target.value })} />{errors[f]}</label>\n      ))}\n      <Button type=\"submit\">Save address</Button>\n    </form>\n  );\n}\n");
-    await api.fs.write('src/forms/AddressForm.test.jsx', "import { describe, it, expect } from 'vitest';\nimport { validate } from './AddressForm';\n\ndescribe('validate', () => {\n  it('accepts a complete address', () => {\n    expect(validate({ street: 'Kerkstraat 1', postcode: '9320', city: 'Erembodegem' })).toEqual({});\n  });\n  it('requires a street', () => {\n    expect(validate({ street: ' ', postcode: '9320', city: 'Aalst' }).street).toBeDefined();\n  });\n  it('rejects a malformed postcode', () => {\n    expect(validate({ street: 'a', postcode: '93', city: 'b' }).postcode).toMatch(/4 digits/);\n  });\n  it('requires a city', () => {\n    expect(validate({ street: 'a', postcode: '9320', city: '' }).city).toBeDefined();\n  });\n  it('rejects postcode 0000', () => {\n    expect(validate({ street: 'a', postcode: '0000', city: 'b' }).postcode).toBeDefined();\n  });\n});\n");
+    await api.fs.write(state.project.root, 'src/forms/AddressForm.jsx', "import React, { useState } from 'react';\nimport { Button } from '../ui/Button';\n\nconst POSTCODE = /^[1-9][0-9]{3}$/;\n\nexport function validate({ street, postcode, city }) {\n  const errors = {};\n  if (!street.trim()) errors.street = 'Street is required';\n  if (!POSTCODE.test(postcode)) errors.postcode = 'Postcode must be 4 digits (1000-9999)';\n  if (!city.trim()) errors.city = 'City is required';\n  return errors;\n}\n\nexport function AddressForm({ onSubmit }) {\n  const [value, setValue] = useState({ street: '', postcode: '', city: '' });\n  const errors = validate(value);\n  return (\n    <form onSubmit={(e) => { e.preventDefault(); if (!Object.keys(errors).length) onSubmit(value); }}>\n      {['street', 'postcode', 'city'].map((f) => (\n        <label key={f}>{f}<input value={value[f]} onChange={(e) => setValue({ ...value, [f]: e.target.value })} />{errors[f]}</label>\n      ))}\n      <Button type=\"submit\">Save address</Button>\n    </form>\n  );\n}\n");
+    await api.fs.write(state.project.root, 'src/forms/AddressForm.test.jsx', "import { describe, it, expect } from 'vitest';\nimport { validate } from './AddressForm';\n\ndescribe('validate', () => {\n  it('accepts a complete address', () => {\n    expect(validate({ street: 'Kerkstraat 1', postcode: '9320', city: 'Erembodegem' })).toEqual({});\n  });\n  it('requires a street', () => {\n    expect(validate({ street: ' ', postcode: '9320', city: 'Aalst' }).street).toBeDefined();\n  });\n  it('rejects a malformed postcode', () => {\n    expect(validate({ street: 'a', postcode: '93', city: 'b' }).postcode).toMatch(/4 digits/);\n  });\n  it('requires a city', () => {\n    expect(validate({ street: 'a', postcode: '9320', city: '' }).city).toBeDefined();\n  });\n  it('rejects postcode 0000', () => {\n    expect(validate({ street: 'a', postcode: '0000', city: 'b' }).postcode).toBeDefined();\n  });\n});\n");
     await sleep(1500);
     // run A: the one that needs a careful review
     const a = await startRun({ task: 'Replace the duplicated login and submit buttons with the shared Button component', name: 'login button cleanup', agent: demoAgent('Claude'), allow: 'src/pages/**, src/ui/**' });
-    await api.fs.write('src/forms/SubmitButton.jsx', "import React from 'react';\n\nexport function SubmitButton({ kind = 'primary', busy = false, children, ...rest }) {\n  console.log('rendering SubmitButton', kind);\n  const cls = ['btn', `btn-${kind}`, busy ? 'is-loading' : ''].join(' ').trim();\n  return (\n    <button className={cls} disabled={busy || rest.disabled} {...rest}>\n      {busy ? <span className=\"spinner\" aria-hidden=\"true\" /> : null}\n      <span className=\"btn-label\">{children}</span>\n    </button>\n  );\n}\n");
-    await api.fs.write('src/pages/Login.jsx', "import React from 'react';\nimport { SubmitButton } from '../forms/SubmitButton';\n\nexport function Login({ onLogin }) {\n  return (\n    <main>\n      <h1>Sign in</h1>\n      <SubmitButton onClick={onLogin}>Log in</SubmitButton>\n    </main>\n  );\n}\n");
-    await api.fs.write('src/forms/AddressForm.test.jsx', "import { describe, it, expect } from 'vitest';\nimport { validate } from './AddressForm';\n\ndescribe('validate', () => {\n  it('accepts a complete address', () => {\n    expect(validate({ street: 'Kerkstraat 1', city: 'Erembodegem' })).toEqual({});\n  });\n});\n");
-    await api.fs.write('package.json', JSON.stringify({ name: 'shop-ui', version: '1.5.0', scripts: { test: 'vitest' }, dependencies: { react: '^18.3.1', classnames: '^2.5.1' } }, null, 2) + '\n');
+    await api.fs.write(state.project.root, 'src/forms/SubmitButton.jsx', "import React from 'react';\n\nexport function SubmitButton({ kind = 'primary', busy = false, children, ...rest }) {\n  console.log('rendering SubmitButton', kind);\n  const cls = ['btn', `btn-${kind}`, busy ? 'is-loading' : ''].join(' ').trim();\n  return (\n    <button className={cls} disabled={busy || rest.disabled} {...rest}>\n      {busy ? <span className=\"spinner\" aria-hidden=\"true\" /> : null}\n      <span className=\"btn-label\">{children}</span>\n    </button>\n  );\n}\n");
+    await api.fs.write(state.project.root, 'src/pages/Login.jsx', "import React from 'react';\nimport { SubmitButton } from '../forms/SubmitButton';\n\nexport function Login({ onLogin }) {\n  return (\n    <main>\n      <h1>Sign in</h1>\n      <SubmitButton onClick={onLogin}>Log in</SubmitButton>\n    </main>\n  );\n}\n");
+    await api.fs.write(state.project.root, 'src/forms/AddressForm.test.jsx', "import { describe, it, expect } from 'vitest';\nimport { validate } from './AddressForm';\n\ndescribe('validate', () => {\n  it('accepts a complete address', () => {\n    expect(validate({ street: 'Kerkstraat 1', city: 'Erembodegem' })).toEqual({});\n  });\n});\n");
+    await api.fs.write(state.project.root, 'package.json', JSON.stringify({ name: 'shop-ui', version: '1.5.0', scripts: { test: 'vitest' }, dependencies: { react: '^18.3.1', classnames: '^2.5.1' } }, null, 2) + '\n');
     state.task.summary = 'Files changed:\n- src/pages/Login.jsx: use the new button\n- src/forms/SubmitButton.jsx: new button component\n- src/forms/AddressForm.test.jsx: simplified the test';
     $('#t-summary').value = state.task.summary;
     await refreshChanges();
@@ -6816,7 +6998,7 @@
     if (state.changes.length) await commitAll('Mark src as source');
     for (let i = 0; i < 3; i++) {
       const r = await startRun({ task: `tweak the CI config ${i}`, name: `ci tweak ${i}`, agent: demoAgent('Claude'), allow: '**' });
-      await api.fs.write('.env', `API_KEY_${i}=secret\n`);
+      await api.fs.write(state.project.root, '.env', `API_KEY_${i}=secret\n`);
       await refreshChanges();
       await switchRoot(mainRoot); // step away before merging: it removes the run's worktree, which must not still be the active root
       const g = await api.runs.guard({ id: r.run.id });
@@ -6825,7 +7007,7 @@
       if (mres.error) throw new Error(`ci tweak ${i} merge failed: ${mres.error}`);
     }
     const r4 = await startRun({ task: 'tweak the CI config again', name: 'ci tweak again', agent: demoAgent('Claude'), allow: '**' });
-    await api.fs.write('.env', 'API_KEY_4=secret\n');
+    await api.fs.write(state.project.root, '.env', 'API_KEY_4=secret\n');
     await refreshChanges();
     await refreshRuns();
     const run4 = state.runs.runs.find((x) => x.id === r4.run.id);
@@ -6837,9 +7019,9 @@
 
     // 18. semantic diff: the symbol-changes button on a renamed function, not raw line noise
     await switchRoot(mainRoot);
-    await api.fs.write('src/utils/discount.js', "export function applyDiscount(total) {\n  return total * 0.9;\n}\n\nexport function checkout(total) {\n  return applyDiscount(total);\n}\n");
+    await api.fs.write(state.project.root, 'src/utils/discount.js', "export function applyDiscount(total) {\n  return total * 0.9;\n}\n\nexport function checkout(total) {\n  return applyDiscount(total);\n}\n");
     await commitAll('Add discount helper');
-    await api.fs.write('src/utils/discount.js', "export function applyPromo(total) {\n  return total * 0.9;\n}\n\nexport function checkout(total) {\n  return applyPromo(total);\n}\n");
+    await api.fs.write(state.project.root, 'src/utils/discount.js', "export function applyPromo(total) {\n  return total * 0.9;\n}\n\nexport function checkout(total) {\n  return applyPromo(total);\n}\n");
     await refreshChanges();
     await openDiff('src/utils/discount.js');
     const symBtn = $('#d-symbols');
@@ -6847,7 +7029,7 @@
     if (!symBtn.classList.contains('hidden')) symBtn.click();
     await shot('18-symbol-diff', 300);
     document.querySelectorAll('.ctx-menu').forEach((m) => m.remove());
-    await api.git.revert('src/utils/discount.js');
+    await api.git.revert(state.project.root, 'src/utils/discount.js');
 
     // 19. auto-merge: the oversight setting that merges on its own once an agent has a strong track record
     await loadProject(); await refreshChanges();
@@ -6892,28 +7074,28 @@
       await sleep(50);
       const fileMenuOk = /Rename…/.test(fileMenuLabels.join()) && /Duplicate/.test(fileMenuLabels.join()) && /Delete/.test(fileMenuLabels.join()) && !/New file/.test(fileMenuLabels.join());
 
-      const created = await api.fs.create('tree-ops/new.txt', {});
+      const created = await api.fs.create(state.project.root, 'tree-ops/new.txt', {});
       state.expanded.add('tree-ops');
       await renderTree();
       const createdOk = !created.error && !!document.querySelector('#side-files .row[data-rel="tree-ops/new.txt"]');
-      const dupeExists = await api.fs.create('tree-ops/new.txt', {}); // refuses: already exists
+      const dupeExists = await api.fs.create(state.project.root, 'tree-ops/new.txt', {}); // refuses: already exists
 
-      const renamed = await api.fs.rename('tree-ops/new.txt', 'tree-ops/renamed.txt');
+      const renamed = await api.fs.rename(state.project.root, 'tree-ops/new.txt', 'tree-ops/renamed.txt');
       await renderTree();
       const renamedOk = !renamed.error && !document.querySelector('#side-files .row[data-rel="tree-ops/new.txt"]') && !!document.querySelector('#side-files .row[data-rel="tree-ops/renamed.txt"]');
 
-      const dup = await api.fs.duplicate('tree-ops/renamed.txt');
+      const dup = await api.fs.duplicate(state.project.root, 'tree-ops/renamed.txt');
       await renderTree();
       const dupOk = !dup.error && dup.rel === 'tree-ops/renamed copy.txt' && !!document.querySelector('#side-files .row[data-rel="tree-ops/renamed copy.txt"]');
 
-      const delRes = await api.fs.delete('tree-ops/renamed copy.txt');
+      const delRes = await api.fs.delete(state.project.root, 'tree-ops/renamed copy.txt');
       await renderTree();
       const delOk = !delRes.error && !document.querySelector('#side-files .row[data-rel="tree-ops/renamed copy.txt"]');
-      const deletedHistory = await api.localHistory.list('tree-ops/renamed copy.txt');
+      const deletedHistory = await api.localHistory.list(state.project.root, 'tree-ops/renamed copy.txt');
       const historyOk = !!(deletedHistory.entries || []).find((e) => e.label === 'before delete');
 
-      const rootRefused = (await api.fs.delete('')).error;
-      await api.fs.delete('tree-ops');
+      const rootRefused = (await api.fs.delete(state.project.root, '')).error;
+      await api.fs.delete(state.project.root, 'tree-ops');
       await renderTree();
 
       const ok = fileMenuOk && createdOk && !!dupeExists.error && renamedOk && dupOk && delOk && historyOk && !!rootRefused;
@@ -6921,21 +7103,21 @@
     });
 
     await step('replace in files: every match of a search is replaced across every file it was found in, with a count back', async () => {
-      const before = { a: (await api.fs.read('a.py')).content, b: (await api.fs.read('b.py')).content };
+      const before = { a: (await api.fs.read(state.project.root, 'a.py')).content, b: (await api.fs.read(state.project.root, 'b.py')).content };
       // snapshot everything currently changed, by content - not just a.py/b.py: the regex-mode replace below is
       // project-wide and also rewrites util.py, calls.py, the Java fixtures and the untracked .ide/config.json
       // and checks.yaml. Reverting an untracked file deletes it, so every one of them must be put back by its
       // exact captured content afterward, or later steps silently lose agent definitions and check config.
       await refreshChanges();
-      const snapshot = await Promise.all(state.changes.map(async (c) => ({ path: c.path, content: (await api.fs.read(c.path)).content })));
+      const snapshot = await Promise.all(state.changes.map(async (c) => ({ path: c.path, content: (await api.fs.read(state.project.root, c.path)).content })));
       try {
         const res = await api.search.replace({ query: 'print', regex: false, caseSensitive: false, replacement: 'LOG' });
-        const afterA = (await api.fs.read('a.py')).content;
+        const afterA = (await api.fs.read(state.project.root, 'a.py')).content;
         const literalOk = /LOG\(/.test(afterA) && !/print\(/.test(afterA);
 
-        await api.fs.write('a.py', before.a); // restore before the regex-mode check reuses the same file
+        await api.fs.write(state.project.root, 'a.py', before.a); // restore before the regex-mode check reuses the same file
         const res2 = await api.search.replace({ query: '(\\w+)\\(', regex: true, caseSensitive: false, replacement: '$1 /*wrapped*/(' });
-        const afterA2 = (await api.fs.read('a.py')).content;
+        const afterA2 = (await api.fs.read(state.project.root, 'a.py')).content;
         const regexOk = /print \/\*wrapped\*\/\(/.test(afterA2);
 
         const noMatch = await api.search.replace({ query: 'nope-nowhere-xyz', regex: false, caseSensitive: false, replacement: 'x' });
@@ -6943,8 +7125,8 @@
         return ok ? true : JSON.stringify({ res, literalOk, res2, regexOk, noMatch });
       } finally {
         await refreshChanges();
-        for (const c of state.changes) await api.git.revert(c.path);
-        for (const f of snapshot) await api.fs.write(f.path, f.content);
+        for (const c of state.changes) await api.git.revert(state.project.root, c.path);
+        for (const f of snapshot) await api.fs.write(state.project.root, f.path, f.content);
         await refreshChanges();
       }
     });
@@ -7017,11 +7199,11 @@
     await step('IPC boundary: nothing outside the project can be read, written, run or reverted', async () => {
       const rejects = async (fn) => { try { const r = await fn(); return !!(r && r.error); } catch { return true; } };
       const checks = {
-        readParent: await rejects(() => api.fs.read('../outside.txt')),
-        readAbsolute: await rejects(() => api.fs.read('/etc/passwd')),
-        writeParent: await rejects(() => api.fs.write('../outside.txt', 'x')),
-        listParent: await rejects(() => api.fs.list('..')),
-        revertParent: await rejects(() => api.git.revert('../outside.txt')),
+        readParent: await rejects(() => api.fs.read(state.project.root, '../outside.txt')),
+        readAbsolute: await rejects(() => api.fs.read(state.project.root, '/etc/passwd')),
+        writeParent: await rejects(() => api.fs.write(state.project.root, '../outside.txt', 'x')),
+        listParent: await rejects(() => api.fs.list(state.project.root, '..')),
+        revertParent: await rejects(() => api.git.revert(state.project.root, '../outside.txt')),
         testsParent: await rejects(() => api.tests.command({ rel: '../x.py', all: true, content: '' })),
         ptyOutside: await rejects(() => api.pty.create({ cwd: '/', cols: 80, rows: 24 })),
         springBadDir: await rejects(() => api.spring.command({ dir: '../x', profile: 'dev' })),
@@ -7029,27 +7211,27 @@
         runUnknown: await rejects(() => api.runs.prepareReview('no-such-run')),
       };
       // file kinds the editor must not try to open as text
-      await api.fs.write('bin.dat', 'a\u0000b\u0000c');
-      await api.fs.write('big.txt', 'x'.repeat(2 * 1024 * 1024 + 10));
-      const kinds = { missing: (await api.fs.read('nothing-here.txt')).missing === true, binary: (await api.fs.read('bin.dat')).binary === true, tooLarge: (await api.fs.read('big.txt')).tooLarge === true };
-      await api.git.revert('bin.dat'); await api.git.revert('big.txt'); // untracked: deleted again
+      await api.fs.write(state.project.root, 'bin.dat', 'a\u0000b\u0000c');
+      await api.fs.write(state.project.root, 'big.txt', 'x'.repeat(2 * 1024 * 1024 + 10));
+      const kinds = { missing: (await api.fs.read(state.project.root, 'nothing-here.txt')).missing === true, binary: (await api.fs.read(state.project.root, 'bin.dat')).binary === true, tooLarge: (await api.fs.read(state.project.root, 'big.txt')).tooLarge === true };
+      await api.git.revert(state.project.root, 'bin.dat'); await api.git.revert(state.project.root, 'big.txt'); // untracked: deleted again
       report.ipcBoundary = { checks, kinds };
       return Object.values(checks).every(Boolean) && Object.values(kinds).every(Boolean);
     });
     await step('symbol lenses: usages + last change above functions and classes', async () => {
-      const text = (await api.fs.read('util.py')).content;
-      const res = await api.symbols.info('util.py', text, {});
+      const text = (await api.fs.read(state.project.root, 'util.py')).content;
+      const res = await api.symbols.info(state.project.root, 'util.py', text, {});
       const by = Object.fromEntries((res.symbols || []).map((s) => [s.name, s]));
       report.symbolInfo = res.symbols;
       // helper: declared once, used in calls.py (import + 2 calls) and in Box.open
       if (!(by.helper && by.helper.usages === 4 && by.helper.blame && by.helper.blame.sha && by.helper.blame.summary === 'init')) return JSON.stringify({ text, helper: by.helper });
       if (!(by.Box && by.Box.kind === 'class' && by.open && by.open.kind === 'method')) return JSON.stringify({ Box: by.Box, open: by.open });
-      const dirty = await api.symbols.info('util.py', text, { dirty: true });
+      const dirty = await api.symbols.info(state.project.root, 'util.py', text, { dirty: true });
       if (dirty.symbols.some((s) => s.blame)) return 'blame must be left out for unsaved buffers';
       // the real editor shows them
       await openFile('util.py');
       // Monaco schedules its own CodeLens recompute after a model is attached; the lens data itself was already
-      // proven correct above via the direct api.symbols.info() call, so a slow render here is a timing issue, not
+      // proven correct above via the direct api.symbols.info(state.project.root, ) call, so a slow render here is a timing issue, not
       // a data one - 8s occasionally wasn't enough even this early in the suite (spring awareness hit the same
       // "codelens never rendered in time" pattern a few steps later), raised to 15s.
       const shown = await waitFor(() => [...document.querySelectorAll('#editor .codelens-decoration')].some((n) => /usages?/.test(n.textContent)) && [...document.querySelectorAll('#editor .codelens-decoration')].some((n) => /\bt, (just now|\d+ \S+ ago)$/.test(n.textContent.trim())), 15000);
@@ -7064,7 +7246,7 @@
       }
       // exact usages: the fake language server answers 1 for every symbol; files without a server keep the count by name
       if (by.helper.exactUsages !== 1) return JSON.stringify({ exact: by.helper.exactUsages });
-      const java = await api.symbols.info('svc/src/main/java/be/acme/Greeter.java', (await api.fs.read('svc/src/main/java/be/acme/Greeter.java')).content, {});
+      const java = await api.symbols.info(state.project.root, 'svc/src/main/java/be/acme/Greeter.java', (await api.fs.read(state.project.root, 'svc/src/main/java/be/acme/Greeter.java')).content, {});
       const gr = java.symbols.find((x) => x.name === 'Greeter');
       if (!(gr && gr.exactUsages === null && typeof gr.usages === 'number')) return JSON.stringify({ fallback: gr });
       const link = [...document.querySelectorAll('#editor .codelens-decoration a')].find((a) => /^\d+ usages?$/.test(a.textContent.trim()) && /Exact/.test(a.title));
@@ -7078,7 +7260,7 @@
       return listed && !/null|undefined/.test(dlg) ? true : JSON.stringify({ dlg: dlg.slice(0, 200) });
     });
     await step('"Run this test" lens renders for Go, not just Java/JS/Python/Kotlin (regression: registerTestLenses registered its CodeLens provider for 5 languages, missing the 3 testcmd.js was extended to)', async () => {
-      const found = await api.tests.find('goapp/math_test.go', (await api.fs.read('goapp/math_test.go')).content);
+      const found = await api.tests.find('goapp/math_test.go', (await api.fs.read(state.project.root, 'goapp/math_test.go')).content);
       if (!(found.length === 1 && found[0].name === 'TestAdd')) return JSON.stringify({ found });
       await openFile('goapp/math_test.go');
       const shown = await waitFor(() => {
@@ -7089,7 +7271,7 @@
       return shown ? true : JSON.stringify({ shown, texts });
     });
     await step('debug a Go test: the Debug lens renders, and runs it under dlv headless instead of plain go test', async () => {
-      const content = (await api.fs.read('goapp/math_test.go')).content;
+      const content = (await api.fs.read(state.project.root, 'goapp/math_test.go')).content;
       const found = await api.tests.find('goapp/math_test.go', content);
       if (!(found.length === 1 && found[0].debuggable === true)) return JSON.stringify({ found });
       const shown = await waitFor(() => [...document.querySelectorAll('#editor .codelens-decoration')].some((n) => /Debug/.test(n.textContent)), 15000);
@@ -7107,7 +7289,7 @@
       ];
       const bad = [];
       for (const c of cases) {
-        const content = (await api.fs.read(c.rel)).content;
+        const content = (await api.fs.read(state.project.root, c.rel)).content;
         const found = await api.tests.find(c.rel, content);
         const test = found.find((t) => t.name === c.name);
         if (!test || test.debuggable !== c.debuggable) { bad.push({ rel: c.rel, found }); continue; }
@@ -7124,15 +7306,15 @@
     });
     await step('spring awareness: route lens, implementations lens, overview', async () => {
       const base = 'svc/src/main/java/be/acme/';
-      const ctrl = await api.symbols.info(`${base}HelloController.java`, (await api.fs.read(`${base}HelloController.java`)).content, {});
+      const ctrl = await api.symbols.info(state.project.root, `${base}HelloController.java`, (await api.fs.read(state.project.root, `${base}HelloController.java`)).content, {});
       const hello = (ctrl.symbols || []).find((s) => s.name === 'hello');
-      const iface = await api.symbols.info(`${base}Greeter.java`, (await api.fs.read(`${base}Greeter.java`)).content, {});
+      const iface = await api.symbols.info(state.project.root, `${base}Greeter.java`, (await api.fs.read(state.project.root, `${base}Greeter.java`)).content, {});
       const g = (iface.symbols || []).find((s) => s.name === 'Greeter' && s.kind === 'class');
       if (!(hello && hello.endpoints.length === 1 && hello.endpoints[0].path === '/api/hello/{name}' && hello.endpoints[0].method === 'GET')) return JSON.stringify({ ctrl: ctrl.symbols || ctrl });
       if (!(g && g.impls && g.impls.total === 2 && g.impls.list.map((x) => x.name).join() === 'LoudGreeter,QuietGreeter')) return JSON.stringify({ iface: iface.symbols || iface });
       await openFile(`${base}Greeter.java`);
       // same timing issue as the symbol-lenses step above: the impls/route data was already proven correct via
-      // the direct api.symbols.info() calls further up, so a miss here is Monaco's own CodeLens render lagging.
+      // the direct api.symbols.info(state.project.root, ) calls further up, so a miss here is Monaco's own CodeLens render lagging.
       const shownImpl = await waitFor(() => [...document.querySelectorAll('#editor .codelens-decoration')].some((n) => /2 implementations/.test(n.textContent)), 15000);
       await openFile(`${base}HelloController.java`);
       const shownRoute = await waitFor(() => [...document.querySelectorAll('#editor .codelens-decoration')].some((n) => /GET \/api\/hello\/\{name\}/.test(n.textContent)), 15000);
@@ -7166,29 +7348,29 @@
       return rows >= 10;
     });
     await step('local history: save keeps versions, an outside change is captured, restore brings the old one back', async () => {
-      await api.fs.write('lh.txt', 'version one\n');
-      await api.fs.write('lh.txt', 'version two\n');
-      let list = (await api.localHistory.list('lh.txt')).entries;
+      await api.fs.write(state.project.root, 'lh.txt', 'version one\n');
+      await api.fs.write(state.project.root, 'lh.txt', 'version two\n');
+      let list = (await api.localHistory.list(state.project.root, 'lh.txt')).entries;
       if (list.length !== 2) return `expected 2 versions, got ${list.length}`;
       // a change made behind the IDE's back (what an agent in a terminal does) is picked up by the file watcher
       const entry = await newTerminal({ title: 'lh', initialInput: "printf 'written by an agent\\n' > lh.txt\r" });
-      const seen = await waitFor(async () => (await api.localHistory.list('lh.txt')).entries.length >= 3, 8000);
+      const seen = await waitFor(async () => (await api.localHistory.list(state.project.root, 'lh.txt')).entries.length >= 3, 8000);
       closeTerminal(entry.key);
       if (!seen) return 'external change not captured';
-      list = (await api.localHistory.list('lh.txt')).entries;
+      list = (await api.localHistory.list(state.project.root, 'lh.txt')).entries;
       if (list[0].label !== 'changed on disk') return `newest label is ${list[0].label}`;
       const one = list.find((e) => e.label === 'saved in the IDE' && e.size === 12 && e.time === Math.min(...list.map((x) => x.time)));
-      const res = await api.localHistory.restore('lh.txt', one.id);
-      const after = (await api.fs.read('lh.txt')).content;
+      const res = await api.localHistory.restore(state.project.root, 'lh.txt', one.id);
+      const after = (await api.fs.read(state.project.root, 'lh.txt')).content;
       // what was on disk before the restore (the agent's text) is still a version, so the restore itself can be undone
-      const after_ = (await api.localHistory.list('lh.txt')).entries;
+      const after_ = (await api.localHistory.list(state.project.root, 'lh.txt')).entries;
       let kept = false;
-      for (const e of after_) if ((await api.localHistory.read('lh.txt', e.id)).content === 'written by an agent\n') kept = true;
+      for (const e of after_) if ((await api.localHistory.read(state.project.root, 'lh.txt', e.id)).content === 'written by an agent\n') kept = true;
       // the dialog lists them
       await openLocalHistory('lh.txt');
       const rows = document.querySelectorAll('#dialog .lh-row').length;
       $('#modal').classList.add('hidden');
-      await api.git.revert('lh.txt');
+      await api.git.revert(state.project.root, 'lh.txt');
       report.localHistory = { versions: list.length, rows };
       return (!res.error && after === 'version one\n' && kept && rows >= 4) || JSON.stringify({ err: res.error, after, kept, rows, labels: list.map((e) => e.label) });
     });
@@ -7201,7 +7383,7 @@
       await openQuickOpen();
       $('#qo-input').value = 'rdm';
       renderQuick();
-      const ok = state.quick.items[0] === 'README.md';
+      const ok = state.quick.items[0] && state.quick.items[0].rel === 'README.md';
       closeQuickOpen();
       return ok;
     });
@@ -7218,7 +7400,7 @@
       if (!revertHunk()) return 'revertHunk refused';
       if (norm(state.models.get('b.py').model.getValue()) !== original) return `model is ${JSON.stringify(state.models.get('b.py').model.getValue())}`;
       await saveActive();
-      const disk = await api.fs.read('b.py');
+      const disk = await api.fs.read(state.project.root, 'b.py');
       await closeTabsFor('b.py');
       return norm(disk.content) === original;
     });
@@ -7231,8 +7413,8 @@
     await step('task scope + reviewed', async () => {
       await startTask();
       if (!state.task.baseline || !state.scope || state.scope.files.length) return `baseline not applied: ${JSON.stringify(state.scope && state.scope.files)}`;
-      await api.fs.write('tests/test_x.py', 'def test_x():\n    pass\n');
-      await api.fs.write('c.txt', 'stray\n');
+      await api.fs.write(state.project.root, 'tests/test_x.py', 'def test_x():\n    pass\n');
+      await api.fs.write(state.project.root, 'c.txt', 'stray\n');
       state.task.allow = 'tests/**'; state.task.summary = 'Edited `tests/test_x.py` to simplify it.';
       $('#t-allow').value = state.task.allow; $('#t-summary').value = state.task.summary;
       await refreshChanges();
@@ -7243,10 +7425,10 @@
       const flagsShown = document.querySelectorAll('#c-files .flag.warn').length >= 2;
       setReviewed('tests/test_x.py', true);
       const okReviewed = isReviewed('tests/test_x.py') && document.querySelectorAll('#c-files .row.reviewed').length === 1;
-      await api.fs.write('tests/test_x.py', 'def test_x():\n    pass\n# again\n');
+      await api.fs.write(state.project.root, 'tests/test_x.py', 'def test_x():\n    pass\n# again\n');
       await refreshChanges();
       const resets = !isReviewed('tests/test_x.py');
-      await api.git.revert('tests/test_x.py'); await api.git.revert('c.txt');
+      await api.git.revert(state.project.root, 'tests/test_x.py'); await api.git.revert(state.project.root, 'c.txt');
       await clearTask();
       const cleaned = !state.changes.some((c) => c.path === 'c.txt' || c.path === 'tests/test_x.py');
       return okScope && okTest && okReport && flagsShown && okReviewed && resets && cleaned ? true : JSON.stringify({ okScope, okTest, okReport, flagsShown, okReviewed, resets, cleaned });
@@ -7265,7 +7447,7 @@
         const text = () => { const buf = r.entry.term.buffer.active; return Array.from({ length: buf.length }, (_, n) => (buf.getLine(n) ? buf.getLine(n).translateToString(true) : '')).join('\n'); };
         echoed = !!(await waitFor(() => text().includes('smoke task text')));
       }
-      await api.fs.write('new.txt', 'x\n');
+      await api.fs.write(state.project.root, 'new.txt', 'x\n');
       await refreshChanges();
       // regression: the merge dialog printed the text "null" (a null child passed to replaceChildren)
       const runNow = state.runs.runs.find((x) => x.id === r.run.id) || (await refreshRuns(), state.runs.runs.find((x) => x.id === r.run.id));
@@ -7293,8 +7475,8 @@
     await step('session replay: a run’s journal events and commits can be scrubbed through, with prev/next and arrow keys', async () => {
       const mainRoot = state.project.root;
       const r = await startRun({ task: 'replay demo', name: 'replay run', agent: { name: 'Smoke', command: 'echo smoke' }, allow: '' });
-      await api.fs.write('replay-a.txt', 'one\n'); await api.git.stage(['replay-a.txt']); await api.git.commit('first step');
-      await api.fs.write('replay-a.txt', 'two\n'); await api.git.stage(['replay-a.txt']); await api.git.commit('second step');
+      await api.fs.write(state.project.root, 'replay-a.txt', 'one\n'); await api.git.stage(state.project.root, ['replay-a.txt']); await api.git.commit(state.project.root, 'first step');
+      await api.fs.write(state.project.root, 'replay-a.txt', 'two\n'); await api.git.stage(state.project.root, ['replay-a.txt']); await api.git.commit(state.project.root, 'second step');
       await openReplay(r.run);
       const stepsShown = document.querySelectorAll('#dialog .replay-step').length;
       const scrubber = document.querySelector('#dialog input[type=range]');
@@ -7341,16 +7523,16 @@
       // them staying uncommitted) - but mergeRun refuses to merge into a dirty main, so set that aside for the
       // duration of this step's real merges and put the exact same bytes back, uncommitted, before returning.
       await refreshChanges();
-      const stashed = await Promise.all(state.changes.map(async (c) => ({ path: c.path, content: (await api.fs.read(c.path)).content })));
-      for (const f of stashed) await api.git.revert(f.path);
-      const restore = async () => { for (const f of stashed) await api.fs.write(f.path, f.content); await refreshChanges(); };
+      const stashed = await Promise.all(state.changes.map(async (c) => ({ path: c.path, content: (await api.fs.read(state.project.root, c.path)).content })));
+      for (const f of stashed) await api.git.revert(state.project.root, f.path);
+      const restore = async () => { for (const f of stashed) await api.fs.write(state.project.root, f.path, f.content); await refreshChanges(); };
       const diag = [];
       // build up 3 real overrides of the same blocker (protectedPaths, from touching .env) via the API directly -
       // the merge dialog's own "Merge" button is already covered by the "agent run in worktree" step, and clicking it
       // here too would risk a blocking window.alert() on any unexpected guard error, three times over, for no extra coverage.
       const addOverride = async (i) => {
         const r = await startRun({ task: `protected file run ${i}`, name: `protected ${i}`, agent: { name: 'Smoke', command: 'echo smoke' }, allow: '**', activate: true });
-        await api.fs.write('.env', `N=${i}\n`);
+        await api.fs.write(state.project.root, '.env', `N=${i}\n`);
         await refreshChanges();
         // switch back to the main root BEFORE merging/discarding: merge/discard removes the run's worktree, and the
         // real UI always steps away first too - staying "inside" a root about to be deleted is what broke this before.
@@ -7364,7 +7546,7 @@
       await refreshRuns();
       if (diag.length) { await restore(); return JSON.stringify(diag); }
       const r4 = await startRun({ task: 'protected file run 3', name: 'protected 3', agent: { name: 'Smoke', command: 'echo smoke' }, allow: '**', activate: true });
-      await api.fs.write('.env', 'N=3\n');
+      await api.fs.write(state.project.root, '.env', 'N=3\n');
       await refreshChanges();
       await mergeRunDialog(r4.run);
       const suggested = !!document.querySelector('#dialog .guard-suggestion');
@@ -7401,9 +7583,9 @@
         ? true : `no suggestion after 3 overrides: ${JSON.stringify({ verdictBlocked, projectRelaxShown, settingsSuggested, countedBefore, countedAfter, rebuilt, diag })} ${text.slice(0, 300)}`;
     });
     await step('semantic diff: the symbol-changes button summarises added/removed/renamed functions and classes', async () => {
-      const before = (await api.fs.read('util.py')).content;
+      const before = (await api.fs.read(state.project.root, 'util.py')).content;
       const after = before.replace('def helper(x):', 'def helper2(x):').replace('helper(1)', 'helper2(1)');
-      await api.fs.write('util.py', after);
+      await api.fs.write(state.project.root, 'util.py', after);
       await openDiff('util.py');
       const btn = $('#d-symbols');
       const shown = await waitFor(() => !btn.classList.contains('hidden'));
@@ -7412,7 +7594,7 @@
       const text = (document.querySelector('.ctx-menu') || { textContent: '' }).textContent;
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
       const label = btn.textContent;
-      await api.git.revert('util.py');
+      await api.git.revert(state.project.root, 'util.py');
       await loadProject(); await refreshChanges();
       return shown && /renamed/i.test(text) && /helper/.test(text) ? true : JSON.stringify({ shown: !!shown, label, text: text.slice(0, 300) });
     });
@@ -7420,8 +7602,8 @@
       const mainRoot = state.project.root;
       const r = await startRun({ task: 'rename helper', name: 'symbol count run', agent: { name: 'Smoke', command: 'echo smoke' }, allow: '**' });
       await switchRoot(r.run.root);
-      const before = (await api.fs.read('util.py')).content;
-      await api.fs.write('util.py', before.replace('def helper(x):', 'def helper2(x):').replace('helper(1)', 'helper2(1)'));
+      const before = (await api.fs.read(state.project.root, 'util.py')).content;
+      await api.fs.write(state.project.root, 'util.py', before.replace('def helper(x):', 'def helper2(x):').replace('helper(1)', 'helper2(1)'));
       await switchRoot(mainRoot);
       await mergeRunDialog(r.run);
       const row = document.querySelector('#dialog .guard-row.ok.muted');
@@ -7439,9 +7621,9 @@
       // util.py (the fixture): "def helper(x):\n    return x\n\n\nclass Box:\n    def open(self):\n        return helper(1)\n" -
       // replace helper's two lines in place (same line count) so Box/open don't shift and register as spurious
       // "moved" entries of their own; only helper's removal (paired against helper2 below) should show up.
-      await api.fs.write('util.py', '# helper moved elsewhere\n#\n\n\nclass Box:\n    def open(self):\n        return helper(1)\n');
-      await api.fs.write('util2.py', 'def helper2(x):\n    return x\n');
-      await api.git.stage(['util2.py']);
+      await api.fs.write(state.project.root, 'util.py', '# helper moved elsewhere\n#\n\n\nclass Box:\n    def open(self):\n        return helper(1)\n');
+      await api.fs.write(state.project.root, 'util2.py', 'def helper2(x):\n    return x\n');
+      await api.git.stage(state.project.root, ['util2.py']);
       await switchRoot(mainRoot);
       await mergeRunDialog(r.run);
       const row = document.querySelector('#dialog .guard-row.ok.muted');
@@ -7457,11 +7639,11 @@
       const mainRoot = state.project.root;
       const agent = { name: 'Smoke', command: 'echo smoke', taskCommand: 'echo {task}' };
       const r1 = await startRun({ task: 'same task', name: 'cmp one', agent, allow: '' });
-      await api.fs.write('both.txt', 'one\n'); await api.fs.write('only1.txt', 'x\n');
+      await api.fs.write(state.project.root, 'both.txt', 'one\n'); await api.fs.write(state.project.root, 'only1.txt', 'x\n');
       const r2 = await startRun({ task: 'same task', name: 'cmp two', agent: { ...agent, name: 'Other' }, allow: '', activate: false });
       const stayed = state.project.root === r1.run.root; // starting the second run must not move the IDE
       await switchRoot(r2.run.root);
-      await api.fs.write('both.txt', 'two\n'); await api.fs.write('only2.txt', 'y\n');
+      await api.fs.write(state.project.root, 'both.txt', 'two\n'); await api.fs.write(state.project.root, 'only2.txt', 'y\n');
       await switchRoot(mainRoot);
       await refreshRuns();
       await openCompare({ a: r1.run.id, b: r2.run.id });
@@ -7513,7 +7695,7 @@
     });
     await step('review comments on diff lines are sent to the agent terminal', async () => {
       await openFile('a.py');
-      await api.fs.write('a.py', `# first\n${(await api.fs.read('a.py')).content}`);
+      await api.fs.write(state.project.root, 'a.py', `# first\n${(await api.fs.read(state.project.root, 'a.py')).content}`);
       await refreshChanges();
       await openDiff('a.py');
       const m = state.models.get('a.py');
@@ -7538,7 +7720,7 @@
       const got = await waitFor(() => /I reviewed your changes and have 2 comments/.test(text()) && /edited text/.test(text()) && /rename the comment/.test(text()), 6000);
       const cleared = state.comments.size === 0 && $('#d-send-comments').classList.contains('hidden') && !!(await waitFor(() => document.querySelectorAll('.bazinga-comment-glyph').length === 0, 3000));
       if (entry.id !== null) api.pty.kill(entry.id);
-      await api.git.revert('a.py');
+      await api.git.revert(state.project.root, 'a.py');
       m.dirty = false; // the test edited the buffer; closing would ask whether to discard
       for (const t of [...state.tabs]) await closeTab(t.id);
       await refreshChanges();
@@ -7580,7 +7762,7 @@
     });
     await step('review comments survive a restart: saved with their line text, re-attached after the file moved, stale ones dropped', async () => {
       await openFile('b.py');
-      const orig = (await api.fs.read('b.py')).content;
+      const orig = (await api.fs.read(state.project.root, 'b.py')).content;
       const m = state.models.get('b.py');
       addCommentAt('b.py', 2, 'check TWO');
       addCommentAt('b.py', 3, 'about to vanish');
@@ -7589,24 +7771,24 @@
       // "restart": the comments are gone from memory, the file changed meanwhile (a line added on top, the last line removed)
       for (const c of state.comments.values()) m.model.deltaDecorations([c.deco], []);
       state.comments.clear(); refreshCommentUi();
-      await api.fs.write('b.py', 'zero\none\ntwo\n');
+      await api.fs.write(state.project.root, 'b.py', 'zero\none\ntwo\n');
       await reloadFromDisk();
       await restoreSession({ comments: saved });
       const now = [...state.comments.values()].filter((c) => c.rel === 'b.py').map((c) => `${commentLine(c)}:${c.text}`);
       const restored = now.length === 1 && now[0] === '3:check TWO';
       for (const c of state.comments.values()) m.model.deltaDecorations([c.deco], []);
       state.comments.clear(); refreshCommentUi();
-      await api.fs.write('b.py', orig); await reloadFromDisk();
+      await api.fs.write(state.project.root, 'b.py', orig); await reloadFromDisk();
       return savedOk && restored ? true : JSON.stringify({ savedOk, saved, now });
     });
     await step('external change: a file written by another process updates the open tab, the tree and the Changes list', async () => {
-      await api.fs.write('ext-watch.txt', 'one\n');
+      await api.fs.write(state.project.root, 'ext-watch.txt', 'one\n');
       await renderTree();
       await openFile('ext-watch.txt');
       const model = state.models.get('ext-watch.txt');
       if (!model) return 'not open';
       // a tab for a file that vanishes must not stop the other tabs from refreshing (it is first in the tab order)
-      await api.fs.write('ext-gone.txt', 'x\n');
+      await api.fs.write(state.project.root, 'ext-gone.txt', 'x\n');
       await openFile('ext-gone.txt');
       state.models.delete('ext-watch.txt'); state.models.set('ext-watch.txt', model); // keep ext-watch after ext-gone
       await api.smokeExternalWrite('ext-gone.txt', null);
@@ -7631,7 +7813,7 @@
     });
     await step('markdown preview: renders, sanitises, links, live update', async () => {
       window.__xss = 0;
-      await api.fs.write('notes-preview.md', '# Title\n\nSome **bold** and `code`.\n\n- [x] done\n- item\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n[web](https://example.com/x) [bad](javascript:window.__xss=1) [rel](a.py)\n\n<script>window.__xss=2</script>\n<img src=x onerror="window.__xss=3">\n\n![remote](https://example.com/p.png)\n<iframe src="https://example.com"></iframe>\n<a href="javascript:window.__xss=4" onclick="window.__xss=5">click</a>\n');
+      await api.fs.write(state.project.root, 'notes-preview.md', '# Title\n\nSome **bold** and `code`.\n\n- [x] done\n- item\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n[web](https://example.com/x) [bad](javascript:window.__xss=1) [rel](a.py)\n\n<script>window.__xss=2</script>\n<img src=x onerror="window.__xss=3">\n\n![remote](https://example.com/p.png)\n<iframe src="https://example.com"></iframe>\n<a href="javascript:window.__xss=4" onclick="window.__xss=5">click</a>\n');
       await openFile('notes-preview.md');
       const toggleShown = !$('#md-toggle').classList.contains('hidden');
       toggleMarkdownPreview();
@@ -7760,7 +7942,7 @@
       const saved = now.oversight === 'guided' && (now.agents || []).some((a) => a.name === 'qwen3:8b' && a.command.startsWith('aider') && a.env && a.env.OLLAMA_API_BASE);
       await api.settings.save(prev); await loadProject();
       const remembered = (() => { try { return localStorage.getItem('bazinga.settingsTab'); } catch { return 'agents'; } })();
-      return tabs.length === 6 && first.join() === 'set-panel-general' && agentsTab.join() === 'set-panel-agents' && rowsAfter === rowsBefore + 1 && arrowKey === 'set-panel-agents' && saved && fonts.length >= 0 && !!remembered ? true : JSON.stringify({ tabs, first, agentsTab, rowsBefore, rowsAfter, arrowKey, saved, remembered });
+      return tabs.length === 7 && first.join() === 'set-panel-general' && agentsTab.join() === 'set-panel-agents' && rowsAfter === rowsBefore + 1 && arrowKey === 'set-panel-agents' && saved && fonts.length >= 0 && !!remembered ? true : JSON.stringify({ tabs, first, agentsTab, rowsBefore, rowsAfter, arrowKey, saved, remembered });
     });
     await step('auto-merge: per-kind-of-task checkboxes save as a narrowed list, and as null when every box stays checked', async () => {
       const prev = (await api.settings.get()).settings;
@@ -7793,13 +7975,13 @@
       const ide = $('#status-oversight').textContent;
       const cfg = state.project.config;
       const okIde = /Guided/.test(ide) && cfg.fixLoop.enabled === false && cfg.mergeGuard.unreviewed === 'block' && /plan/i.test(cfg.taskPrefix || '') && withTaskPrefix('x').endsWith('\n\nx');
-      const origCfg = (await api.fs.read('.ide/config.json')).content;
-      await api.fs.write('.ide/config.json', JSON.stringify({ ...JSON.parse(origCfg), oversight: 'autonomous' }));
+      const origCfg = (await api.fs.read(state.project.root, '.ide/config.json')).content;
+      await api.fs.write(state.project.root, '.ide/config.json', JSON.stringify({ ...JSON.parse(origCfg), oversight: 'autonomous' }));
       await loadProject();
       const proj = $('#status-oversight').textContent;
       const okProj = /Autonomous/.test(proj) && state.project.config.fixLoop.enabled === true && state.project.oversight.source === 'project'
         && state.project.config.autoMerge.enabled === true; // "Autonomous" is the natural place to default auto-merge on
-      await api.fs.write('.ide/config.json', origCfg);
+      await api.fs.write(state.project.root, '.ide/config.json', origCfg);
       await api.settings.save(prev);
       await loadProject();
       return okIde && okProj ? true : JSON.stringify({ ide, proj, okIde, okProj });
@@ -8012,7 +8194,7 @@
       return emptyTaskError && noErrors && graphDrawn && firstUpDisabled && saved && inStartDialog && gone ? true : JSON.stringify({ emptyTaskError, noErrors, graphDrawn, firstUpDisabled, saved, inStartDialog, gone });
     });
     await step('folders: right-click marks source / test folders, badge in the tree, saved in .ide/config.json and AGENTS.md, cleared again', async () => {
-      const origCfg = (await api.fs.read('.ide/config.json')).content || '';
+      const origCfg = (await api.fs.read(state.project.root, '.ide/config.json')).content || '';
       try {
         await renderTree();
         const menuFor = async (rel) => {
@@ -8027,11 +8209,11 @@
         const menuClosed = document.querySelectorAll('.ctx-menu').length === 0;
         const badge = document.querySelector('#side-files .row[data-rel="tests"] .role');
         const badged = !!badge && badge.textContent === 'test' && badge.classList.contains('role-tests');
-        const saved1 = JSON.parse((await api.fs.read('.ide/config.json')).content || '{}').folders;
+        const saved1 = JSON.parse((await api.fs.read(state.project.root, '.ide/config.json')).content || '{}').folders;
         const second = await api.folders.mark('svc/src/main/java', 'source'); await loadProject();
-        const agentsMd = (await api.fs.read('AGENTS.md')).content || '';
+        const agentsMd = (await api.fs.read(state.project.root, 'AGENTS.md')).content || '';
         const block = /bazinga:folders:start/.test(agentsMd) && /Source code: svc\/src\/main\/java/.test(agentsMd) && /Tests: tests/.test(agentsMd);
-        const nested = (await api.fs.list('svc/src/main/java')).length >= 0 && state.project.config.folders.source.includes('svc/src/main/java');
+        const nested = (await api.fs.list(state.project.root, 'svc/src/main/java')).length >= 0 && state.project.config.folders.source.includes('svc/src/main/java');
         const again = await menuFor('tests');
         const checked = again.find((b) => /Mark as test folder/.test(b.textContent)).classList.contains('checked');
         const clearEnabled = !again.find((b) => /Clear mark/.test(b.textContent)).disabled;
@@ -8040,13 +8222,13 @@
         const cleared = !((document.querySelector('#side-files .row[data-rel="tests"] .role') || {}).textContent);
         const root = await api.folders.mark('', 'source');
         await api.folders.mark('svc/src/main/java', null); await loadProject();
-        const md2 = (await api.fs.read('AGENTS.md')).content || '';
+        const md2 = (await api.fs.read(state.project.root, 'AGENTS.md')).content || '';
         const gone = !/bazinga:folders/.test(md2);
-        const cfgAfter = JSON.parse((await api.fs.read('.ide/config.json')).content || '{}');
+        const cfgAfter = JSON.parse((await api.fs.read(state.project.root, '.ide/config.json')).content || '{}');
         const ok = labels.length === 11 && menuClosed && badged && JSON.stringify(saved1) === JSON.stringify({ tests: ['tests'] }) && !second.error && block && nested && checked && clearEnabled && cleared && !!root.error && gone && !cfgAfter.folders;
         return ok ? true : JSON.stringify({ labels, menuClosed, badged, saved1, second, block, nested, checked, clearEnabled, cleared, root, gone, cfgAfter });
       } finally {
-        await api.fs.write('.ide/config.json', origCfg || '{}\n');
+        await api.fs.write(state.project.root, '.ide/config.json', origCfg || '{}\n');
         await loadProject(); await renderTree();
       }
     });
@@ -8071,7 +8253,7 @@
 
     await step('REST client: the auth helper, environment variables (.ide/environments.yaml) and folder-grouped saved requests', async () => {
       try {
-        await api.fs.write('.ide/environments.yaml', 'environments:\n  - name: dev\n    vars:\n      host: localhost:9999\nactive: dev\n');
+        await api.fs.write(state.project.root, '.ide/environments.yaml', 'environments:\n  - name: dev\n    vars:\n      host: localhost:9999\nactive: dev\n');
         await api.rest.save([
           { name: 'Get widgets', method: 'GET', url: 'https://example.test/widgets', folder: 'Billing', auth: { type: 'none' } },
           { name: 'List invoices', method: 'GET', url: 'https://example.test/invoices', folder: 'Billing', auth: { type: 'bearer', token: 'x' } },
@@ -8108,7 +8290,7 @@
         return ok ? true : JSON.stringify({ envOk, authOk, foldersOk, order });
       } finally {
         await api.rest.save([]); restCollection = null;
-        await api.fs.delete('.ide/environments.yaml');
+        await api.fs.delete(state.project.root, '.ide/environments.yaml');
       }
     });
 
@@ -8127,12 +8309,12 @@
       const expired = await api.skills.install({ token: 'nope', names: ['x'], level: 'project' });
       const r = await api.skills.list();
       const sync = await api.skills.sync(); // an older install exists in .claude/skills only: it must reach the other agents too
-      const mirrored = (await api.fs.read('.agents/skills/demo/SKILL.md')).content || '';
-      const index = (await api.fs.read('AGENTS.md')).content || '';
+      const mirrored = (await api.fs.read(state.project.root, '.agents/skills/demo/SKILL.md')).content || '';
+      const index = (await api.fs.read(state.project.root, 'AGENTS.md')).content || '';
       const synced = /Demo skill/.test(mirrored) && sync.copied.length >= 1 && /bazinga:skills:start/.test(index) && /\*\*demo\*\*: Demo skill/.test(index) && /\.claude\/skills\/demo\/SKILL\.md/.test(index);
       const rm = await api.skills.remove({ level: 'project', name: 'demo' });
       const after = await api.skills.list();
-      const gone = (await api.fs.read('.agents/skills/demo/SKILL.md')).missing === true && !/\*\*demo\*\*/.test((await api.fs.read('AGENTS.md')).content || '');
+      const gone = (await api.fs.read(state.project.root, '.agents/skills/demo/SKILL.md')).missing === true && !/\*\*demo\*\*/.test((await api.fs.read(state.project.root, 'AGENTS.md')).content || '');
       $('#modal').classList.add('hidden');
       return listed && qbox && shortIgnored && searched && synced && gone && !!bad.error && !!expired.error && r.project.length === 1 && rm.removed && after.project.length === 0 ? true : JSON.stringify({ listed, synced, gone, bad, rm, sync });
     });
@@ -8360,7 +8542,7 @@
       const ro = !!tab && tab.ro === true && $('#diffbar').classList.contains('ro');
       const payloadClean = !sessionPayload().project.tabs.some((t) => t.rel === tab.rel && t.kind === 'diff' && state.tabs.find((x) => x.ro));
       await closeTab(tab.id);
-      await api.fs.write('a.py', 'print("v2")\n'); // keep the fixture state
+      await api.fs.write(state.project.root, 'a.py', 'print("v2")\n'); // keep the fixture state
       await openFile('b.py');
       state.blame.on = true; state.blame.rel = null;
       await refreshBlame();
@@ -8370,9 +8552,9 @@
       return rows >= 1 && svgs === rows && files >= 1 && ro && payloadClean && blamed ? true : JSON.stringify({ rows, svgs, files, ro, payloadClean, blamed, lines: state.blame.lines });
     });
     await step('stage one change from the diff', async () => {
-      const before = (await api.fs.read('b.py')).content;
-      await api.git.unstage(['b.py']);
-      await api.fs.write('b.py', 'one\nTWO\nthree\nfour\nFIVE\n'); // two separate changes against HEAD (one/two/three)
+      const before = (await api.fs.read(state.project.root, 'b.py')).content;
+      await api.git.unstage(state.project.root, ['b.py']);
+      await api.fs.write(state.project.root, 'b.py', 'one\nTWO\nthree\nfour\nFIVE\n'); // two separate changes against HEAD (one/two/three)
       await refreshChanges(); await reloadFromDisk();
       await openDiff('b.py');
       const st = () => state.changes.find((x) => x.path === 'b.py') || {};
@@ -8380,7 +8562,7 @@
       const first = await stageChangeAtCursor(false);
       await refreshChanges();
       const partly = st().staged === true && st().unstaged === true;           // only one of the two changes is in the index
-      const cached = (await api.git.head('b.py')) !== undefined;
+      const cached = (await api.git.head(state.project.root, 'b.py')) !== undefined;
       diffEditor.getModifiedEditor().setPosition({ lineNumber: 4, column: 1 });
       const second = await stageChangeAtCursor(false);
       await refreshChanges();
@@ -8389,8 +8571,8 @@
       const back = await stageChangeAtCursor(true);
       await refreshChanges();
       const partlyAgain = st().staged === true && st().unstaged === true;
-      await api.git.unstage(['b.py']);
-      await api.fs.write('b.py', before);
+      await api.git.unstage(state.project.root, ['b.py']);
+      await api.fs.write(state.project.root, 'b.py', before);
       await closeTabsFor('b.py'); await refreshChanges(); await reloadFromDisk();
       return first && partly && cached && second && fully && back && partlyAgain ? true : JSON.stringify({ first, partly, second, fully, back, partlyAgain, status: $('#status-left').textContent });
     });
@@ -8514,9 +8696,9 @@
       const prevSettings = cur.settings;
       await api.settings.save({ ...prevSettings, fixLoop: { enabled: true, maxRounds: 3, idleSeconds: 2, tier: 'fast', include: 'error' } });
       await loadProject();
-      const a0 = (await api.fs.read('a.py')).content;
-      await api.fs.write('a.py', 'print("v3")\n'); // a changed .py file, so the demo gate (match *.py) runs
-      await api.fs.write('fake-agent.js', "const chunk = 'working on it '.repeat(40);\nconsole.log(chunk);\nprocess.stdin.setEncoding('utf8');\nprocess.stdin.on('data', (d) => { console.log(d.includes('automatic quality gate') ? 'GOT:PROMPT' : 'GOT:other'); console.log(chunk); });\n");
+      const a0 = (await api.fs.read(state.project.root, 'a.py')).content;
+      await api.fs.write(state.project.root, 'a.py', 'print("v3")\n'); // a changed .py file, so the demo gate (match *.py) runs
+      await api.fs.write(state.project.root, 'fake-agent.js', "const chunk = 'working on it '.repeat(40);\nconsole.log(chunk);\nprocess.stdin.setEncoding('utf8');\nprocess.stdin.on('data', (d) => { console.log(d.includes('automatic quality gate') ? 'GOT:PROMPT' : 'GOT:other'); console.log(chunk); });\n");
       const events = [];
       const off = api.fixloop.onStatus((e) => events.push(e.state));
       const entry = await newTerminal({ title: 'fake agent', initialInput: 'node fake-agent.js\r', watch: true, label: 'Fake agent' });
@@ -8531,8 +8713,8 @@
       }
       off();
       closeTerminal(entry.key);
-      await api.fs.write('a.py', a0);
-      await api.git.revert('fake-agent.js');
+      await api.fs.write(state.project.root, 'a.py', a0);
+      await api.git.revert(state.project.root, 'fake-agent.js');
       await api.settings.save(prevSettings);
       await loadProject(); await refreshChanges();
       if (!result) return 'pty unavailable';
@@ -8546,9 +8728,9 @@
       // main carries the fixture's own uncommitted a.py/b.py edits for most of this suite - mergeRun refuses into
       // a dirty main, so set them aside for the real merge this step exercises and put the exact bytes back after.
       await refreshChanges();
-      const stashed = await Promise.all(state.changes.map(async (c) => ({ path: c.path, content: (await api.fs.read(c.path)).content })));
-      for (const f of stashed) await api.git.revert(f.path);
-      const restore = async () => { for (const f of stashed) await api.fs.write(f.path, f.content); await refreshChanges(); };
+      const stashed = await Promise.all(state.changes.map(async (c) => ({ path: c.path, content: (await api.fs.read(state.project.root, c.path)).content })));
+      for (const f of stashed) await api.git.revert(state.project.root, f.path);
+      const restore = async () => { for (const f of stashed) await api.fs.write(state.project.root, f.path, f.content); await refreshChanges(); };
       const cur = await api.settings.get();
       const prevSettings = cur.settings;
       await api.settings.save({ ...prevSettings, fixLoop: { enabled: true, maxRounds: 3, idleSeconds: 2, tier: 'fast', include: 'error' }, autoMerge: { enabled: true, minWinRate: 0.8 } });
@@ -8566,7 +8748,7 @@
       // no realistic room for that.
       const r = await startRun({ task: 'update the docs for this module', name: 'automerge docs', agent: { name: 'Smoke', command: "node -e \"console.log('smoke '.repeat(400)); process.stdin.resume();\"" }, allow: '**' });
       if (!r) { offStatus(); offMerged(); await api.settings.save(prevSettings); await restore(); return 'start failed'; }
-      await api.fs.write('automerge-notes.md', '# notes\n'); // not a .py file: the demo gate (match *.py) stays quiet, so the gates come back clean
+      await api.fs.write(state.project.root, 'automerge-notes.md', '# notes\n'); // not a .py file: the demo gate (match *.py) stays quiet, so the gates come back clean
       await refreshChanges();
       if (r.entry && r.entry.id !== null) {
         await waitFor(() => events.includes('done') || merged, 20000);
@@ -8588,9 +8770,9 @@
     await step('auto-merge dry run: logs what would have merged (and the merge dialog agrees it is "Safe to merge"), but never actually merges', async () => {
       const mainRoot = state.project.root;
       await refreshChanges();
-      const stashed = await Promise.all(state.changes.map(async (c) => ({ path: c.path, content: (await api.fs.read(c.path)).content })));
-      for (const f of stashed) await api.git.revert(f.path);
-      const restore = async () => { for (const f of stashed) await api.fs.write(f.path, f.content); await refreshChanges(); };
+      const stashed = await Promise.all(state.changes.map(async (c) => ({ path: c.path, content: (await api.fs.read(state.project.root, c.path)).content })));
+      for (const f of stashed) await api.git.revert(state.project.root, f.path);
+      const restore = async () => { for (const f of stashed) await api.fs.write(state.project.root, f.path, f.content); await refreshChanges(); };
       const cur = await api.settings.get();
       const prevSettings = cur.settings;
       // 'unreviewed' is deliberately off here, not just for autoMerge's own unattended guard check: the merge
@@ -8606,7 +8788,7 @@
       const offMerged = api.runs.onAutoMerged((e) => { merged = e; });
       const r = await startRun({ task: 'update the docs for this module once more', name: 'automerge dry run', agent: { name: 'Smoke', command: "node -e \"console.log('smoke '.repeat(400)); process.stdin.resume();\"" }, allow: '**' });
       if (!r) { offStatus(); offMerged(); await api.settings.save(prevSettings); await restore(); return 'start failed'; }
-      await api.fs.write('automerge-dryrun-notes.md', '# notes\n'); // not .py: stays clean of the demo gate, same reasoning as the real auto-merge step above
+      await api.fs.write(state.project.root, 'automerge-dryrun-notes.md', '# notes\n'); // not .py: stays clean of the demo gate, same reasoning as the real auto-merge step above
       await refreshChanges();
       let verdictReady = false; let stillThere = false;
       if (r.entry && r.entry.id !== null) {
@@ -8721,7 +8903,7 @@
 
     await step('markdown preview draws mermaid diagrams safely (and shows a broken one as an error)', async () => {
       const md = '# D\n\n```mermaid\nflowchart LR\n  A[Start] --> B{Check <img src=x onerror=window.__mmdPwned=1>}\n  B --> C[Done]\n```\n\n```mermaid\nthis is not a diagram\n```\n';
-      await api.fs.write('diagram-preview.md', md);
+      await api.fs.write(state.project.root, 'diagram-preview.md', md);
       await openFile('diagram-preview.md');
       if ($('#md-preview').classList.contains('hidden')) toggleMarkdownPreview(); // the previous step left the editor showing
       const drawn = await waitFor(() => document.querySelector('#md-preview .md-mermaid svg'), 15000);
@@ -8754,10 +8936,10 @@
       const mainRoot = state.project.root;
       const mk = async (name, task) => { const r = await api.runs.create({ name, task, agent: 'Echo', allow: '' }); return r.run; };
       const doneRun = await mk('sc discard', 'Write unit tests for the parser');
-      await switchRoot(doneRun.root); await api.fs.write('sc-merged.txt', 'x\n'); await switchRoot(mainRoot);
+      await switchRoot(doneRun.root); await api.fs.write(state.project.root, 'sc-merged.txt', 'x\n'); await switchRoot(mainRoot);
       const m = await api.runs.discard(doneRun.id); // (the smoke project's main tree is dirty, so a merge is refused here)
       const lostRun = await mk('sc lost', 'Write unit tests for the parser');
-      await switchRoot(lostRun.root); await api.fs.write('sc-lost.txt', 'x\n'); await switchRoot(mainRoot);
+      await switchRoot(lostRun.root); await api.fs.write(state.project.root, 'sc-lost.txt', 'x\n'); await switchRoot(mainRoot);
       await api.runs.discard(lostRun.id, 'lost');
       const idle = await mk('sc idle', 'Write unit tests for the parser'); // thrown away at once: not a data point
       await api.runs.discard(idle.id);

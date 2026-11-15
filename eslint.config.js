@@ -47,4 +47,13 @@ module.exports = [
   { ignores: ['node_modules/**', 'dist/**', 'build/**', 'vendor/**', '*.worktrees/**'] },
   { files: ['**/*.js'], languageOptions: { ecmaVersion: 2022, sourceType: 'commonjs', globals: NODE_GLOBALS }, rules: RULES },
   { files: ['src/renderer/**/*.js'], languageOptions: { ecmaVersion: 2022, sourceType: 'commonjs', globals: { ...NODE_GLOBALS, ...BROWSER_GLOBALS } }, rules: RULES },
+  // An unconsumed fetch() response body leaks a file descriptor until the process freezes (crbug 378822137,
+  // see src/core/safeFetch.js) - every call in shipped source goes through safeFetch() instead, which is the
+  // one place allowed to call fetch() itself. Scoped to src/ (not test/): tests hit short-lived local servers
+  // they tear down themselves, so the leak this guards against cannot accumulate there.
+  {
+    files: ['src/**/*.js'],
+    ignores: ['src/core/safeFetch.js'],
+    rules: { 'no-restricted-syntax': ['error', { selector: "CallExpression[callee.name='fetch']", message: 'Call safeFetch() (src/core/safeFetch.js) instead of bare fetch() - an unconsumed response body leaks a file descriptor (crbug 378822137).' }] },
+  },
 ];

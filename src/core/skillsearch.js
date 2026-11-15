@@ -5,6 +5,7 @@
  * (The documented /api/v1 endpoints need a Vercel token, which a desktop app does not have.) Nothing is installed here: a result only
  * names a GitHub repository, which then goes through the normal fetch, preview and confirm steps.
  */
+const { safeFetch } = require('./safeFetch');
 const BASE = 'https://skills.sh';
 const REPO_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/;
 // eslint-disable-next-line no-control-regex
@@ -26,15 +27,17 @@ async function search(query, { owner = '', limit = 20, fetchFn = fetch, base = B
   if (q.length < 2) return { error: 'Type at least 2 characters.' };
   const params = new URLSearchParams({ q, limit: String(Math.min(50, Math.max(1, limit))) });
   if (/^[A-Za-z0-9-]{1,39}$/.test(String(owner || ''))) params.set('owner', owner);
-  let res;
-  try { res = await fetchFn(`${base}/api/search?${params}`, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(15000) }); } catch (err) {
+  let res, text;
+  try {
+    ({ res, body: text } = await safeFetch(`${base}/api/search?${params}`, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(15000) }, 'text', fetchFn));
+  } catch (err) {
     const code = err && (err.cause && err.cause.code || err.code);
     return { error: code === 'ENOTFOUND' || code === 'EAI_AGAIN' ? 'skills.sh could not be reached. Check your network or proxy.' : `skills.sh could not be reached (${String((err && err.message) || err).slice(0, 100)}).` };
   }
   if (res.status === 429) return { error: 'skills.sh asks to slow down (429). Try again in a minute.' };
   if (!res.ok) return { error: `skills.sh answered with an error (${res.status}).` };
   let body;
-  try { body = await res.json(); } catch { return { error: 'skills.sh answered with something that is not JSON.' }; }
+  try { body = JSON.parse(text); } catch { return { error: 'skills.sh answered with something that is not JSON.' }; }
   return { results: parse(body, base) };
 }
 

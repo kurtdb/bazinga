@@ -2,6 +2,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const YAML = require('yaml');
+const { safeFetch } = require('./safeFetch');
 
 const ideDir = (root) => path.join(root, '.ide');
 const collectionFile = (root) => path.join(ideDir(root), 'requests.yaml');
@@ -52,13 +53,12 @@ async function send({ method, url, headers, body, auth, vars } = {}, timeoutMs =
   const { headers: finalHeaders, url: finalUrl } = applyAuth(subHeaders, u, subAuth);
   const started = Date.now();
   try {
-    const res = await fetch(finalUrl, {
+    const { res, body: text } = await safeFetch(finalUrl, {
       method: m,
       headers: finalHeaders,
       body: !/^(GET|HEAD)$/.test(m) && body ? sub(body) : undefined,
       signal: signal ? AbortSignal.any([AbortSignal.timeout(timeoutMs), signal]) : AbortSignal.timeout(timeoutMs),
-    });
-    const text = await res.text();
+    }, 'text');
     const outHeaders = {};
     for (const [k, v] of res.headers) outHeaders[k] = v;
     return { ok: true, status: res.status, statusText: res.statusText, headers: outHeaders, body: text, timeMs: Date.now() - started };
