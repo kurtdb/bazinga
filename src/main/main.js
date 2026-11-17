@@ -65,6 +65,8 @@ const commentanchor = require('../core/commentanchor');
 const skillindex = require('../core/skillindex');
 const envinline = require('../core/envinline');
 const ollama = require('../core/ollama');
+const llamacpp = require('../core/llamacpp');
+const llamamodels = require('../core/llamamodels');
 const agentprep = require('../core/agentprep');
 const modeltest = require('../core/modeltest');
 const toolproxy = require('../core/toolproxy');
@@ -1590,6 +1592,28 @@ function registerIpc() {
   ipcMain.handle('agent:testCancel', () => { if (modelTestJob) modelTestJob.cancel(); return true; });
   ipcMain.handle('ollama:list', async (_e, baseUrl) => ollama.status(baseUrl || ollama.DEFAULT_URL));
   ipcMain.handle('ollama:warm', async (_e, { baseUrl, model, keepAlive } = {}) => { try { await ollama.warm(baseUrl || ollama.DEFAULT_URL, String(model || ''), String(keepAlive || '15m'), 60000); return { ok: true }; } catch (err) { return { ok: false, error: err.message }; } });
+  // llama.cpp: Bazinga runs llama-server itself (unlike Ollama, which is a daemon it only talks to), with its own
+  // model manager on top (llama.cpp has no pull/registry of its own) - see core/llamacpp.js and core/llamamodels.js.
+  const llamaModelsDir = () => path.join(app.getPath('userData'), 'models', 'gguf');
+  ipcMain.handle('llamacpp:status', async () => ({ ...(await llamacpp.status()), hasBinary: !!llamacpp.resolveBinary(app.getPath('userData')) }));
+  ipcMain.handle('llamacpp:downloadBinary', () => safe(async () => ({ path: await llamacpp.downloadBinary(app.getPath('userData'), { onProgress: (p) => send('llamacpp:binaryDownloadProgress', p) }) })));
+  ipcMain.handle('llamacpp:start', (_e, { modelId, ctxSize } = {}) => safe(async () => {
+    const binaryPath = llamacpp.resolveBinary(app.getPath('userData'));
+    if (!binaryPath) throw new Error('llama-server was not found on PATH and no downloaded copy exists yet.');
+    const model = llamamodels.list(llamaModelsDir()).find((m) => m.id === modelId);
+    if (!model) throw new Error('That model is not installed.');
+    const alias = model.file.replace(/\.gguf$/i, '');
+    return { ...(await llamacpp.start({ binaryPath, modelPath: model.path, ctxSize: Number(ctxSize) || llamacpp.DEFAULT_CTX_SIZE, alias })), alias };
+  }));
+  ipcMain.handle('llamacpp:stop', () => safe(async () => { await llamacpp.stop(); }));
+  ipcMain.handle('llamamodels:search', (_e, query) => safe(async () => llamamodels.searchHub(String(query || ''))));
+  ipcMain.handle('llamamodels:listRepoFiles', (_e, repo) => safe(async () => llamamodels.listRepoFiles(String(repo || ''))));
+  ipcMain.handle('llamamodels:list', () => safe(async () => llamamodels.list(llamaModelsDir())));
+  ipcMain.handle('llamamodels:download', (_e, { repo, file, sizeBytes, sha256 } = {}) => safe(async () => llamamodels.download(llamaModelsDir(), repo, file, {
+    sizeBytes: Number(sizeBytes) || 0, sha256: sha256 || null, onProgress: (p) => send('llamamodels:downloadProgress', { repo, file, ...p }),
+  })));
+  ipcMain.handle('llamamodels:cancelDownload', (_e, { repo, file } = {}) => llamamodels.cancel(String(repo || ''), String(file || '')));
+  ipcMain.handle('llamamodels:remove', (_e, id) => safe(async () => { llamamodels.remove(llamaModelsDir(), String(id || '')); }));
   // AI inline completion (ghost text): off unless a project turns it on. Empty baseUrl/model in settings = use the
   // first configured agent that already talks to an Ollama-style server, the same target the agent terminal uses.
   ipcMain.handle('ai:complete', (_e, { prefix, suffix } = {}) => safe(async () => {

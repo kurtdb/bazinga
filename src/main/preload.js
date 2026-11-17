@@ -182,6 +182,22 @@ contextBridge.exposeInMainWorld('api', {
     list: (baseUrl) => invoke('ollama:list', baseUrl),
     warm: (o) => invoke('ollama:warm', o),
   },
+  llamacpp: {
+    status: () => invoke('llamacpp:status'),
+    downloadBinary: () => invoke('llamacpp:downloadBinary'),
+    start: (o) => invoke('llamacpp:start', o),
+    stop: () => invoke('llamacpp:stop'),
+    onBinaryDownloadProgress: (cb) => on('llamacpp:binaryDownloadProgress', cb),
+  },
+  llamamodels: {
+    search: (query) => invoke('llamamodels:search', query),
+    listRepoFiles: (repo) => invoke('llamamodels:listRepoFiles', repo),
+    list: () => invoke('llamamodels:list'),
+    download: (o) => invoke('llamamodels:download', o),
+    cancelDownload: (o) => invoke('llamamodels:cancelDownload', o),
+    remove: (id) => invoke('llamamodels:remove', id),
+    onDownloadProgress: (cb) => on('llamamodels:downloadProgress', cb),
+  },
   ai: { complete: (o) => invoke('ai:complete', o) },
   container: {
     check: () => invoke('container:check'),

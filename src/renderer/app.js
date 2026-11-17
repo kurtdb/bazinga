@@ -3746,6 +3746,113 @@
     };
     urlIn.addEventListener('change', loadModels);
     loadModels();
+    // ---- llama.cpp: Bazinga runs llama-server itself (Ollama is a daemon it only talks to; llama.cpp has none,
+    // so Bazinga owns the process and a model-download manager on top of it - see core/llamacpp.js/llamamodels.js).
+    let llamaInstalled = [];
+    let llamaRunningStatus = null;
+    const llamaModelSel = el('select', { id: 'llama-model' });
+    const llamaStatusLine = el('div', { class: 'hint' }, 'Checking llama.cpp…');
+    const llamaStartBtn = el('button', { onclick: () => llamaToggle() }, ic('play'), ' Start');
+    const llamaDownloadBtn = el('button', { onclick: () => openLlamaDownloadPanel() }, ic('download'), ' Download model…');
+    async function refreshLlamaModels() {
+      const cur = llamaModelSel.value;
+      llamaInstalled = await api.llamamodels.list();
+      if (llamaInstalled.error) llamaInstalled = [];
+      llamaModelSel.replaceChildren(
+        el('option', { value: '', text: llamaInstalled.length ? 'Pick a downloaded model…' : 'No models downloaded yet' }),
+        ...llamaInstalled.map((m) => el('option', { value: m.id, text: `${m.file} (${(m.size / 1e9).toFixed(1)} GB)` })),
+      );
+      if (llamaInstalled.some((m) => m.id === cur)) llamaModelSel.value = cur;
+    }
+    async function refreshLlamaStatus() {
+      const st = await api.llamacpp.status();
+      llamaRunningStatus = st && st.running ? st : null;
+      llamaStartBtn.replaceChildren(ic(llamaRunningStatus ? 'square' : 'play'), llamaRunningStatus ? ' Stop' : ' Start');
+      llamaModelSel.disabled = !!llamaRunningStatus; // switching models is stop, then start again - never a live swap
+      llamaStatusLine.textContent = llamaRunningStatus
+        ? `Running: ${llamaRunningStatus.alias || llamaRunningStatus.model} on port ${llamaRunningStatus.port} (${llamaRunningStatus.ctxSize} context).`
+        : st && st.hasBinary === false ? 'llama-server was not found on PATH and no downloaded copy exists yet.' : 'Not running.';
+    }
+    async function llamaToggle() {
+      llamaStartBtn.disabled = true;
+      try {
+        if (llamaRunningStatus) { await api.llamacpp.stop(); await refreshLlamaStatus(); return; }
+        const modelId = llamaModelSel.value;
+        if (!modelId) { setStatus('Pick a downloaded model first.'); return; }
+        const st = await api.llamacpp.status();
+        if (!st.hasBinary) {
+          if (!window.confirm('llama-server is not installed. Download the plain CPU build now from the project’s GitHub releases?')) return;
+          llamaStatusLine.textContent = 'Downloading llama-server…';
+          const off = api.llamacpp.onBinaryDownloadProgress((p) => { llamaStatusLine.textContent = `Downloading llama-server… ${(p.bytesDownloaded / 1e6).toFixed(0)}/${(p.totalBytes / 1e6).toFixed(0)} MB`; });
+          try { const r = await api.llamacpp.downloadBinary(); if (r && r.error) { setStatus(r.error); return; } } finally { off(); }
+        }
+        const r = await api.llamacpp.start({ modelId });
+        if (r && r.error) { setStatus(r.error); return; }
+        await refreshLlamaStatus();
+        const picked = llamaInstalled.find((m) => m.id === modelId);
+        agents.push({ name: (picked && picked.file.replace(/\.gguf$/i, '')) || 'llama.cpp', command: localClaudeCmd(r.alias), api: 'openai', hint: LOCAL_HINT, env: { ANTHROPIC_BASE_URL: `http://127.0.0.1:${r.port}/v1`, ANTHROPIC_AUTH_TOKEN: 'llama-cpp', ANTHROPIC_API_KEY: '' } });
+        drawAgents();
+        setStatus(`llama.cpp is running ${r.alias}.`);
+      } finally { llamaStartBtn.disabled = false; }
+    }
+    function openLlamaDownloadPanel() {
+      let seq = 0;
+      const q = el('input', { type: 'text', placeholder: 'Search Hugging Face, e.g. "qwen2.5 coder gguf"' });
+      const results = el('div', { class: 'llama-search-results' });
+      const urlField = el('input', { type: 'text', placeholder: 'or paste a Hugging Face .gguf file URL' });
+      const urlBtn = el('button', { onclick: () => downloadFromUrl(urlField.value) }, ic('download'), ' Download');
+      const fileRow = (repo, f) => {
+        const bar = el('div', { class: 'hint llama-progress' });
+        const btn = el('button', {}, ic('download'), ` ${f.file}${f.sizeBytes ? ` (${(f.sizeBytes / 1e9).toFixed(1)} GB)` : ''}`);
+        btn.onclick = async () => {
+          btn.disabled = true; bar.textContent = 'Starting…';
+          const off = api.llamamodels.onDownloadProgress((p) => { if (p.repo === repo && p.file === f.file) bar.textContent = `${(p.bytesDownloaded / 1e6).toFixed(0)} / ${(p.totalBytes / 1e6).toFixed(0)} MB`; });
+          try {
+            const r = await api.llamamodels.download({ repo, file: f.file, sizeBytes: f.sizeBytes, sha256: f.sha256 });
+            if (r && r.error) { bar.textContent = r.error; btn.disabled = false; return; }
+            setStatus(`${f.file} downloaded.`); panel.close(); await refreshLlamaModels();
+          } catch (err) { bar.textContent = err.message; btn.disabled = false; } finally { off(); }
+        };
+        return el('div', { class: 'line llama-file-row' }, btn, bar);
+      };
+      const repoRow = (r, mySeq) => {
+        const filesBox = el('div', { class: 'llama-repo-files' }); filesBox.style.display = 'none';
+        const toggle = el('button', { class: 'linklike' }, `${r.repo} — ${r.downloads.toLocaleString()} downloads`);
+        toggle.onclick = async () => {
+          const show = filesBox.style.display === 'none';
+          filesBox.style.display = show ? 'block' : 'none';
+          if (show && !filesBox.childNodes.length) {
+            filesBox.append(el('div', { class: 'hint', text: 'Loading files…' }));
+            const files = await api.llamamodels.listRepoFiles(r.repo);
+            if (mySeq !== seq) return;
+            filesBox.replaceChildren(...(files.error ? [el('div', { class: 'hint', text: files.error })]
+              : files.length ? files.map((f) => fileRow(r.repo, f)) : [el('div', { class: 'hint', text: 'No .gguf files in this repo.' })]));
+          }
+        };
+        return el('div', { class: 'llama-repo-row' }, toggle, filesBox);
+      };
+      const search = async () => {
+        const query = q.value.trim();
+        const mySeq = ++seq;
+        if (!query) { results.replaceChildren(el('div', { class: 'hint', text: 'Type to search Hugging Face.' })); return; }
+        results.replaceChildren(el('div', { class: 'hint', text: 'Searching…' }));
+        const repos = await api.llamamodels.search(query);
+        if (mySeq !== seq) return; // a newer search started meanwhile - drop this stale result
+        results.replaceChildren(...(repos.error ? [el('div', { class: 'hint', text: repos.error })]
+          : repos.length ? repos.map((r) => repoRow(r, mySeq)) : [el('div', { class: 'hint', text: 'No results.' })]));
+      };
+      async function downloadFromUrl(url) {
+        const m = /^https?:\/\/huggingface\.co\/([^/]+\/[^/]+)\/resolve\/[^/]+\/(.+\.gguf)$/i.exec(String(url || '').trim());
+        if (!m) { setStatus('That does not look like a Hugging Face .gguf file URL (expected …/resolve/main/file.gguf).'); return; }
+        const r = await api.llamamodels.download({ repo: m[1], file: m[2] });
+        if (r && r.error) { setStatus(r.error); return; }
+        setStatus(`${m[2]} downloaded.`); panel.close(); await refreshLlamaModels();
+      }
+      q.addEventListener('input', () => { clearTimeout(q._t); q._t = setTimeout(search, 400); });
+      const panel = overlayPanel('Download a GGUF model', el('div', { class: 'llama-download-panel' }, q, results, el('div', { class: 'line' }, urlField, urlBtn)));
+      search();
+    }
+    refreshLlamaModels(); refreshLlamaStatus();
     const warmOn = el('input', { type: 'checkbox' }); warmOn.checked = ol.keepWarm !== false;
     const unloadOn = el('input', { type: 'checkbox' }); unloadOn.checked = ol.unloadOthers !== false;
     const noThinkOn = el('input', { type: 'checkbox' }); noThinkOn.checked = ol.noThink !== false;
@@ -3780,7 +3887,11 @@
         el('label', { class: 'check', title: 'Adds --tools Read,Write,Edit,Bash,Glob,Grep, --disable-slash-commands and --strict-mcp-config to Claude Code on a local model, whatever an older saved button says. Without it a small model can load skills and start subagents of its own, which takes hours.' }, restrictOn, ' Local models get only file and shell tools: no skills, subagents or MCP servers'),
         el('label', { class: 'check', title: 'How long the Test button waits for each step' }, ' Model test waits up to ', testMin, ' minutes per step'),
         el('label', { class: 'check', title: 'Claude Code reserves this much of the context window for the model\'s reply (it assumes 32000 for models it does not know, which leaves a 32k window almost empty). At most a quarter of the window is used.' }, ' Longest reply of a local model: ', maxOut, ' tokens (a smaller number leaves more room for files)'),
-        el('div', { class: 'hint', text: 'Claude Code on a local model also gets settings that make it behave (no calls to Anthropic, all model aliases on your model, the real context size, long timeouts). Local-model buttons are checked before they start: Ollama running, model installed, context at least 32k. Standing instructions per agent are written to a file and passed with --append-system-prompt-file.' })),
+        el('div', { class: 'hint', text: 'Claude Code on a local model also gets settings that make it behave (no calls to Anthropic, all model aliases on your model, the real context size, long timeouts). Local-model buttons are checked before they start: Ollama running, model installed, context at least 32k. Standing instructions per agent are written to a file and passed with --append-system-prompt-file.' }),
+        el('div', { class: 'agent-head', text: 'llama.cpp (runs inside Bazinga)' }),
+        el('div', { class: 'line' }, llamaModelSel, llamaStartBtn, llamaDownloadBtn),
+        llamaStatusLine,
+        el('div', { class: 'hint', text: 'Bazinga starts and stops llama-server itself and gives it one downloaded model at a time. Changing the picked model while it is running has no effect until you Stop and Start again - llama.cpp runs one model per process, it cannot swap a running one.' })),
       reviewCommand: el('div', { class: 'field' }, el('label', { text: 'Review command (the review prompt is piped to its stdin)' }), review,
         el('label', { text: 'Review rules (all projects). A REVIEW.md in the project root is added after these.' }), rulesIn,
         el('div', null, el('button', { title: 'Free and private, but a small local model reviews less well than Claude', onclick: () => { review.value = 'ollama run qwen3.5'; } }, ic('cpu'), 'Use a local model (ollama run)'))),
