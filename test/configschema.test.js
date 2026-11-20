@@ -45,6 +45,11 @@ test('configProblems reads the project file: missing = fine, broken JSON is repo
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+test('memory.enabled accepts a boolean and rejects anything else', () => {
+  assert.deepStrictEqual(problems({ memory: { enabled: true } }), []);
+  assert.deepStrictEqual(problems({ memory: { enabled: 'yes' } }), ['memory.enabled must be a boolean']);
+});
+
 test('agents may say api: "openai" and a context size; other values are reported', () => {
   const { problems } = require('../src/core/configschema');
   assert.deepEqual(problems({ agents: [{ name: 'LM', command: 'claude', api: 'openai', context: 65536 }] }), []);

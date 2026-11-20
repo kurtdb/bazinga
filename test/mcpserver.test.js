@@ -8,6 +8,7 @@ const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
 const { StreamableHTTPClientTransport } = require('@modelcontextprotocol/sdk/client/streamableHttp.js');
 const M = require('../src/core/mcpserver');
 const agentprep = require('../src/core/agentprep');
+const agentmemory = require('../src/core/agentmemory');
 
 async function setup(handlers) {
   const mcp = new M.BazingaMcp({ handlers });
@@ -26,7 +27,7 @@ test('an MCP client sees the three tools and gets the answers of the handlers (w
     startRun: async (c, a) => ({ id: 'r2', started: a.task }),
   });
   const tools = (await client.listTools()).tools.map((t) => t.name).sort();
-  assert.deepStrictEqual(tools, ['list_runs', 'run_status', 'start_run']);
+  assert.deepStrictEqual(tools, ['list_runs', 'recall', 'remember', 'run_status', 'start_run']);
   assert.deepStrictEqual(json(await client.callTool({ name: 'list_runs', arguments: {} })), [{ id: 'r1', name: 'backend', state: 'running' }]);
   assert.deepStrictEqual(calls, [['list', 5]]);
   assert.strictEqual(json(await client.callTool({ name: 'run_status', arguments: { id: 'r1' } })).files, 3);
@@ -47,6 +48,23 @@ test('start_run: a task that is too short is refused by the schema; one agent ma
   assert.strictEqual(results[1].isError, true); assert.match(results[1].content[0].text, /declined by the user/);
   assert.strictEqual(results[5].isError, true); assert.match(results[5].content[0].text, /ask the user/);
   await client.close(); mcp.close();
+});
+
+test('recall/remember: a client can save a fact through the handlers and look it up again; empty text is a tool error, not a throw', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-'));
+  const file = agentmemory.fileFor(dir, '/proj/a');
+  const { mcp, client } = await setup({
+    recall: async (caller, args) => ({ results: agentmemory.recall(agentmemory.readAll(file), args) }),
+    remember: async (caller, { text, files }) => (agentmemory.append(file, { text, files }) ? { ok: true } : { error: 'Nothing to remember (text was empty).' }),
+  });
+  assert.deepStrictEqual(json(await client.callTool({ name: 'remember', arguments: { text: 'retry swallows ECONNRESET', files: ['src/core/toolproxy.js'] } })), { ok: true });
+  const found = json(await client.callTool({ name: 'recall', arguments: { query: 'retry' } }));
+  assert.strictEqual(found.results.length, 1);
+  assert.strictEqual(found.results[0].text, 'retry swallows ECONNRESET');
+  assert.strictEqual(json(await client.callTool({ name: 'recall', arguments: { query: 'nope' } })).results.length, 0);
+  const schemaRejected = await client.callTool({ name: 'remember', arguments: { text: 'x' } }).catch((e) => ({ isError: true, content: [{ text: String(e.message) }] }));
+  assert.strictEqual(schemaRejected.isError, true); // below the 3-char minimum
+  await client.close(); mcp.close(); fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('access: unknown agent, wrong host, browser origin, GET and bad JSON are refused', async () => {
@@ -82,4 +100,18 @@ test('prepare adds the MCP config to a cloud Claude command only, and only when 
   assert.strictEqual((await agentprep.prepare({ name: 'C', command: 'claude' }, { ...opts, mcp: null })).mcp, undefined);
   assert.strictEqual((await agentprep.prepare({ name: 'A', command: 'aider' }, opts)).mcp, undefined);
   mcp.close(); fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('prepare folds a project\'s remembered facts into the hint file when memory is given, and leaves them out otherwise', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-'));
+  const memDir = path.join(dir, 'agent-memory');
+  agentmemory.append(agentmemory.fileFor(memDir, dir), { text: 'the retry logic swallows ECONNRESET', files: ['src/core/toolproxy.js'] });
+  const base = { name: 'C', command: 'claude' };
+  const withMemory = await agentprep.prepare(base, { root: dir, hintDir: path.join(dir, 'h'), config: {}, memory: { dir: memDir } });
+  assert.match(fs.readFileSync(withMemory.hintFile, 'utf8'), /the retry logic swallows ECONNRESET/);
+  const withoutMemory = await agentprep.prepare(base, { root: dir, hintDir: path.join(dir, 'h'), config: {}, memory: null });
+  assert.ok(!withoutMemory.hintFile || !fs.readFileSync(withoutMemory.hintFile, 'utf8').includes('ECONNRESET'));
+  const noEntries = await agentprep.prepare(base, { root: path.join(dir, 'other'), hintDir: path.join(dir, 'h'), config: {}, memory: { dir: memDir } });
+  assert.ok(!noEntries.hintFile || !fs.readFileSync(noEntries.hintFile, 'utf8').includes('Things agents have already learned'));
+  fs.rmSync(dir, { recursive: true, force: true });
 });

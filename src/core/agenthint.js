@@ -7,8 +7,8 @@ const crypto = require('node:crypto');
 
 const PROJECT_FILE = path.join('.ide', 'agent-hint.md');
 
-function compose({ agentHint, projectHint, layout, extra }) {
-  return [agentHint, layout, projectHint, extra].map((t) => String(t || '').trim()).filter(Boolean).join('\n\n');
+function compose({ agentHint, projectHint, layout, memoryIndex, extra }) {
+  return [agentHint, layout, projectHint, memoryIndex, extra].map((t) => String(t || '').trim()).filter(Boolean).join('\n\n');
 }
 
 /** Insert the flag after the leading `claude` word. Unchanged for other agents, or when the command sets its own system prompt text. */

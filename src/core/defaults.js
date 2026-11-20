@@ -203,4 +203,12 @@ module.exports = [
     requiresBin: 'dotnet',
     run: 'dotnet test --nologo', parser: 'exitcode', timeoutSec: 900,
   },
+  {
+    // bend PROOF.bend checks that the code satisfies the invariants declared in LAWS.bend (https://bend-lang.com) -
+    // the one step the upstream docs say to run before every commit. No documented structured output format, so
+    // this reports pass/fail by exit code only (like Go test/Cargo test above), not per-line findings.
+    name: 'Bend proof', tier: 'fast', scope: 'project', match: ['*.bend'],
+    requiresFile: ['PROOF.bend'], requiresBin: 'bend',
+    run: 'bend PROOF.bend', parser: 'exitcode', timeoutSec: 120,
+  },
 ];

@@ -134,6 +134,8 @@ contextBridge.exposeInMainWorld('api', {
     kill: (id) => ipcRenderer.send('pty:kill', id),
     onData: (cb) => on('pty:data', cb),
     onExit: (cb) => on('pty:exit', cb),
+    listBackground: () => invoke('pty:listBackground'),
+    stopAllBackground: () => invoke('pty:stopAllBackground'),
   },
   history: {
     log: (opts) => invoke('history:log', opts),
@@ -210,6 +212,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   skills: {
     list: () => invoke('skills:list'),
+    draftTask: (opts) => invoke('skills:draftTask', opts),
     search: (query, owner) => invoke('skills:search', query, owner),
     fetch: (source) => invoke('skills:fetch', source),
     install: (opts) => invoke('skills:install', opts),
@@ -219,6 +222,11 @@ contextBridge.exposeInMainWorld('api', {
     sync: () => invoke('skills:sync'),
     listBundled: () => invoke('skills:listBundled'),
     installBundled: (opts) => invoke('skills:installBundled', opts),
+  },
+  governance: {
+    listStacks: () => invoke('governance:listStacks'),
+    draftTask: (opts) => invoke('governance:draftTask', opts),
+    applyStage: (opts) => invoke('governance:applyStage', opts),
   },
   agentconfig: { scan: () => invoke('agentconfig:scan') },
   doctor: () => invoke('doctor:run'),
@@ -288,11 +296,17 @@ contextBridge.exposeInMainWorld('api', {
     get: () => invoke('settings:get'),
     save: (settings) => invoke('settings:save', settings),
   },
+  agentMemory: {
+    list: () => invoke('memory:list'),
+    clear: () => invoke('memory:clear'),
+  },
   session: {
     get: () => invoke('session:get'),
     save: (data) => invoke('session:save', data),
   },
   copy: (text) => invoke('app:copy', text),
+  paste: () => invoke('app:paste'),
+  devSource: () => invoke('app:devSource'),
   smokeExternalWrite: (rel, text) => ipcRenderer.invoke('smoke:external-write', rel, text),
   appReady: () => ipcRenderer.send('app:ready'),
   smokeStep: (name) => ipcRenderer.send('smoke:step', name),

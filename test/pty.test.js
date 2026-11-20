@@ -4,6 +4,19 @@ const assert = require('node:assert/strict');
 const Module = require('node:module');
 const { PtyManager } = require('../src/main/pty');
 const { tmpdir } = require('./helpers');
+const { EventEmitter } = require('node:events');
+
+/** A fake agentd client: enough of AgentdClient's shape (request()/on('event')/removeListener) to test PtyManager.createRemote()'s own session-wiring in isolation from the real daemon/socket (that's test/agentd.test.js's and test/agentdClient.test.js's job). */
+function fakeClient(responses = {}) {
+  const c = new EventEmitter();
+  c.calls = [];
+  c.request = async (op, params) => {
+    c.calls.push([op, params]);
+    if (op in responses) { const r = responses[op]; if (r instanceof Error) throw r; return r; }
+    return {};
+  };
+  return c;
+}
 
 let ptyAvailable = true;
 try { require('node-pty'); } catch { ptyAvailable = false; }
@@ -182,4 +195,64 @@ test('regression: the IDE is told the agent went idle even when the fix loop thr
   assert.equal((await asking.run()).action, 'prompt');
   assert.deepEqual(asking.sent, ['idle']);
   assert.equal(called, false, 'no fix prompt is pasted into a permission question');
+});
+
+test('createRemote: a fresh run subscribes, resolves with the daemon\'s shell/reattached, and relays data/exit events to pty:data/pty:exit', async () => {
+  const { m, events, text } = manager();
+  const client = fakeClient({ create: { alive: true, reattached: false, shell: '/bin/sh' }, subscribe: { alive: true, replay: '' } });
+  const res = await m.createRemote({ runId: 'run-a', client, cwd: tmpdir(), config: SH });
+  assert.equal(res.shell, '/bin/sh');
+  assert.equal(res.reattached, false);
+  assert.deepEqual(client.calls.map((c) => c[0]), ['create', 'subscribe']);
+  client.emit('event', { runId: 'run-a', kind: 'data', data: 'hello from the daemon' });
+  assert.ok(await wait(() => text(res.id).includes('hello from the daemon')));
+  client.emit('event', { runId: 'run-a', kind: 'exit', exitCode: 7 });
+  assert.ok(await wait(() => events.some((e) => e[0] === 'pty:exit' && e[1] === res.id && e[2] === 7)));
+  assert.equal(m.sessions.has(res.id), false, 'the exit event cleaned up the session');
+});
+
+test('createRemote: an event for a different runId on the shared client is ignored', async () => {
+  const { m, text } = manager();
+  const client = fakeClient({ create: { alive: true, reattached: false, shell: '/bin/sh' }, subscribe: { alive: true, replay: '' } });
+  const res = await m.createRemote({ runId: 'run-b', client, cwd: tmpdir(), config: SH });
+  client.emit('event', { runId: 'some-other-run', kind: 'data', data: 'not for us' });
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(text(res.id), '');
+});
+
+test('createRemote: a reattach replays the daemon\'s ring buffer into the terminal without re-running it through the idle/prompt detectors', async () => {
+  const { m, text } = manager();
+  const client = fakeClient({ create: { alive: true, reattached: true, shell: '/bin/sh' }, subscribe: { alive: true, replay: 'PRIOR OUTPUT\nmore of it\n' } });
+  const res = await m.createRemote({ runId: 'run-c', client, cwd: tmpdir(), config: SH, watch: true });
+  assert.ok(await wait(() => text(res.id).includes('PRIOR OUTPUT')));
+  const s = m.sessions.get(res.id);
+  assert.equal(s.idle.bytes, 0, 'replay is shown, but does not feed the idle detector\'s timing model');
+});
+
+test('createRemote: the daemon refusing to create (e.g. it could not start the shell) surfaces as a rejected request - reported as an error, not a thrown exception', async () => {
+  // AgentdClient rejects an {ok:false} response (see agentdClient.js's _onData) - this is the shape a real create failure actually takes, not a resolved {error} object
+  const { m } = manager();
+  const client = fakeClient({ create: new Error('Could not start "/bin/sh": boom') });
+  const res = await m.createRemote({ runId: 'run-d', client, cwd: tmpdir(), config: SH });
+  assert.match(res.error, /boom/);
+});
+
+test('createRemote: a connection error while creating is reported as an error, not a rejected promise the caller must catch', async () => {
+  const { m } = manager();
+  const client = fakeClient({ create: new Error('agentd connection closed') });
+  const res = await m.createRemote({ runId: 'run-e', client, cwd: tmpdir(), config: SH });
+  assert.match(res.error, /connection closed/);
+});
+
+test('killAll: a remote session is only detached (the real pty is left running) while a direct one is actually killed', { skip }, async () => {
+  const { m } = manager();
+  const direct = m.create({ cwd: tmpdir(), config: SH });
+  const client = fakeClient({ create: { alive: true, reattached: false, shell: '/bin/sh' }, subscribe: { alive: true, replay: '' } });
+  const remote = await m.createRemote({ runId: 'run-f', client, cwd: tmpdir(), config: SH });
+  m.killAll();
+  assert.equal(m.sessions.has(direct.id), false, 'the direct session is gone');
+  assert.equal(m.sessions.has(remote.id), false, 'the remote session is also gone locally...');
+  assert.ok(!client.calls.some((c) => c[0] === 'kill'), '...but killAll never asked the daemon to kill it - only a local detach happened');
+  client.emit('event', { runId: 'run-f', kind: 'data', data: 'still running in the background' }); // this window stopped listening, so this is a no-op, not a crash
+  await new Promise((r) => setTimeout(r, 20));
 });

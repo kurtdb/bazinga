@@ -65,6 +65,8 @@ const DEFAULT_CONFIG = {
   // Fleet panel: an agent with no output and no model request for staleMinutes counts as stale. prices = estimated cost, e.g. { "sonnet": [3, 15] } = dollars per million input / output tokens (empty = no cost shown).
   fleet: { staleMinutes: 5, prices: {} },
   agentHooks: true,       // Claude Code reports by itself when it is done or needs permission (hooks); off = Bazinga guesses from the quiet terminal
+  osc7501: { enabled: true }, // listen for the open OSC 7501 status protocol (core/osc7501.js) from any CLI that emits it, as another "needs attention" signal
+  layouts: [],            // named, switchable panel arrangements you save from the command palette: { id, label, sideW, bottomH, editor2W, zen, sideTab }
   notifications: true,    // OS notification when an agent goes idle / the fix loop finishes and the IDE is in the background
   // Checks for a new release at every start (electron-updater). Never downloads or installs without a click either way.
   // No feed is hardcoded here on purpose (core/updater.js) - a packaged build picks it up from electron-builder's own

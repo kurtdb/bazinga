@@ -342,6 +342,32 @@
       ts.typescriptDefaults.setDiagnosticsOptions({ noSemanticValidation: true });
       ts.javascriptDefaults.setDiagnosticsOptions({ noSemanticValidation: true });
     } catch { /* optional */ }
+    // Bend (https://bend-lang.com) isn't one of Monaco's 80+ bundled languages - a minimal Monarch grammar so
+    // .bend/LAWS.bend/PROOF.bend files at least get real highlighting instead of plain text. No official grammar
+    // is published; keywords/constants here are inferred from the handful of code samples the site itself shows
+    // ("Python-style syntax", `def Namespace.name(args):`, `law name: for x: Type ...`, `#` comments, `True{}`/
+    // `False{}` constructors) - not a verified complete spec, so this stays intentionally conservative.
+    monaco.languages.register({ id: 'bend', extensions: ['.bend'], aliases: ['Bend'] });
+    monaco.languages.setLanguageConfiguration('bend', {
+      comments: { lineComment: '#' },
+      brackets: [['{', '}'], ['[', ']'], ['(', ')']],
+      autoClosingPairs: [{ open: '{', close: '}' }, { open: '[', close: ']' }, { open: '(', close: ')' }, { open: '"', close: '"' }],
+    });
+    monaco.languages.setMonarchTokensProvider('bend', {
+      defaultToken: '',
+      tokenizer: {
+        root: [
+          [/#.*$/, 'comment'],
+          [/\b(?:def|law|for|if|elif|else|match|with|use|import|type|return|and|or|not|in)\b/, 'keyword'],
+          [/\b(?:True|False)\b/, 'constant'],
+          [/\b[A-Z][A-Za-z0-9_]*(?:\.[a-z_][A-Za-z0-9_]*)?\b/, 'type.identifier'], // Namespace.name, or a bare generic like List/Move
+          [/\b\d+(?:\.\d+)?\b/, 'number'],
+          [/"(?:[^"\\]|\\.)*"/, 'string'],
+          [/[{}()[\]]/, '@brackets'],
+          [/[=+\-*/%!<>]+/, 'operator'],
+        ],
+      },
+    });
     monaco.editor.defineTheme('bazinga-hc', { base: 'hc-black', inherit: true, rules: [], colors: {
       'editor.background': '#000000', 'editor.foreground': '#ffffff',
       'editorCursor.foreground': '#ffffff', 'editor.selectionBackground': '#003a5c',
@@ -2306,6 +2332,13 @@
       ['View: close split editor', 'x', () => closeSplit()],
       [`Minimap: turn ${minimapOn() ? 'off' : 'on'}`, 'map', () => toggleMinimap()],
       [`Zen mode: turn ${state.zen ? 'off' : 'on'}`, 'square', () => toggleZen()],
+      ['Window: save current layout as…', 'bookmark', () => saveLayoutAs()],
+      ...layoutsList().flatMap((l) => [
+        [`Window: switch to layout "${l.label}"`, 'layout-dashboard', () => applyLayoutSnapshot(l)],
+        [`Window: export layout "${l.label}" to clipboard`, 'copy', () => exportLayout(l.id)],
+        [`Window: delete layout "${l.label}"`, 'trash-2', () => deleteLayout(l.id)],
+      ]),
+      ['Window: import layout from clipboard…', 'clipboard-copy', () => importLayoutFromClipboard()],
       ['Tab: pin/unpin active tab', 'pin', () => { const t = activeTab(); if (t) toggleTabPin(t.id); else setStatus('Open a tab first.'); }],
       ['Tab: close other tabs', 'x', () => { const t = activeTab(); if (t) closeOtherTabs(t.id); }],
       ['Tab: close all tabs', 'x', () => closeAllTabs()],
@@ -2334,6 +2367,7 @@
       ['Work items (Azure Boards or Jira): start an agent run from one…', 'workflow', () => openWorkItems((text, item) => openRunDialog({ task: text, name: `${item.ref || `AB#${item.id}`} ${item.title}`.slice(0, 60) }), null)],
       ['Agent skills (IDE and project level)…', 'package', openSkills],
       ['Agent configuration (MCP servers, skills, agents, hooks)…', 'link', openAgentConfig],
+      ['Agent memory: view or clear what agents have learned about this project…', 'bookmark', openAgentMemory],
       ['Check for updates…', 'refresh-cw', openUpdates],
       ['Capture real traffic (hooks, telemetry, model replies, ACP): turn on or off', 'bug', async () => { const st = await api.capture.toggle(); setStatus(st.enabled ? `Capture is ON. Use your agents as usual, then run “Capture: show the files”. Only shapes are kept: every text is replaced by its length.` : 'Capture is off.'); }],
       ['Capture: show the files (to send them)…', 'bug', async () => { const r = await api.capture.bundle(); setStatus(r.file ? `One file with everything captured: ${r.file}. Nothing readable is in it, only shapes (${r.status.total} records).` : 'Nothing captured yet. Turn capture on first, then use an agent.'); }],
@@ -2812,6 +2846,62 @@
     setStatus(state.zen ? 'Zen mode on - Esc, or run the command again, to leave it.' : 'Zen mode off.');
   }
 
+  // ---------------------------------------------------------------- layouts (named, switchable panel arrangements - settings.json's `layouts`)
+  function layoutsList() {
+    const l = state.project && state.project.config && state.project.config.layouts;
+    return Array.isArray(l) ? l : [];
+  }
+  function captureLayoutSnapshot() {
+    const cs = getComputedStyle(document.documentElement);
+    return {
+      sideW: cs.getPropertyValue('--side-w').trim(),
+      bottomH: cs.getPropertyValue('--bottom-h').trim(),
+      editor2W: cs.getPropertyValue('--editor2-w').trim(),
+      zen: !!state.zen,
+      sideTab: state.sideTab,
+    };
+  }
+  function applyLayoutSnapshot(l) {
+    if (!l) return;
+    if (l.sideW) document.documentElement.style.setProperty('--side-w', l.sideW);
+    if (l.bottomH) document.documentElement.style.setProperty('--bottom-h', l.bottomH);
+    if (l.editor2W) document.documentElement.style.setProperty('--editor2-w', l.editor2W);
+    if (!!l.zen !== !!state.zen) toggleZen();
+    if (l.sideTab && l.sideTab !== state.sideTab) setSideTab(l.sideTab);
+    fitActive();
+    setStatus(`Layout "${l.label}" applied.`);
+  }
+  async function saveLayoutAs() {
+    const label = (window.prompt('Name this layout:', '') || '').trim();
+    if (!label) return;
+    const layouts = layoutsList().filter((l) => l.label !== label);
+    layouts.push({ id: `l${Date.now().toString(36)}`, label, ...captureLayoutSnapshot() });
+    await saveSetting({ layouts });
+    setStatus(`Layout "${label}" saved.`);
+  }
+  async function deleteLayout(id) {
+    const l = layoutsList().find((x) => x.id === id);
+    if (!l || !window.confirm(`Delete layout "${l.label}"?`)) return;
+    await saveSetting({ layouts: layoutsList().filter((x) => x.id !== id) });
+    setStatus(`Layout "${l.label}" deleted.`);
+  }
+  async function exportLayout(id) {
+    const l = layoutsList().find((x) => x.id === id);
+    if (!l) return;
+    await api.copy(JSON.stringify(l, null, 2));
+    setStatus(`Layout "${l.label}" copied as JSON - paste it to a teammate to share.`);
+  }
+  async function importLayoutFromClipboard() {
+    const text = await api.paste();
+    let parsed;
+    try { parsed = JSON.parse(text); } catch { setStatus('Clipboard does not hold valid JSON.'); return; }
+    if (!parsed || typeof parsed !== 'object' || typeof parsed.label !== 'string' || !parsed.label.trim()) { setStatus('That JSON does not look like a layout (needs at least a "label").'); return; }
+    const layouts = layoutsList().filter((l) => l.label !== parsed.label);
+    layouts.push({ sideW: '', bottomH: '', editor2W: '', zen: false, sideTab: 'files', ...parsed, id: `l${Date.now().toString(36)}` });
+    await saveSetting({ layouts });
+    setStatus(`Layout "${parsed.label}" imported.`);
+  }
+
   async function newTerminal({ title = 'Terminal', cwd, initialInput, env, inlineEnv, hostEnv, sandboxed = false, runId, watch = false, noEscalate = false, label, agent = null, persist = title === 'Terminal' } = {}) {
     if (!state.project || !state.project.root) { setStatus('Open a project first.'); return null; }
     const key = `t${++state.termSeq}`;
@@ -2873,7 +2963,7 @@
       setStatus('Pasted image saved; its path was typed into the prompt.');
     }, true);
 
-    const res = await api.pty.create({ cols: term.cols, rows: term.rows, cwd, initialInput, env, inlineEnv, hostEnv, watch, noEscalate, label: label || title });
+    const res = await api.pty.create({ cols: term.cols, rows: term.rows, cwd, initialInput, env, inlineEnv, hostEnv, watch, noEscalate, label: label || title, runId });
     if (res.error) {
       term.write(`\r\n\x1b[31m${res.error.replace(/\n/g, '\r\n')}\x1b[0m\r\n`);
       entry.exited = true;
@@ -3451,7 +3541,7 @@
 
   // ---------------------------------------------------------------- settings dialog
   async function openSettings() {
-    const { settings, defaults, templatesMd } = await api.settings.get();
+    const [{ settings, defaults, templatesMd }, devSource] = await Promise.all([api.settings.get(), api.devSource()]);
     const agents = (settings.agents && settings.agents.length ? settings.agents : defaults.agents).map((a) => ({ ...a }));
     const shell = el('input', { type: 'text', placeholder: api.platform === 'win32' ? 'default: powershell.exe  (or cmd.exe, a Git Bash path...)' : 'default: $SHELL', value: settings.shell || '' });
     const shellArgs = el('input', { type: 'text', placeholder: 'optional arguments, space separated', value: (settings.shellArgs || []).join(' ') });
@@ -3474,6 +3564,7 @@
         await api.settings.save(nextSettings);
         await loadProject();
         await openSettings();
+        if (api.smoke) window.__themeDeleteSettledAt = Date.now();
       } }, ic('trash-2')))));
     drawCustomThemes();
     const auto = el('input', { type: 'checkbox' }); auto.checked = settings.autoCheck !== undefined ? !!settings.autoCheck : !!defaults.autoCheck;
@@ -3663,6 +3754,7 @@
       next.agentContainer = { enabled: ccOn.checked, image: ccImage.value.trim() || 'bazinga-agent:latest', network: ccNet.value, memory: ccMem.value.trim() || '4g', cpus: ccCpu.value.trim() || '2', passEnv: ccEnv.value.split(/[\s,]+/).filter(Boolean) };
       next.runBudgetMinutes = Math.min(1440, Math.max(0, Math.round(Number(budgetIn.value)) || 0));
       next.agentHooks = hooksOn.checked;
+      next.memory = { enabled: memOn.checked };
       next.ollama = { baseUrl: serverUrl(), keepWarm: warmOn.checked, unloadOthers: unloadOn.checked, noThink: noThinkOn.checked, repair: repairOn.checked, lean: leanOn.checked, restrictTools: restrictOn.checked, testMinutes: Math.min(120, Math.max(2, parseInt(testMin.value, 10) || 15)), maxOutputTokens: Math.min(32000, Math.max(1024, parseInt(maxOut.value, 10) || 8192)), keepAlive: /^\d+[smh]$/.test(warmFor.value.trim()) ? warmFor.value.trim() : '15m' };
       next.agentEnv = { scrub: scrubOn.checked, allow: scrubAllow.value.split(/[\s,]+/).filter(Boolean) };
       next.notifications = notif.checked;
@@ -3860,6 +3952,7 @@
     const leanOn = el('input', { type: 'checkbox' }); leanOn.checked = ol.lean !== false;
     const restrictOn = el('input', { type: 'checkbox' }); restrictOn.checked = ol.restrictTools !== false;
     const hooksOn = el('input', { type: 'checkbox' }); hooksOn.checked = settings.agentHooks !== false;
+    const memOn = el('input', { type: 'checkbox' }); memOn.checked = !!(settings.memory && settings.memory.enabled === true);
     const testMin = el('input', { type: 'text', value: String(ol.testMinutes || 15), title: 'How long the model test waits for each step before giving up' }); testMin.style.maxWidth = '40px';
     const maxOut = el('input', { type: 'text', value: String(ol.maxOutputTokens || 8192), title: 'The most Claude Code lets a local model write in one reply. It is taken out of the context window, so a smaller number leaves more room for the conversation.' }); maxOut.style.maxWidth = '60px';
     const warmFor = el('input', { type: 'text', value: ol.keepAlive || '15m', title: 'How long Ollama keeps the model after each ping, e.g. 15m or 2h' }); warmFor.style.maxWidth = '60px';
@@ -3872,6 +3965,11 @@
         el('div', null, el('button', { onclick: () => openThemeEditor(null) }, ic('palette'), 'Create custom theme…'))),
       shell: el('div', { class: 'field' }, el('label', { text: 'Terminal shell' }), shell),
       shellArgs: el('div', { class: 'field' }, el('label', { text: 'Shell arguments' }), shellArgs),
+      devSource: el('div', { class: 'field' }, ...(devSource ? [
+        el('div', { class: 'agent-head', text: 'Customize Bazinga itself' }),
+        el('div', { class: 'hint', text: 'This copy is running from its own source checkout, not a packaged build. Beyond the settings in this dialog, your own coding agent can change anything about how Bazinga behaves by editing that source directly - there is no plugin API and no stable boundary, so a future update can silently conflict with or overwrite such a change (commit it as you go). The generated AGENTS.md in Bazinga\'s own settings folder has the details and the usual risk areas.' }),
+        el('div', null, el('button', { onclick: () => { close(); switchProject(devSource); } }, ic('file-code'), 'Open Bazinga’s own source as a project…')),
+      ] : [])),
       agentButtons: el('div', { class: 'field' }, el('div', { class: 'agent-head', text: 'Agent buttons (top bar)' }), agentBox,
         el('div', { class: 'line' }, el('label', { text: 'Ollama server' }), urlIn),
         urlNote,
@@ -3884,6 +3982,7 @@
         el('label', { class: 'check', title: 'Claude Code talks to the model through a small helper inside Bazinga. When the model prints a tool call as text, or uses wrong argument names or a relative path, the helper turns it into a correct tool call.' }, repairOn, ' Repair tool calls of local models (printed as text, wrong argument names, relative paths)'),
         el('label', { class: 'check', title: 'Claude Code sends tens of thousands of characters of instructions with every request. A local model has to read them again each time. This sends it a short version instead, with your standing instructions.' }, leanOn, ' Send local models a slimmer prompt (much faster, fewer tools explained)'),
         el('label', { class: 'check', title: 'Claude Code tells Bazinga itself when it has finished (Stop hook) or needs permission (Notification hook), through a settings file added with --settings and a server on 127.0.0.1. Workflows no longer depend on guessing from a quiet terminal. The guess stays as a fallback.' }, hooksOn, ' Claude Code reports when it is done (hooks)'),
+        el('label', { class: 'check', title: 'A small per-project memory: every run gets a short, capped summary of facts earlier agents asked to remember, and can look up more or save a new one with the recall/remember MCP tools. This also turns on Bazinga’s MCP connection for the run, so the agent can also see other runs and ask to start new ones (same as "Expose Bazinga as an MCP server") - they share one connection. Cloud Claude Code agents only; off by default.' }, memOn, ' Agent memory for this project (recall/remember)'),
         el('label', { class: 'check', title: 'Adds --tools Read,Write,Edit,Bash,Glob,Grep, --disable-slash-commands and --strict-mcp-config to Claude Code on a local model, whatever an older saved button says. Without it a small model can load skills and start subagents of its own, which takes hours.' }, restrictOn, ' Local models get only file and shell tools: no skills, subagents or MCP servers'),
         el('label', { class: 'check', title: 'How long the Test button waits for each step' }, ' Model test waits up to ', testMin, ' minutes per step'),
         el('label', { class: 'check', title: 'Claude Code reserves this much of the context window for the model\'s reply (it assumes 32000 for models it does not know, which leaves a 32k window almost empty). At most a quarter of the window is used.' }, ' Longest reply of a local model: ', maxOut, ' tokens (a smaller number leaves more room for files)'),
@@ -3970,7 +4069,7 @@
     };
     // ---- tabs: related settings together; every control stays in the DOM, so Save reads all of them whichever tab is open
     const TABS = [
-      ['general', 'General', ['theme', 'fontSize', 'scrollback', 'notifications', 'shell', 'shellArgs'], 'settings'],
+      ['general', 'General', ['theme', 'fontSize', 'scrollback', 'notifications', 'shell', 'shellArgs', 'devSource'], 'settings'],
       ['agents', 'Agents', ['agentButtons', 'taskTemplates', 'checkpoint'], 'bot'],
       ['review', 'Review & checks', ['reviewCommand', 'autoCheck'], 'shield-check'],
       ['oversight', 'Oversight', ['humanInLoop', 'fixLoop', 'mergeGuard', 'autoMerge'], 'eye'],
@@ -4074,6 +4173,7 @@
       await api.settings.save({ ...cur.settings, customThemes: list, theme: id });
       await loadProject();
       await openSettings();
+      if (api.smoke) window.__themeSaveSettledAt = Date.now();
     };
     if (!existing) recompute(); else { drawFineTune(); refreshContrast(); previewCustomTheme(effectiveVars(), darkChk.checked); }
     $('#dialog').replaceChildren(
@@ -5379,6 +5479,66 @@
     };
     q.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 350); });
     q.addEventListener('keydown', (e) => { if (e.key === 'Enter') { clearTimeout(searchTimer); runSearch(); } });
+    // ---- Create a new skill with an agent's help: a one-shot agent run (startRun) drafts the SKILL.md in its own
+    // worktree/branch, same review-then-merge path as any other run. The agent IS the "LLM advice" here - the only
+    // new logic is the task text it's given (core/skilldraft.js), not a separate chat/LLM-calling mechanism.
+    const newName = el('input', { type: 'text', placeholder: 'e.g. react-test-writer', spellcheck: 'false', id: 'sk-new-name' });
+    const newPurpose = el('textarea', { placeholder: 'What should it do, and when should an agent reach for it? Be specific about trigger phrases or situations - that is what actually gets a skill picked.', rows: '3', id: 'sk-new-purpose' });
+    const newModelAfter = el('select', { id: 'sk-new-model-after' }, el('option', { value: '', text: '(nothing - write it from scratch)' }));
+    const newAgentSel = el('select', { id: 'sk-new-agent' });
+    const newHost = el('div', { class: 'hint' });
+    const fillAgentsAndModelAfter = async () => {
+      const agents = (state.project.config && state.project.config.agents) || [];
+      newAgentSel.replaceChildren(...agents.map((a, i) => el('option', { value: String(i), text: agentLabel(a) })));
+      const r = await api.skills.list();
+      const names = [...new Set([...(r.project || []), ...(r.ide || [])].map((s) => s.name))].sort();
+      newModelAfter.replaceChildren(el('option', { value: '', text: '(nothing - write it from scratch)' }), ...names.map((n) => el('option', { value: n, text: n })));
+    };
+    const createNewSkill = async () => {
+      const agents = (state.project.config && state.project.config.agents) || [];
+      const agent = agents[Number(newAgentSel.value)];
+      if (!agent) { newHost.textContent = 'No agent is configured (Settings → Agent buttons).'; return; }
+      const name = newName.value.trim();
+      const purpose = newPurpose.value.trim();
+      const r = await api.skills.draftTask({ name, purpose, modelAfter: newModelAfter.value });
+      if (r.error) { newHost.textContent = r.error; return; }
+      newHost.textContent = `Starting ${agentLabel(agent)}…`;
+      const started = await startRun({ task: r.task, name: `New skill: ${name}`, agent, allow: `${r.skillsDir}/${r.id}/**`, activate: false });
+      if (!started) { newHost.textContent = ''; return; } // startRun already alerted on error
+      newName.value = ''; newPurpose.value = '';
+      newHost.textContent = `${agentLabel(agent)} is drafting it in its own run - open the Agents tab to watch, then review and merge it like any other run.`;
+    };
+    // ---- Set up project governance: the same one-shot-agent-run pattern as "create a new skill" above, but the
+    // source material is real upstream files Bazinga downloads itself (datallmhub/claude-governance, MIT-licensed
+    // per-tech-stack CLAUDE.md + .claude/rules templates) rather than something the agent invents from scratch.
+    // The download (startRun's preStage) happens right after the run's worktree is created and before the agent
+    // starts, so the agent finds the staged files already sitting there to merge/adapt, never fetches them itself.
+    const govStackSel = el('select', { id: 'gov-stack' });
+    const govAgentSel = el('select', { id: 'gov-agent' });
+    const govHost = el('div', { class: 'hint' });
+    const fillGovSelects = async () => {
+      const r = await api.governance.listStacks();
+      govStackSel.replaceChildren(...(r.stacks || []).map((s) => el('option', { value: s.id, text: s.label })));
+      const agents = (state.project.config && state.project.config.agents) || [];
+      govAgentSel.replaceChildren(...agents.map((a, i) => el('option', { value: String(i), text: agentLabel(a) })));
+    };
+    const applyGovernance = async () => {
+      const agents = (state.project.config && state.project.config.agents) || [];
+      const agent = agents[Number(govAgentSel.value)];
+      if (!agent) { govHost.textContent = 'No agent is configured (Settings → Agent buttons).'; return; }
+      govHost.textContent = 'Downloading the template…';
+      const r = await api.governance.draftTask({ stack: govStackSel.value });
+      if (r.error) { govHost.textContent = r.error; return; }
+      govHost.textContent = `Starting ${agentLabel(agent)}…`;
+      const started = await startRun({
+        task: r.task, name: `Project governance: ${r.label}`, agent, allow: r.allow, activate: false,
+        preStage: (run) => api.governance.applyStage({ tmpDir: r.tmpDir, root: run.root }),
+      });
+      if (!started) { govHost.textContent = ''; return; } // startRun already alerted on error
+      govHost.textContent = `${agentLabel(agent)} is adapting the ${r.label} template into this project in its own run - open the Agents tab to watch, then review and merge it like any other run.`;
+    };
+    fillAgentsAndModelAfter();
+    fillGovSelects();
     $('#dialog').replaceChildren(el('h3', { class: 'ico-head' }, ic('package'), ' Agent skills'),
       listHost,
       skHead('globe', 'Find skills on the internet (skills.sh)'),
@@ -5386,7 +5546,19 @@
       skHead('git-branch', 'Or add from a git repository (skills.sh style)'),
       el('div', { class: 'line' }, src, levelSel, el('button', { onclick: doFetch }, ic('download'), 'Fetch')),
       fetchHost,
+      skHead('sparkles', 'Or create a new one with an agent’s help'),
+      el('div', { class: 'field' }, el('label', { text: 'Name' }), newName),
+      el('div', { class: 'field' }, el('label', { text: 'What it should do' }), newPurpose),
+      el('div', { class: 'line' }, el('label', { text: 'Model it after' }), newModelAfter, el('label', { text: 'Agent' }), newAgentSel,
+        el('button', { class: 'primary', onclick: createNewSkill }, ic('sparkles'), 'Create…')),
+      newHost,
+      el('div', { class: 'hint', text: 'This starts a normal agent run in its own branch - nothing is added to the project until you review and merge it, same as any other run. Project level only: an IDE-level skill (no project folder) has no git repository to run this in.' }),
       el('div', { class: 'hint', text: 'Skills are plain folders with a SKILL.md, installed next to your agent’s own skills (setting “skillsDir”, default .claude/skills). Nothing is executed by the IDE.' }),
+      skHead('shield-check', 'Or set up project governance (CLAUDE.md + rules, by tech stack)'),
+      el('div', { class: 'line' }, el('label', { text: 'Stack' }), govStackSel, el('label', { text: 'Agent' }), govAgentSel,
+        el('button', { class: 'primary', onclick: applyGovernance }, ic('shield-check'), 'Apply…')),
+      govHost,
+      el('div', { class: 'hint', text: 'Downloads the real CLAUDE.md + .claude/rules templates for the chosen stack from datallmhub/claude-governance (MIT-licensed), then asks the agent to merge/adapt them into this project in its own run - nothing is added until you review and merge it, same as any other run.' }),
       el('div', { class: 'actions' },
         el('button', { id: 'sk-sync', title: 'Copy skills installed earlier to the other agents’ folders and refresh the AGENTS.md list', onclick: async () => {
           const r = await api.skills.sync();
@@ -5496,6 +5668,36 @@
     $('#modal').classList.remove('hidden');
     await draw();
     unsub = api.fs.onChanged(() => draw());
+  }
+
+  // ---------------------------------------------------------------- agent memory: a small per-project store of facts an
+  // agent asked Bazinga to remember (see core/agentmemory.js); view-only here plus a single whole-project clear, no
+  // per-entry delete in v1.
+  async function openAgentMemory() {
+    const close = () => $('#modal').classList.add('hidden');
+    const listHost = el('div');
+    const pad = (n) => String(n).padStart(2, '0');
+    const when = (t) => { const d = new Date(t); return `${d.toLocaleDateString()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+    const draw = async () => {
+      const r = await api.agentMemory.list();
+      const entries = (r && r.entries) || [];
+      fill(listHost, entries.length ? el('div', { class: 'hint' }, `${entries.length} thing${entries.length === 1 ? '' : 's'} remembered, most recent first.`) : el('div', { class: 'muted', text: 'Nothing remembered yet for this project. An agent saves one with the remember tool (needs “Agent memory for this project” on in Settings → Agents).' }),
+        ...[...entries].reverse().map((e) => el('div', { class: 'agent-row' },
+          el('div', { style: 'flex:1' },
+            el('div', { text: e.text }),
+            el('div', { class: 'hint' }, when(e.t), e.files.length ? ` · ${e.files.join(', ')}` : '')))));
+    };
+    $('#dialog').replaceChildren(el('h3', { class: 'ico-head' }, ic('bookmark'), ' Agent memory'),
+      el('div', { class: 'hint', text: 'What agents have told Bazinga to remember about this project (recall/remember MCP tools). Local to this install, read by every agent run, never sent anywhere else.' }),
+      listHost,
+      el('div', { class: 'actions' },
+        el('button', { class: 'icon danger', title: 'Delete everything remembered for this project', onclick: async () => {
+          if (!window.confirm('Clear everything agents have remembered about this project? This cannot be undone.')) return;
+          await api.agentMemory.clear(); await draw();
+        } }, ic('trash-2'), 'Clear this project’s agent memory'),
+        el('button', { class: 'primary', onclick: close }, ic('check'), 'Close')));
+    $('#modal').classList.remove('hidden');
+    await draw();
   }
 
   // ---------------------------------------------------------------- workflows: chained agent steps (core/workflow.js)
@@ -6440,7 +6642,7 @@
     return ready ? { use: true, why: 'auto' } : { use: false, why: 'not-ready' };
   }
 
-  async function startRun({ task, name, agent, allow, activate = true, noEscalate = false, container = undefined }) {
+  async function startRun({ task, name, agent, allow, activate = true, noEscalate = false, container = undefined, preStage = null }) {
     const cc = { ...((state.project.config && state.project.config.agentContainer) || {}) };
     if (typeof container === 'boolean') cc.enabled = container; // the run dialog's own choice wins over the setting
     if (cc.enabled) {
@@ -6450,6 +6652,10 @@
     const res = await api.runs.create({ name, task, agent: agent.name, allow });
     if (res.error) { window.alert(`Could not create the run:\n\n${res.error}`); return null; }
     const run = res.run;
+    if (preStage) {
+      const staged = await preStage(run);
+      if (staged && staged.error) { window.alert(`Could not prepare the run:\n\n${staged.error}`); await api.runs.discard(run.id, 'skip'); return null; }
+    }
     if (activate) {
       if (!(await switchRoot(run.root))) return null;
       const snap = await api.scope.snapshot(); // the copied .ide/ folder is untracked: it must not count as the agent's work
@@ -6931,6 +7137,24 @@
   }
   setInterval(pollMemory, 5000);
   pollMemory();
+
+  // ---------------------------------------------------------------- background agent runs (agents survive quitting Bazinga - see daemon/agentd.js)
+  async function pollBackgroundAgents() {
+    const el2 = $('#status-background');
+    try {
+      const ids = await api.pty.listBackground();
+      if (ids.length) { el2.textContent = `${ids.length} agent${ids.length === 1 ? '' : 's'} running in background  ·  `; el2.style.display = ''; }
+      else el2.style.display = 'none';
+    } catch { el2.style.display = 'none'; }
+  }
+  $('#status-background').addEventListener('click', async () => {
+    if (!window.confirm('Stop every agent run that is still going in the background? This ends them - it cannot be undone.')) return;
+    const res = await api.pty.stopAllBackground();
+    setStatus(`Stopped ${res.stopped} background agent${res.stopped === 1 ? '' : 's'}.`);
+    pollBackgroundAgents();
+  });
+  setInterval(pollBackgroundAgents, 10000);
+  pollBackgroundAgents();
 
   // ---------------------------------------------------------------- start
   try {
@@ -8549,21 +8773,44 @@
       fineInputs[0].value = overrideBg; fineInputs[0].dispatchEvent(new Event('input'));
       const overridden = !!(await waitFor(() => getComputedStyle(document.body).backgroundColor === hexToRgb(overrideBg), 3000));
       document.querySelector('#dialog input[type=text]').value = 'Smoke UI Theme';
+      const beforeSave = window.__themeSaveSettledAt || 0;
       [...document.querySelectorAll('#dialog .actions button')].find((b) => b.textContent.includes('Save theme')).click();
-      const savedBackInSettings = !!(await waitFor(() => document.querySelector('#set-tab-general'), 3000));
+      // "Save theme"'s handler (settings.save -> loadProject -> openSettings) can take far longer than any fixed
+      // timeout under load (loadProject() reloads the whole project) - .click() gives us no handle on its promise
+      // (el() wires onclick via addEventListener, so the handler reference isn't retrievable from the button). A
+      // bounded poll on generic "is settings showing" DOM state is not a fix for that: it can resolve early off
+      // something ELSE reopening settings, leaving THIS handler's own reopen to land arbitrarily later and corrupt
+      // an unrelated step - exactly what made "dialog focus" flaky even after widening that poll's timeout. Instead
+      // wait on a signal the handler itself sets right after its own openSettings() call actually returns.
+      const saveSettled = !!(await waitFor(() => (window.__themeSaveSettledAt || 0) > beforeSave, 30000));
+      const savedBackInSettings = saveSettled && !$('#modal').classList.contains('hidden') && !!document.querySelector('#set-tab-general');
       const listedInSettings = [...document.querySelectorAll('#dialog .agent-row')].some((r) => r.textContent.includes('Smoke UI Theme'));
       const cur = await api.settings.get();
       const savedTheme = (cur.settings.customThemes || []).find((c) => c.label === 'Smoke UI Theme');
       const persisted = !!savedTheme && savedTheme.vars['--bg'] === overrideBg && cur.settings.theme === savedTheme.id;
       const origConfirm = window.confirm;
       window.confirm = () => true; // this is the one window.confirm() in the app a smoke step deliberately drives
+      const beforeDelete = window.__themeDeleteSettledAt || 0;
       try { [...document.querySelectorAll('#dialog .agent-row')].find((r) => r.textContent.includes('Smoke UI Theme')).querySelector('button.danger').click(); }
       finally { window.confirm = origConfirm; }
       const deleted = !!(await waitFor(async () => !(await api.settings.get()).settings.customThemes.some((c) => c.label === 'Smoke UI Theme'), 3000));
+      // same reasoning as "Save theme" above - wait on the delete handler's own completion signal, not a generic
+      // DOM guess, or its reopen can land arbitrarily later and corrupt an unrelated step.
+      const deleteSettled = !!(await waitFor(() => (window.__themeDeleteSettledAt || 0) > beforeDelete, 30000));
       $('#modal').classList.add('hidden');
       await setThemeSetting('dark');
-      const ok = opened && previewed && fineShown && overridden && savedBackInSettings && listedInSettings && persisted && deleted;
-      return ok ? true : JSON.stringify({ opened, previewed, fineShown, fineCount: fineInputs.length, overridden, savedBackInSettings, listedInSettings, persisted, deleted });
+      const ok = opened && previewed && fineShown && overridden && savedBackInSettings && listedInSettings && persisted && deleted && deleteSettled;
+      return ok ? true : JSON.stringify({ opened, previewed, fineShown, fineCount: fineInputs.length, overridden, saveSettled, savedBackInSettings, listedInSettings, persisted, deleted, deleteSettled });
+    });
+
+    await step('settings -> "Customize Bazinga itself": shown (this is a dev checkout, not a packaged build) with the right warning and an "open as a project" button, closing without clicking it', async () => {
+      await openSettings();
+      const dialogText = $('#dialog').textContent;
+      const shown = dialogText.includes('Customize Bazinga itself') && dialogText.includes('no stable boundary');
+      const btn = [...document.querySelectorAll('#dialog button')].find((b) => b.textContent.includes('Open Bazinga’s own source as a project'));
+      $('#modal').classList.add('hidden');
+      const ok = shown && !!btn;
+      return ok ? true : JSON.stringify({ shown, hasButton: !!btn });
     });
 
     await step('icons resolve', async () => {

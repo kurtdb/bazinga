@@ -19,6 +19,7 @@ const { DEFAULT_CONFIG, loadConfig, loadScripts, loadChecksConfig, withDefaults 
 const { FixLoop, asPaste, relevantFindings, buildEscalationPrompt } = require('../core/fixloop');
 const scorecard = require('../core/scorecard');
 const guardoverrides = require('../core/guardoverrides');
+const agentmemory = require('../core/agentmemory');
 const replay = require('../core/replay');
 const verdict = require('../core/verdict');
 const semanticdiff = require('../core/semanticdiff');
@@ -63,6 +64,8 @@ const { createFeed } = require('../core/watchfeed');
 const { addRecent, pruneRecent } = require('../core/recent');
 const commentanchor = require('../core/commentanchor');
 const skillindex = require('../core/skillindex');
+const bendindex = require('../core/bendindex');
+const settingsdoc = require('../core/settingsdoc');
 const envinline = require('../core/envinline');
 const ollama = require('../core/ollama');
 const llamacpp = require('../core/llamacpp');
@@ -74,8 +77,12 @@ const { afterIdle } = require('../core/idle');
 const folderroles = require('../core/folderroles');
 const toolProxies = toolproxy.manager(); // helpers between Claude Code and a local model server (see core/toolproxy.js)
 const containerCore = require('../core/container');
+const agentdClient = require('../daemon/agentdClient');
 const workflowCore = require('../core/workflow');
 const skillsCore = require('../core/skills');
+const skilldraft = require('../core/skilldraft');
+const governance = require('../core/governance');
+const governancedraft = require('../core/governancedraft');
 const skillscan = require('../core/skillscan');
 const agentconfig = require('../core/agentconfig');
 const budgetCore = require('../core/budget');
@@ -350,6 +357,31 @@ function persistRoots() {
   writeState(state);
 }
 
+/** Keeps a folder's AGENTS.md Bend block (core/bendindex.js) in step with whether it actually looks like a Bend project. */
+function refreshBendIndex(dir) {
+  try {
+    const present = fs.existsSync(path.join(dir, 'LAWS.bend')) || fs.existsSync(path.join(dir, 'PROOF.bend'));
+    const file = path.join(dir, 'AGENTS.md');
+    let cur = ''; try { cur = fs.readFileSync(file, 'utf8'); } catch { /* none yet */ }
+    const next = bendindex.applyBlock(cur, present);
+    if (next === null) return;
+    if (next === '') { try { fs.unlinkSync(file); } catch { /* already gone */ } return; }
+    fs.writeFileSync(file, next);
+  } catch { /* best effort - must never block opening a project */ }
+}
+
+/** Keeps userData/AGENTS.md's settings reference (core/settingsdoc.js) in step with this build - once per launch,
+ * not per project: unlike the Bend/skills blocks, this one is not conditional on anything project-specific. */
+function refreshSettingsDoc() {
+  try {
+    const file = userFile('AGENTS.md');
+    let cur = ''; try { cur = fs.readFileSync(file, 'utf8'); } catch { /* none yet */ }
+    const next = settingsdoc.applyBlock(cur, { settingsPath: userFile('settings.json'), userDataDir: app.getPath('userData'), sourceDir: app.isPackaged ? null : app.getAppPath() });
+    if (next === null) return;
+    fs.writeFileSync(file, next);
+  } catch { /* best effort - must never block startup */ }
+}
+
 /** "Open folder…": replaces the whole workspace, same as before multi-root existed. */
 function setRoot(dir) {
   stopWatchingEverything();
@@ -363,6 +395,7 @@ function setRoot(dir) {
   writeState(state);
   persistRoots();
   startWatchingRoot(dir);
+  refreshBendIndex(dir);
 }
 
 /** "Add folder to workspace…": the other open folders, their terminals and their running agents are untouched. */
@@ -376,6 +409,7 @@ function addRootToWorkspace(dir) {
   writeState(state);
   persistRoots();
   startWatchingRoot(dir);
+  refreshBendIndex(dir);
 }
 
 /** "Remove folder from workspace": just that folder's watcher/indexes/trust-for-this-session go away; terminals already open against it keep running. */
@@ -662,15 +696,35 @@ function rendererCall(method, args, timeoutMs = 60000) {
     send('mcp:call', id, method, args);
   });
 }
+// Agent memory (opt-in): a small per-project store of facts an agent asked Bazinga to remember (see core/agentmemory.js).
+// Local to this install, keyed by the run's own project root - not git-shared (same "per user" precedent as scorecard/guardoverrides).
+const memoryDir = () => path.join(app.getPath('userData'), 'agent-memory');
+const rootForCaller = (id) => ((fixloop && fixloop.terms.get(id)) || {}).root || root; // the run's own root; falls back to the app's current one
+const memoryFileFor = (r) => agentmemory.fileFor(memoryDir(), r);
+const memoryEnabled = () => (loadConfigSafe(root).memory || {}).enabled === true;
 const mcpServer = new BazingaMcp({
   log: (t) => dbg('hook', `mcp: ${t}`),
   handlers: {
     listRuns: (caller) => rendererCall('listRuns', { caller }),
     runStatus: (caller, id) => rendererCall('runStatus', { caller, id }),
     startRun: (caller, args) => rendererCall('startRun', { caller, ...args }, 5 * 60000),
+    // pure file I/O against a per-project store - no renderer-held state, no confirmation dialog needed (unlike startRun)
+    recall: (caller, args) => {
+      const r = rootForCaller(caller);
+      if (!r) return { error: 'No project root for this agent.' };
+      return { results: agentmemory.recall(agentmemory.readAll(memoryFileFor(r)), args || {}) };
+    },
+    remember: (caller, { text, files } = {}) => {
+      const r = rootForCaller(caller);
+      if (!r) return { error: 'No project root for this agent.' };
+      return agentmemory.append(memoryFileFor(r), { text, files }) ? { ok: true } : { error: 'Nothing to remember (text was empty).' };
+    },
   },
 });
-const mcpOpts = () => ((loadConfigSafe(root).mcp || {}).server === true ? { server: mcpServer, dir: path.join(app.getPath('userData'), 'mcp') } : null);
+// memory also needs the MCP connection (recall/remember travel over it), so either flag turns it on - the user
+// enabling "agent memory" should not also have to separately discover and enable "expose Bazinga as an MCP server".
+const mcpOpts = () => (((loadConfigSafe(root).mcp || {}).server === true || memoryEnabled()) ? { server: mcpServer, dir: path.join(app.getPath('userData'), 'mcp') } : null);
+const memoryOpts = () => (memoryEnabled() ? { dir: memoryDir() } : null);
 const otelOpts = () => (loadConfigSafe(root).telemetry || {}).otel === false ? null : { server: otelReceiver };
 const limitsFile = () => userFile('claude-limits.json');
 // opt-in: Claude Code runs this command to draw its status line; it also leaves the plan-limit numbers where Bazinga can read them
@@ -688,6 +742,45 @@ function registerIpc() {
   ipcMain.handle('otel:bind', (_e, token, id) => { otelReceiver.bind(token, id); return true; });
   ptys = new PtyManager((ch, ...args) => { if (ch === 'pty:exit') { hookServer.unbind(args[0]); otelReceiver.unbind(args[0]); mcpServer.unbind(args[0]); dbg('pty', `terminal ${args[0]} exited with code ${args[1]}`); fixloop.unregister(args[0]); } send(ch, ...args); }, { onIdle: (id, busyMs, info) => { handleIdle(id, busyMs, info).catch(() => {}); },
     onPrompt: (id, p) => { const t = fixloop.terms.get(id); dbg('prompt', `terminal ${id}: permission prompt detected: ${String(p.text || '').replace(/\s+/g, ' ').slice(0, 200)}`); notify('agent-prompt', `${(t && t.label) || 'Agent'} needs your approval`, p.text || 'The agent is asking for permission.'); send('agent:prompt', id, p.text); } });
+
+  // agentd.js: a small detached sidecar process that owns agent-run ptys so they survive quitting Bazinga (see
+  // the plan behind this: agents survive quitting). One shared connection per Bazinga process; it is spawned
+  // (detached + unref'd, same pattern as project:openWindow below) only on first real need, never speculatively.
+  const agentdSocketPath = () => {
+    const dir = app.getPath('userData');
+    if (process.platform === 'win32') return `\\\\.\\pipe\\bazinga-agentd-${require('node:crypto').createHash('sha1').update(dir).digest('hex').slice(0, 16)}`;
+    return path.join(dir, 'agentd.sock');
+  };
+  const agentdPidPath = () => path.join(app.getPath('userData'), 'agentd.pid');
+  let agentdConn = null;
+  const rememberAgentd = (client) => { client.on('close', () => { if (agentdConn === client) agentdConn = null; }); agentdConn = client; return client; };
+  /** Connects to an already-running daemon - never spawns one. "Nothing to reattach to" and "daemon not running" are meant to look the same to callers. */
+  const probeAgentdOnly = async () => {
+    if (agentdConn) return agentdConn;
+    const probed = await agentdClient.probe(agentdSocketPath()).catch(() => null);
+    return probed ? rememberAgentd(probed.client) : null;
+  };
+  let agentdSpawning = null;
+  /** Connects to the daemon, spawning it only now - used right before an agent run's pty is actually created. Resolves null if it truly can't be reached (spawn blocked, no permission, ...) - callers fall back to a direct, non-surviving pty exactly as before this feature existed. */
+  const ensureAgentd = async () => {
+    if (SMOKE) return null; // never leave a real background daemon running past an automated test
+    const existing = await probeAgentdOnly();
+    if (existing) return existing;
+    if (agentdSpawning) return agentdSpawning;
+    agentdSpawning = (async () => {
+      try {
+        const child = require('node:child_process').spawn(process.execPath, [path.join(__dirname, '..', 'daemon', 'agentd.js'), agentdSocketPath(), agentdPidPath()], { detached: true, stdio: 'ignore', env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } });
+        child.unref();
+      } catch { return null; }
+      for (let i = 0; i < 20; i++) {
+        await new Promise((r) => setTimeout(r, 150));
+        const probed = await agentdClient.probe(agentdSocketPath()).catch(() => null);
+        if (probed) return rememberAgentd(probed.client);
+      }
+      return null;
+    })();
+    try { return await agentdSpawning; } finally { agentdSpawning = null; }
+  };
 
   debug.file = userFile('debug.log');
   ipcMain.handle('debug:log', (_e, source, text) => { debug.add(String(source || 'app'), String(text || '')); return true; });
@@ -1070,6 +1163,37 @@ function registerIpc() {
     const ide = skillsCore.listInstalled(skillDir('ide'));
     const project = root ? skillsCore.listInstalled(skillDir('project')) : [];
     return { ide, project, effective: skillsCore.effectiveSkills({ ide, project }), dirs: { ide: skillDir('ide'), project: root ? skillDir('project') : null }, also: { ide: skillDirs('ide').slice(1), project: root ? skillDirs('project').slice(1) : [] } };
+  }));
+  // "Create a new skill…": the task text for a one-shot agent run that drafts it (core/skilldraft.js) - the run
+  // itself, review and merge included, is the existing agent-run path (runs:create), nothing new there.
+  ipcMain.handle('skills:draftTask', (_e, { name, purpose, modelAfter } = {}) => safe(async () => {
+    const r = requireRoot();
+    const skillsDir = String(loadConfigSafe(r).skillsDir || '.claude/skills').replace(/\\/g, '/');
+    const id = skillsCore.slug(name);
+    const task = skilldraft.buildTask({ name, purpose, skillsDir, modelAfter });
+    return { task, skillsDir, id };
+  }));
+  // "Set up project governance…": downloads the chosen stack's real files from datallmhub/claude-governance
+  // (deterministic, no LLM - see core/governance.js) into a fresh temp folder, then builds the task text for a
+  // one-shot agent run (core/governancedraft.js) that merges/adapts them into the project - same pattern as
+  // skills:draftTask above, just staged from an external source instead of written from scratch.
+  ipcMain.handle('governance:listStacks', () => safe(async () => ({ stacks: governance.listStacks() })));
+  ipcMain.handle('governance:draftTask', (_e, { stack } = {}) => safe(async () => {
+    const st = governance.findStack(stack);
+    if (!st) throw new Error('Unknown stack.');
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bazinga-governance-'));
+    const files = await governance.downloadStack(st.folder, tmpDir);
+    const task = governancedraft.buildTask({ label: st.label, files, stagingDir: governance.STAGING_DIR });
+    const allow = governancedraft.allowGlobs(files, governance.STAGING_DIR).join(', ');
+    return { task, allow, label: st.label, files, tmpDir };
+  }));
+  // moves the downloaded files from the temp folder into the new run's own worktree, then drops the temp folder
+  ipcMain.handle('governance:applyStage', (_e, { tmpDir, root: runRoot } = {}) => safe(async () => {
+    if (!tmpDir || path.resolve(tmpDir) !== tmpDir || !tmpDir.startsWith(os.tmpdir())) throw new Error('Invalid staging folder.');
+    if (!runRoot) throw new Error('No run given.');
+    fs.cpSync(tmpDir, path.join(runRoot, governance.STAGING_DIR), { recursive: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    return { staged: governance.STAGING_DIR };
   }));
   // older installs exist in the primary folder only: copy them to the other agents' folders
   ipcMain.handle('skills:sync', () => safe(async () => {
@@ -1559,7 +1683,7 @@ function registerIpc() {
   ipcMain.handle('agent:prepare', async (_e, agent = {}, opts = {}) => {
     let config = {};
     try { config = loadConfig(root || app.getPath('userData'), readSettings()); } catch { /* defaults */ }
-    const prep = await agentprep.prepare(agent, { root, hintDir: agentprep.hintDirFor(app.getPath('userData')), config, proxies: toolProxies, inUse: Array.isArray(opts.inUse) ? opts.inUse.map(String) : [], hooks: config.agentHooks === false || opts.noHooks ? null : hooksOpts(config), otel: otelOpts(), mcp: mcpOpts(), onLog: (line) => dbg('model', line), onUsage: (u) => send('fleet:usage', u), onCapture: captureModel });
+    const prep = await agentprep.prepare(agent, { root, hintDir: agentprep.hintDirFor(app.getPath('userData')), config, proxies: toolProxies, inUse: Array.isArray(opts.inUse) ? opts.inUse.map(String) : [], hooks: config.agentHooks === false || opts.noHooks ? null : hooksOpts(config), otel: otelOpts(), mcp: mcpOpts(), memory: memoryOpts(), onLog: (line) => dbg('model', line), onUsage: (u) => send('fleet:usage', u), onCapture: captureModel });
     try {
       const l = prep.local;
       dbg('agent', `prepare ${agent.name || agent.command}: ${l ? `local model ${l.model || ''}, context ${l.context || '?'}, restricted tools ${l.restricted ? 'yes' : 'no'}, proxy ${l.proxy ? l.proxy.url : 'none'}, problems ${(l.problems || []).map((p) => p.kind).join(',') || 'none'}` : 'not a local model'}; command: ${String(prep.command).slice(0, 300)}`);
@@ -1574,7 +1698,7 @@ function registerIpc() {
     let config = {};
     try { config = loadConfig(root || app.getPath('userData'), readSettings()); } catch { /* defaults */ }
     send('agent:testProgress', { id: 'prepare', state: 'running' });
-    const prep = await agentprep.prepare(agent, { root, hintDir: agentprep.hintDirFor(app.getPath('userData')), config, proxies: toolProxies, onLog: (line) => dbg('model', line), onCapture: captureModel });
+    const prep = await agentprep.prepare(agent, { root, hintDir: agentprep.hintDirFor(app.getPath('userData')), config, proxies: toolProxies, memory: memoryOpts(), onLog: (line) => dbg('model', line), onCapture: captureModel });
     const fail = (p) => ({ ok: false, steps: [{ id: 'server', label: 'Model server', ok: false, detail: p.text }], advice: [], output: '', seconds: 0, server: prep.local });
     if (prep.local) {
       const blocking = prep.local.problems.find((p) => p.kind === 'not-running' || p.kind === 'missing-model');
@@ -2102,11 +2226,38 @@ function registerIpc() {
     if (opts.watch && opts.inlineEnv && initialInput) {
       try { initialInput = envinline.applyTo(initialInput, opts.inlineEnv, envinline.shellKindFor(config && config.shell, process.platform)); } catch { initialInput = opts.initialInput; }
     }
-    const res = ptys.create({ cwd, config, baseEnv, cols: opts.cols, rows: opts.rows, initialInput, env, watch: !!opts.watch, idleMs: Math.max(2, Number(fl.idleSeconds) || 8) * 1000 });
+    const idleMs = Math.max(2, Number(fl.idleSeconds) || 8) * 1000;
+    const directArgs = { cwd, config, baseEnv, cols: opts.cols, rows: opts.rows, initialInput, env, watch: !!opts.watch, idleMs };
+    let res;
+    if (opts.watch && opts.runId) {
+      // an agent run: try the daemon first, so it survives quitting Bazinga - fall back to a direct, non-surviving pty if the daemon can't be reached at all
+      const client = await ensureAgentd();
+      res = client ? await ptys.createRemote({ runId: String(opts.runId), client, cwd, config, baseEnv, cols: opts.cols, rows: opts.rows, initialInput, env, idleMs }) : null;
+      if (!res || res.error) res = ptys.create(directArgs);
+    } else {
+      res = ptys.create(directArgs);
+    }
     if (opts.watch && res && res.id) fixloop.register(res.id, { root: cwd, label: opts.label, escalated: !!opts.noEscalate });
     if (res && res.id && scrubbed.length) res.scrubbed = scrubbed;
-    if (opts.watch && res && res.id) runs.journalEvent(cwd, { kind: 'agent-started', text: opts.label || 'agent', data: scrubbed.length ? { scrubbedEnv: scrubbed } : undefined });
+    if (opts.watch && res && res.id && !res.reattached) runs.journalEvent(cwd, { kind: 'agent-started', text: opts.label || 'agent', data: scrubbed.length ? { scrubbedEnv: scrubbed } : undefined });
     return res;
+  });
+
+  // background agent runs: daemon-owned sessions this window isn't currently showing as an open tab
+  const backgroundRunIds = async () => {
+    const client = await probeAgentdOnly();
+    if (!client) return [];
+    let all = [];
+    try { all = await client.request('list'); } catch { return []; }
+    const attached = new Set([...ptys.sessions.values()].filter((s) => s.remote).map((s) => s.runId));
+    return all.filter((runId) => !attached.has(runId));
+  };
+  ipcMain.handle('pty:listBackground', () => backgroundRunIds());
+  ipcMain.handle('pty:stopAllBackground', async () => {
+    const client = await probeAgentdOnly();
+    const targets = await backgroundRunIds();
+    if (client) for (const runId of targets) { try { await client.request('kill', { runId }); } catch { /* best effort */ } }
+    return { stopped: targets.length };
   });
 
   // ACP agents (Agent Client Protocol): a headless session per run; the window shows the transcript, "idle" and "needs permission" are exact
@@ -2171,11 +2322,25 @@ function registerIpc() {
     const r = root; if (!r) return [];
     return commentanchor.anchorAll(comments, (rel) => fs.readFileSync(resolveInRoot(rel), 'utf8'));
   });
-  ipcMain.handle('session:get', () => {
+  ipcMain.handle('memory:list', () => safe(() => ({ entries: root ? agentmemory.readAll(memoryFileFor(root)) : [] })));
+  ipcMain.handle('memory:clear', () => safe(() => { if (root) { try { fs.rmSync(memoryFileFor(root), { force: true }); } catch { /* already gone */ } } return { ok: true }; }));
+  ipcMain.handle('session:get', async () => {
     const all = readJson('session.json', { ui: {}, projects: {} });
     const project = (root && all.projects && all.projects[root]) || null;
     // what to reopen: computed here because the paths are checked against the project folder
-    if (project) project.terminalPlan = termsession.planRestore(project.terminals, { root, agents: loadConfigSafe(root).agents || [] });
+    if (project) {
+      const saved = Array.isArray(project.terminals) ? project.terminals : [];
+      // an agent-run record the daemon still has alive: reattach (no cold "--continue" retyping, no note) instead of letting planRestore cold-resume it
+      let alive = new Set();
+      if (saved.some((r) => r && r.kind === 'agent' && r.runId)) {
+        const client = await probeAgentdOnly().catch(() => null);
+        if (client) { try { alive = new Set(await client.request('list')); } catch { /* treat as none alive */ } }
+      }
+      const reattach = saved.filter((r) => r && r.kind === 'agent' && r.runId && alive.has(r.runId) && termsession.inside(root, r.cwd ? String(r.cwd) : root));
+      const cold = saved.filter((r) => !reattach.includes(r));
+      const reattachPlan = reattach.map((r) => ({ title: String(r.title || 'Terminal'), cwd: r.cwd ? String(r.cwd) : root, agent: r.agent || null, runId: r.runId, watch: true, reattach: true, note: 'Reattached - this agent kept running while Bazinga was closed.' }));
+      project.terminalPlan = [...reattachPlan, ...termsession.planRestore(cold, { root, agents: loadConfigSafe(root).agents || [] })];
+    }
     return { ui: all.ui || {}, project };
   });
   ipcMain.handle('session:save', (_e, data = {}) => {
@@ -2193,6 +2358,9 @@ function registerIpc() {
   });
 
   ipcMain.handle('app:copy', (_e, text) => { clipboard.writeText(String(text)); return true; });
+  ipcMain.handle('app:paste', () => clipboard.readText());
+  // null for a packaged build (there is no plain-JS source to point an agent at); the app's own checkout path for a dev build - see settingsdoc.js's "beyond settings" section
+  ipcMain.handle('app:devSource', () => (app.isPackaged ? null : app.getAppPath()));
 
   ipcMain.handle('smoke:shot', async (_e, name) => {
     if (!SHOTS || !win) return false;
@@ -2295,9 +2463,10 @@ app.whenReady().then(() => {
     { role: 'editMenu' },
     { label: 'View', submenu: [{ role: 'reload' }, { role: 'toggleDevTools' }, { type: 'separator' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' }] },
   ]));
+  refreshSettingsDoc();
   roots = pickInitialRoots().map(canonicalize);
   root = roots[0] || null;
-  for (const r of roots) startWatchingRoot(r);
+  for (const r of roots) { startWatchingRoot(r); refreshBendIndex(r); }
   registerIpc();
   createWindow();
 });

@@ -9,7 +9,7 @@ const NODE_GLOBALS = {
   console: 'readonly', Buffer: 'readonly', global: 'readonly',
   setTimeout: 'readonly', clearTimeout: 'readonly', setInterval: 'readonly', clearInterval: 'readonly', setImmediate: 'readonly',
   URL: 'readonly', URLSearchParams: 'readonly', AbortController: 'readonly', AbortSignal: 'readonly',
-  fetch: 'readonly', TextEncoder: 'readonly', TextDecoder: 'readonly', structuredClone: 'readonly', performance: 'readonly', crypto: 'readonly',
+  fetch: 'readonly', Response: 'readonly', TextEncoder: 'readonly', TextDecoder: 'readonly', structuredClone: 'readonly', performance: 'readonly', crypto: 'readonly',
   self: 'readonly', // the `typeof self !== 'undefined' ? self : this` UMD idiom some core modules use to load as either a Node module or a plain <script>
 };
 const BROWSER_GLOBALS = {

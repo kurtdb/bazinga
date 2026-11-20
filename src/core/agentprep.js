@@ -8,6 +8,7 @@ const otelCore = require('./otel');
 const openaiAdapter = require('./openaiadapter');
 const mcpCore = require('./mcpserver');
 const hooksCore = require('./hooks');
+const agentmemory = require('./agentmemory');
 
 /** Claude Code on a small local model should not get skills, subagents or MCP servers: it loaded the "simplify" skill for a refactor task, started
  *  four subagents of its own and worked for over an hour. Only the file and shell tools stay, whatever an older saved button says. */
@@ -22,14 +23,18 @@ function restrictClaude(cmd) {
   return out;
 }
 
-async function prepare(agent, { root, hintDir, config = {}, api = ollama, inUse = [], proxies = null, onLog = null, onUsage = null, onCapture = null, hooks = null, otel = null, mcp = null } = {}) {
+async function prepare(agent, { root, hintDir, config = {}, api = ollama, inUse = [], proxies = null, onLog = null, onUsage = null, onCapture = null, hooks = null, otel = null, mcp = null, memory = null } = {}) {
   const out = { command: String(agent.command || ''), taskCommand: agent.taskCommand ? String(agent.taskCommand) : undefined, local: null };
   const target = api.localTarget(agent);
   // qwen3 "thinks" at length before every answer, which on a laptop can take minutes or never end: its own switch turns that off
   const noThink = !!target && api.isClaudeCommand(agent.command) && /^qwen3/i.test(target.model || '') && (config.ollama || {}).noThink !== false;
   let text = '';
+  let memoryIndex = '';
+  if (memory && memory.dir && root) {
+    try { memoryIndex = agentmemory.buildIndex(agentmemory.readAll(agentmemory.fileFor(memory.dir, root))); } catch { /* no memory is better than no agent */ }
+  }
   try {
-    text = agenthint.compose({ agentHint: agent.hint, projectHint: root ? agenthint.readProjectHint(root) : '', layout: root ? folderroles.describeAll(root, config.folders, { maxLines: config.foldersFiles === undefined ? 60 : Number(config.foldersFiles) }) : '', extra: noThink ? '/no_think' : '' });
+    text = agenthint.compose({ agentHint: agent.hint, projectHint: root ? agenthint.readProjectHint(root) : '', layout: root ? folderroles.describeAll(root, config.folders, { maxLines: config.foldersFiles === undefined ? 60 : Number(config.foldersFiles) }) : '', memoryIndex, extra: noThink ? '/no_think' : '' });
     const file = agenthint.writeHintFile(hintDir, text);
     if (file) {
       out.command = agenthint.withHintFile(out.command, file);

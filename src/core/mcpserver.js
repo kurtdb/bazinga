@@ -20,7 +20,8 @@ const text = (value) => ({ content: [{ type: 'text', text: typeof value === 'str
 const fail = (message) => ({ isError: true, content: [{ type: 'text', text: String(message) }] });
 
 class BazingaMcp {
-  /** handlers: { listRuns(caller), runStatus(caller, id), startRun(caller, { task, name, agent }) } -> value | { error } */
+  /** handlers: { listRuns(caller), runStatus(caller, id), startRun(caller, { task, name, agent }),
+   *   recall(caller, { query, path, limit }), remember(caller, { text, files }) } -> value | { error } */
   constructor({ handlers, log = () => {} } = {}) {
     this.handlers = handlers;
     this.log = log;
@@ -56,6 +57,14 @@ class BazingaMcp {
       caller.starts++;
       return h.startRun(caller.id, { task, name, agent });
     }));
+    server.registerTool('recall', {
+      description: 'Look up things earlier agent runs learned about this codebase (gotchas, prior breakage, notes about a file). Simple keyword/path filtering, not semantic search.',
+      inputSchema: { query: z.string().max(200).optional().describe('Words to look for in remembered notes'), path: z.string().max(300).optional().describe('A file path (or folder prefix) the note should mention'), limit: z.number().int().min(1).max(50).optional() },
+    }, (args) => run(() => h.recall(caller.id, args || {})));
+    server.registerTool('remember', {
+      description: 'Save one short, concrete fact about this codebase for future agent runs to see (e.g. "the retry logic in X swallows ECONNRESET"). Not for task status or opinions - durable, specific facts only. Appears in a capped summary at the start of later runs, so keep it short.',
+      inputSchema: { text: z.string().min(3).max(500).describe('The fact to remember, as one or two sentences'), files: z.array(z.string().max(300)).max(20).optional().describe('Relevant file paths') },
+    }, ({ text, files }) => run(() => h.remember(caller.id, { text, files })));
     return server;
   }
 
