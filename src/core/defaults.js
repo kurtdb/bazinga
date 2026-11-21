@@ -111,12 +111,12 @@ module.exports = [
     // own raw diagnostic line (file:line: error: msg), confirmed against a real compile error.
     name: 'Gradle compile', tier: 'slow', scope: 'project', match: ['*.java', 'build.gradle', 'build.gradle.kts'],
     requiresFileAny: ['build.gradle', 'build.gradle.kts'],
-    run: '{gradle} compileJava', parser: 'regex', pattern: '^(?<file>.+?):(?<line>\\d+): (?<severity>error|warning): (?<message>.+)$', timeoutSec: 600,
+    run: '{gradle} --no-daemon compileJava', parser: 'regex', pattern: '^(?<file>.+?):(?<line>\\d+): (?<severity>error|warning): (?<message>.+)$', timeoutSec: 600,
   },
   {
     name: 'Gradle test', tier: 'slow', scope: 'project', match: ['*.java', 'build.gradle', 'build.gradle.kts'],
     requiresFileAny: ['build.gradle', 'build.gradle.kts'],
-    run: '{gradle} -q test', parser: 'exitcode', timeoutSec: 900,
+    run: '{gradle} --no-daemon -q test', parser: 'exitcode', timeoutSec: 900,
     reports: ['**/build/test-results/test/TEST-*.xml'], reportFormat: 'junit',
   },
   {
@@ -124,7 +124,7 @@ module.exports = [
     // it then fails with "Task 'pmdMain' not found...", which the engine treats as skipped, not failed.
     name: 'Gradle PMD', tier: 'slow', scope: 'project', match: ['*.java', 'build.gradle', 'build.gradle.kts'],
     requiresFileAny: ['build.gradle', 'build.gradle.kts'], onlyChangedFiles: true,
-    run: '{gradle} -q pmdMain', parser: 'exitcode', timeoutSec: 600,
+    run: '{gradle} --no-daemon -q pmdMain', parser: 'exitcode', timeoutSec: 600,
     reports: ['**/build/reports/pmd/main.xml'], reportFormat: 'pmd',
   },
   {
@@ -132,7 +132,7 @@ module.exports = [
     // and hard-requires this file at its conventional path - a real prerequisite, not a tool-missing situation.
     name: 'Gradle Checkstyle', tier: 'slow', scope: 'project', match: ['*.java', 'build.gradle', 'build.gradle.kts'],
     requiresFileAny: ['build.gradle', 'build.gradle.kts'], requiresFile: ['config/checkstyle/checkstyle.xml'], onlyChangedFiles: true,
-    run: '{gradle} -q checkstyleMain', parser: 'exitcode', timeoutSec: 600,
+    run: '{gradle} --no-daemon -q checkstyleMain', parser: 'exitcode', timeoutSec: 600,
     reports: ['**/build/reports/checkstyle/main.xml'], reportFormat: 'checkstyle',
   },
   {
@@ -147,7 +147,7 @@ module.exports = [
       pattern: 'xml\\.(required|enabled)\\b[\\s\\S]{0,20}true',
       note: 'enable the SpotBugs XML report (spotbugsMain { reports { xml.required = true } }) in build.gradle',
     },
-    run: '{gradle} -q spotbugsMain', parser: 'exitcode', timeoutSec: 600,
+    run: '{gradle} --no-daemon -q spotbugsMain', parser: 'exitcode', timeoutSec: 600,
     reports: ['**/build/reports/spotbugs/main.xml'], reportFormat: 'spotbugs',
   },
   {
