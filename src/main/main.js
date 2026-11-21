@@ -1759,7 +1759,7 @@ function registerIpc() {
   const sendUpdate = (ev, info) => { updateState.status = ev; updateState.info = info || null; send('updates:event', ev, info || {}, updatesCore.describe(ev, info)); };
   function updaterReady() {
     const cfg = loadConfigSafe(root);
-    const blocker = updatesCore.installBlocker({ platform: process.platform, packaged: app.isPackaged, portable: !!process.env.PORTABLE_EXECUTABLE_DIR, signed: process.platform === 'darwin' ? undefined : true });
+    const blocker = updatesCore.installBlocker({ platform: process.platform, packaged: app.isPackaged, portable: !!process.env.PORTABLE_EXECUTABLE_DIR, signed: process.platform === 'darwin' ? undefined : true, isAppImage: !!process.env.APPIMAGE });
     const f = updatesCore.feedFor(cfg);
     const embedded = app.isPackaged && fs.existsSync(path.join(process.resourcesPath || '', 'app-update.yml')); // written by electron-builder from the repository the release was built in
     if (f.error && !(embedded && !(cfg.updates && (cfg.updates.github || cfg.updates.url)))) return { error: f.error };

@@ -1,8 +1,8 @@
 'use strict';
 /**
  * Updates through electron-updater, opt-in. Where updates come from is a setting (the repository is not known to the app):
- *   "updates": { "check": true, "github": "owner/repo" }          releases of a GitHub repository (needs latest.yml / latest-mac.yml in the release)
- *   "updates": { "check": true, "url": "https://host/path/" }     any web folder that holds latest.yml and the installers
+ *   "updates": { "check": true, "github": "owner/repo" }          releases of a GitHub repository (needs latest.yml / latest-mac.yml / latest-linux.yml in the release)
+ *   "updates": { "check": true, "url": "https://host/path/" }     any web folder that holds latest*.yml and the installers
  * Pure helpers here; main.js drives electron-updater with them.
  */
 const GITHUB = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
@@ -25,11 +25,13 @@ function feedFor(cfg) {
 }
 
 /** Why an automatic install cannot work here, or '' when it can. */
-function installBlocker({ platform, packaged, portable, signed }) {
+function installBlocker({ platform, packaged, portable, signed, isAppImage }) {
   if (!packaged) return 'Updates only work in the installed app, not when started from the source.';
   if (platform === 'win32' && portable) return 'The portable build cannot update itself; use the installer version, or download the new portable file.';
   if (platform === 'darwin' && signed === false) return 'macOS only installs updates for a signed app. This build is ad-hoc signed: download the new version from the releases page instead.';
-  if (platform === 'linux') return 'Automatic updates are not set up for Linux builds.';
+  // electron-updater's Linux support is specifically for the AppImage format (it replaces the running file in
+  // place); a .deb/.rpm install has no such mechanism and needs the system package manager instead.
+  if (platform === 'linux' && !isAppImage) return 'Automatic updates only work for the AppImage build on Linux; download the new AppImage from the releases page instead.';
   return '';
 }
 

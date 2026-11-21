@@ -50,6 +50,8 @@ jobs:
             artifact: bazinga-windows
           - os: macos-latest
             artifact: bazinga-macos
+          - os: ubuntu-latest
+            artifact: bazinga-linux
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -88,6 +90,15 @@ jobs:
           if [ -z "$CSC_LINK" ]; then unset CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; EXTRA="-c.mac.identity=- -c.mac.hardenedRuntime=false"; fi
           npx electron-builder --mac --publish never $EXTRA
 
+      - name: Build Linux AppImage
+        if: runner.os == 'Linux'
+        run: |
+          # electron-builder's bundled appimagetool needs FUSE to assemble the image - Ubuntu 24.04 runner
+          # images dropped libfuse2 by default (a common electron-builder-on-CI breakage), so install it here.
+          sudo apt-get update
+          sudo apt-get install -y libfuse2t64 || sudo apt-get install -y libfuse2
+          npx electron-builder --linux --x64 --publish never
+
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
@@ -97,6 +108,7 @@ jobs:
             dist/*.exe
             dist/*.dmg
             dist/*.zip
+            dist/*.AppImage
             dist/latest*.yml
             dist/*.blockmap
 

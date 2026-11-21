@@ -14,12 +14,14 @@ test('feed: github owner/repo or an https folder; plain http only for localhost;
   assert.match(U.feedFor(null).error, /No update source/);
 });
 
-test('install blockers: source runs, portable Windows, unsigned macOS, Linux; the installed Windows app is fine', () => {
+test('install blockers: source runs, portable Windows, unsigned macOS, Linux without AppImage; the installed Windows app and the AppImage are fine', () => {
   assert.match(U.installBlocker({ platform: 'win32', packaged: false }), /installed app/);
   assert.match(U.installBlocker({ platform: 'win32', packaged: true, portable: true }), /portable/);
   assert.match(U.installBlocker({ platform: 'darwin', packaged: true, signed: false }), /signed/);
-  assert.match(U.installBlocker({ platform: 'linux', packaged: true }), /Linux/);
+  assert.match(U.installBlocker({ platform: 'linux', packaged: true }), /AppImage/);
+  assert.match(U.installBlocker({ platform: 'linux', packaged: true, isAppImage: false }), /AppImage/);
   assert.strictEqual(U.installBlocker({ platform: 'win32', packaged: true, portable: false }), '');
+  assert.strictEqual(U.installBlocker({ platform: 'linux', packaged: true, isAppImage: true }), '');
   assert.strictEqual(U.installBlocker({ platform: 'darwin', packaged: true }), '', 'unknown signing state: try, the updater reports the failure');
 });
 

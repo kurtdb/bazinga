@@ -4939,7 +4939,7 @@
     };
     updateUi.render = draw;
     $('#dialog').replaceChildren(el('h3', { text: 'Updates' }), msg,
-      el('div', { class: 'hint', text: 'Checks at every start by default. A packaged release build already knows where to look; to point it somewhere else (running from source, a fork), set "updates": { "github": "owner/repo" } or { "url": "https://…" } in the IDE settings. Works with the installer version; the portable Windows build and unsigned macOS builds cannot install updates by themselves.' }), act);
+      el('div', { class: 'hint', text: 'Checks at every start by default. A packaged release build already knows where to look; to point it somewhere else (running from source, a fork), set "updates": { "github": "owner/repo" } or { "url": "https://…" } in the IDE settings. Works with the Windows installer, macOS (once signed - ad-hoc signed builds cannot install updates by themselves) and the Linux AppImage. The portable Windows build and a .deb/.rpm install cannot.' }), act);
     draw();
     $('#modal').classList.remove('hidden');
   }

@@ -15,9 +15,10 @@
     "doctor": "node bin/doctor.js",
     "smoke": "node scripts/smoke.js",
     "pack": "electron-builder --dir",
-    "dist": "node scripts/dist.js --win --mac",
+    "dist": "node scripts/dist.js --win --mac --linux",
     "dist:win": "node scripts/dist.js --win --x64",
     "dist:mac": "node scripts/dist.js --mac",
+    "dist:linux": "node scripts/dist.js --linux --x64",
     "setup:local": "bash scripts/setup-local-models.sh",
     "screenshots": "node scripts/screenshots.js"
   },
@@ -131,7 +132,16 @@
       "artifactName": "${productName}-${version}-portable-${arch}.${ext}"
     },
     "linux": {
-      "icon": "build/icon-512.png"
+      "icon": "build/icon-512.png",
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Development"
     }
   },
   "author": {

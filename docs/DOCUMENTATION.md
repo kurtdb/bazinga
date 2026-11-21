@@ -16,31 +16,31 @@ Without a path it reopens the last project, or shows an *Open folder* button.
 
 `npm install` downloads Electron from GitHub. Behind a corporate proxy set `HTTPS_PROXY` first, or point `ELECTRON_MIRROR` at an internal mirror. The terminal backend (`node-pty` 1.1) ships a prebuilt Windows binary, so no compiler is needed.
 
-## Windows and macOS builds from GitHub
+## Windows, macOS and Linux builds from GitHub
 
 `.github/workflows/build.yml` runs on every push and pull request:
 
 1. **Test** on Linux, Windows and macOS (`npm test` plus the headless app smoke test). Linux must pass; Windows/macOS failures are shown but don't block step 2, so you can see what needs fixing without losing the build.
-2. **Build** on a Windows and a macOS runner. The results are downloadable from the run's *Artifacts* section (Actions tab): `bazinga-windows` (installer + portable `.exe`) and `bazinga-macos` (`.dmg` and `.zip` for Apple Silicon and Intel).
+2. **Build** on a Windows, macOS and Linux runner. The results are downloadable from the run's *Artifacts* section (Actions tab): `bazinga-windows` (installer + portable `.exe`), `bazinga-macos` (`.dmg` and `.zip` for Apple Silicon and Intel), and `bazinga-linux` (`.AppImage`, x64).
 3. Pushing a tag like `v0.2.0` also creates a GitHub **Release** with those files.
 
-**Building on your own computer** (`npm run dist:mac`, `npm run dist:win`):
+**Building on your own computer** (`npm run dist:mac`, `npm run dist:win`, `npm run dist:linux`):
 
-- Both go through `scripts/dist.js`. Without a `.git` folder (a downloaded zip) electron-builder cannot find the GitHub repository for the update feed and used to fail at the very end (`Cannot read properties of null (reading 'channel')`); now such a build simply has no update feed. Built from a clone of your GitHub repository, the feed is included.
+- All three go through `scripts/dist.js`. Without a `.git` folder (a downloaded zip) electron-builder cannot find the GitHub repository for the update feed and used to fail at the very end (`Cannot read properties of null (reading 'channel')`); now such a build simply has no update feed. Built from a clone of your GitHub repository, the feed is included.
 - A local macOS build is signed and notarized the same way the CI build is (see *Unsigned apps* below) by exporting the same six variables in your own shell before running `npm run dist:mac` — electron-builder reads them from the environment either way, CI or not.
 - **Windows installer from an Apple Silicon Mac** needs Rosetta, because the NSIS tool is an Intel program (`spawn Unknown system error -86` means it is missing): run `softwareupdate --install-rosetta --agree-to-license` once, then build again. Or let the GitHub workflow build it on a Windows runner (above), which needs nothing installed.
-- Not tested here: the Windows and macOS builds themselves (only the Linux build and the packaging step were).
+- **Linux AppImage from CI** needs `libfuse2` (or `libfuse2t64` on Ubuntu 24.04+) installed for electron-builder's bundled `appimagetool` to assemble the image — the workflow installs it before building; building locally on a Linux machine without FUSE needs the same package.
 
 Works in a private repository. Things to know:
 
-- **Cost:** private repos have a monthly free-minutes quota; macOS minutes count 10x and Windows 2x. A build is a few minutes per platform, so occasional builds are fine, building on every push is not. Change `on:` to `workflow_dispatch` plus tags if you want builds only on demand.
+- **Cost:** private repos have a monthly free-minutes quota; macOS minutes count 10x and Windows 2x (Linux counts 1x). A build is a few minutes per platform, so occasional builds are fine, building on every push is not. Change `on:` to `workflow_dispatch` plus tags if you want builds only on demand.
 - **Unsigned apps:** Windows shows a SmartScreen warning (*More info → Run anyway*). The macOS build is ad-hoc signed, so Gatekeeper blocks it the first time: right-click the app → *Open*, or run `xattr -cr "/Applications/Bazinga.app"`. An ad-hoc-signed build also cannot auto-update itself (`core/updater.installBlocker`); download the new version from the releases page instead.
   A signed and notarized build needs an Apple Developer account (99 USD/year), then six repository secrets (Settings → Secrets and variables → Actions on GitHub) — the build step already picks all of them up with no further config:
   - Open Keychain Access → Certificate Assistant → Request a Certificate From a Certificate Authority, upload the request at [developer.apple.com](https://developer.apple.com/account/resources/certificates) to get a *Developer ID Application* certificate, install it, then export it from Keychain Access as a `.p12` (with a password). `MAC_CERT_P12`: `base64 -i YourCert.p12 | pbcopy`. `MAC_CERT_PASSWORD`: the export password.
   - `APPLE_TEAM_ID`: on the certificates page above, or under *Membership*. `APPLE_ID`: your Apple ID email. `APPLE_APP_SPECIFIC_PASSWORD`: generate one at [appleid.apple.com](https://appleid.apple.com) → *Sign-In and Security* → *App-Specific Passwords* (not your Apple ID password — that would fail notarization).
   All six present → electron-builder signs with hardened runtime and notarizes automatically (`@electron/notarize`, triggered by `APPLE_ID`/`APPLE_APP_SPECIFIC_PASSWORD`/`APPLE_TEAM_ID` being set — see `app-builder-lib`'s `MacTargetHelper.getNotarizeOptions`). Only `MAC_CERT_P12`/`MAC_CERT_PASSWORD` set, no Apple ones → signed but not notarized, which Gatekeeper still blocks on first launch. None set → ad-hoc, as today.
+- **Linux auto-update is AppImage-only:** electron-updater's Linux support only knows how to replace a running AppImage file in place. A `.deb`/`.rpm` install (not built here) would have no such mechanism and would need the system package manager instead; `core/updater.installBlocker` reports this explicitly if the running binary isn't an AppImage (detected via the `APPIMAGE` environment variable AppImage's own runtime sets).
 - **macOS specifics already handled:** the app asks your login shell for its PATH at startup (apps started from Finder don't see Homebrew, nvm or `claude`), terminals start as login shells (zsh), shortcuts use Cmd (⌘S, ⌘P, ⌘⇧F; Ctrl+C in a terminal stays the interrupt), and there is a standard app menu. Install ripgrep with `brew install ripgrep` for faster search.
-- **Not verified here:** I could only test on Linux. The Windows and macOS builds have never been run by me, so treat the first CI run as the real test.
 
 ## Setup & health (start here when something does not work)
 
