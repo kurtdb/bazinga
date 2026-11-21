@@ -2,9 +2,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const net = require('node:net');
-const path = require('node:path');
 const { Agentd, MAX_RING_BYTES } = require('../src/daemon/agentd');
-const { tmpdir } = require('./helpers');
+const { tmpdir, sockFor } = require('./helpers');
 
 let ptyAvailable = true;
 try { require('node-pty'); } catch { ptyAvailable = false; }
@@ -37,7 +36,7 @@ function rawClient(socketPath) {
 
 test('ping reports this process; list is empty with nothing running', async (t) => {
   const d = new Agentd();
-  const sockPath = path.join(tmpdir(), 'a.sock');
+  const sockPath = sockFor('a');
   const server = await d.listen(sockPath);
   t.after(() => { d.shutdown(); server.close(); });
   const c = rawClient(sockPath);
@@ -52,7 +51,7 @@ test('ping reports this process; list is empty with nothing running', async (t) 
 
 test('create + write + subscribe: a run\'s output reaches a subscriber, and a late subscriber replays the ring buffer', { skip }, async (t) => {
   const d = new Agentd();
-  const sockPath = path.join(tmpdir(), 'a.sock');
+  const sockPath = sockFor('a');
   const server = await d.listen(sockPath);
   t.after(() => { d.shutdown(); server.close(); });
   const c = rawClient(sockPath);
@@ -80,7 +79,7 @@ test('create + write + subscribe: a run\'s output reaches a subscriber, and a la
 
 test('create is idempotent for a live run: a second create for the same runId reattaches instead of spawning twice', { skip }, async (t) => {
   const d = new Agentd();
-  const sockPath = path.join(tmpdir(), 'a.sock');
+  const sockPath = sockFor('a');
   const server = await d.listen(sockPath);
   t.after(() => { d.shutdown(); server.close(); });
   const c = rawClient(sockPath);
@@ -95,7 +94,7 @@ test('create is idempotent for a live run: a second create for the same runId re
 
 test('kill removes the run; a subsequent create starts fresh with no leftover ring buffer', { skip }, async (t) => {
   const d = new Agentd();
-  const sockPath = path.join(tmpdir(), 'a.sock');
+  const sockPath = sockFor('a');
   const server = await d.listen(sockPath);
   t.after(() => { d.shutdown(); server.close(); });
   const c = rawClient(sockPath);
@@ -115,7 +114,7 @@ test('kill removes the run; a subsequent create starts fresh with no leftover ri
 
 test('exit: the ring buffer and a late subscribe survive the agent process exiting on its own', { skip }, async (t) => {
   const d = new Agentd();
-  const sockPath = path.join(tmpdir(), 'a.sock');
+  const sockPath = sockFor('a');
   const server = await d.listen(sockPath);
   t.after(() => { d.shutdown(); server.close(); });
   const c = rawClient(sockPath);
@@ -133,7 +132,7 @@ test('exit: the ring buffer and a late subscribe survive the agent process exiti
 
 test('unknown op is a clean error, not a crash; a malformed line is dropped, not fatal', async (t) => {
   const d = new Agentd();
-  const sockPath = path.join(tmpdir(), 'a.sock');
+  const sockPath = sockFor('a');
   const server = await d.listen(sockPath);
   t.after(() => { d.shutdown(); server.close(); });
   const c = rawClient(sockPath);
@@ -149,7 +148,7 @@ test('unknown op is a clean error, not a crash; a malformed line is dropped, not
 
 test('the ring buffer is capped: it never grows past MAX_RING_BYTES', { skip }, async (t) => {
   const d = new Agentd();
-  const sockPath = path.join(tmpdir(), 'a.sock');
+  const sockPath = sockFor('a');
   const server = await d.listen(sockPath);
   t.after(() => { d.shutdown(); server.close(); });
   const c = rawClient(sockPath);
