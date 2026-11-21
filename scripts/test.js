@@ -28,7 +28,10 @@ const testFiles = collect(testDir).sort();
 const preload = path.join(testDir, 'tmpcleanup.js');
 const nodeOptions = [process.env.NODE_OPTIONS, `--require ${preload}`].filter(Boolean).join(' ');
 
-const result = spawnSync(process.execPath, ['--test', ...testFiles], {
+// A hung test (waiting on a connection/event that will never arrive) used to block the whole run forever
+// instead of failing - this caps any single test at a minute, so a hang fails fast with the test's own name
+// in the output instead of silently consuming CI minutes until GitHub's own multi-hour job timeout kicks in.
+const result = spawnSync(process.execPath, ['--test', '--test-timeout=60000', ...testFiles], {
   stdio: 'inherit',
   env: { ...process.env, NODE_OPTIONS: nodeOptions },
 });
