@@ -241,7 +241,13 @@ test('every built-in gate is well-formed: known parser, compilable regex pattern
   }
 });
 
-test('the Go, Rust, .NET, Java/Maven and Java/Gradle default gates run end to end (against a real go.mod/Cargo.toml/.csproj/pom.xml/build.gradle fixture) without throwing, whatever happens to be installed on this machine', async () => {
+// On a dev machine without these toolchains every gate just skips (fast). On GitHub's hosted CI runners they are
+// actually installed, so this runs real Maven/Gradle builds that resolve dependencies from Maven Central - slow,
+// and the first real Windows/Linux CI run of this suite ran well past an hour here. A generous explicit timeout
+// (above the suite's own 60s default, see scripts/test.js) means a genuine hang still fails loudly with this
+// test's name instead of silently consuming CI minutes for hours - whether or not 4 minutes is actually enough
+// to let a cold Maven/Gradle resolve for real is unverified; either way nothing is left to run unbounded.
+test('the Go, Rust, .NET, Java/Maven and Java/Gradle default gates run end to end (against a real go.mod/Cargo.toml/.csproj/pom.xml/build.gradle fixture) without throwing, whatever happens to be installed on this machine', { timeout: 240000 }, async () => {
   const root = makeRepo();
   write(root, 'go.mod', 'module example\n\ngo 1.21\n');
   write(root, 'main.go', 'package main\n\nfunc main() {}\n');
