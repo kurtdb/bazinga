@@ -29,11 +29,12 @@ const preload = path.join(testDir, 'tmpcleanup.js');
 const nodeOptions = [process.env.NODE_OPTIONS, `--require ${preload}`].filter(Boolean).join(' ');
 
 // A hung test (waiting on a connection/event that will never arrive) used to block the whole run forever
-// instead of failing - this caps any single test at 4 minutes, so a hang fails fast with the test's own name
+// instead of failing - this caps any single test at 8 minutes, so a hang fails fast with the test's own name
 // in the output instead of silently consuming CI minutes until GitHub's own multi-hour job timeout kicks in.
-// 4 minutes, not 1: checks.test.js's real-toolchain end-to-end test needs real room on a CI runner that
-// actually has Go/Rust/.NET/Java/Maven/Gradle installed (a plain dev machine without them just skips fast).
-const result = spawnSync(process.execPath, ['--test', '--test-timeout=240000', ...testFiles], {
+// 8 minutes, not 1: checks.test.js's real-toolchain end-to-end test needs real room on a CI runner that
+// actually has Go/Rust/.NET/Java/Maven/Gradle installed (a plain dev machine without them just skips fast) -
+// 240000 (4 min) was still not enough on the Windows runner specifically (Ubuntu/macOS both fit in that).
+const result = spawnSync(process.execPath, ['--test', '--test-timeout=480000', ...testFiles], {
   stdio: 'inherit',
   env: { ...process.env, NODE_OPTIONS: nodeOptions },
 });
