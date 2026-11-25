@@ -1,0 +1,80 @@
+# Supplements Semgrep's own `p/default` ruleset (see the Semgrep gate in defaults.js), which only recognizes
+# string-building-into-a-query for named ORMs/drivers it has a rule for (confirmed empirically - see
+# NEXT_STEPS.md's "Semgrep" section). A bespoke data-access wrapper (`myDbWrapper.rawQuery(sql)`,
+# `conn.runQuery(...)`) is invisible to it. These three rules close that specific gap with a generic,
+# framework-agnostic heuristic instead: taint-track a string built by concatenation/interpolation/formatting
+# to any method call whose name merely *looks* like it runs a query. Verified by hand (both that it catches
+# the bespoke-wrapper case p/default misses, and that it does not fire on the equivalent parameterized-query
+# code) against real vulnerable/safe JS, Python and Java samples - see NEXT_STEPS.md for how, since this is a
+# genuine heuristic (it goes by the method's name, not what it actually does) and can still be wrong both ways
+# on unusual code: a real false positive, or a sink named something it doesn't recognize, missed in turn.
+rules:
+  - id: generic-sql-concat-js
+    mode: taint
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >
+      A string built by concatenation or template-literal interpolation reaches a method whose name looks
+      like it runs a query ($METHOD). If any part of that string comes from outside this function, this is
+      SQL injection. Use a parameterized query / prepared statement instead of building SQL by hand.
+    metadata:
+      category: security
+      cwe: "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
+      references:
+        - https://owasp.org/www-community/attacks/SQL_Injection
+    pattern-sources:
+      - pattern: "... + ..."
+      - pattern: '`...${...}...`'
+    pattern-sinks:
+      - patterns:
+          - pattern: $OBJ.$METHOD(...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: (?i)^(query|execute|exec|rawquery|runquery)$
+
+  - id: generic-sql-concat-py
+    mode: taint
+    languages: [python]
+    severity: ERROR
+    message: >
+      A string built by concatenation, an f-string, %-formatting or .format() reaches a method whose name
+      looks like it runs a query ($METHOD). If any part of that string comes from outside this function,
+      this is SQL injection. Use a parameterized query instead of building SQL by hand.
+    metadata:
+      category: security
+      cwe: "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
+      references:
+        - https://owasp.org/www-community/attacks/SQL_Injection
+    pattern-sources:
+      - pattern: "... + ..."
+      - pattern: f"..."
+      - pattern: "... % ..."
+      - pattern: '"...".format(...)'
+    pattern-sinks:
+      - patterns:
+          - pattern: $OBJ.$METHOD(...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: (?i)^(query|execute|exec|rawquery|runquery)$
+
+  - id: generic-sql-concat-java
+    mode: taint
+    languages: [java]
+    severity: ERROR
+    message: >
+      A string built by concatenation reaches a method whose name looks like it runs a query ($METHOD). If
+      any part of that string comes from outside this function, this is SQL injection. Use a
+      parameterized/prepared statement instead of building SQL by hand.
+    metadata:
+      category: security
+      cwe: "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
+      references:
+        - https://owasp.org/www-community/attacks/SQL_Injection
+    pattern-sources:
+      - pattern: "... + ..."
+    pattern-sinks:
+      - patterns:
+          - pattern: $OBJ.$METHOD(...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: (?i)^(query|execute|executequery|executeupdate|rawquery)$

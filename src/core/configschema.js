@@ -54,6 +54,7 @@ const SCHEMA = {
     externalEditor: { enum: ['auto', 'vscode', 'idea'] },
     copilot: { type: 'object', properties: { enabled: bool } },
     jev: { type: 'object', properties: { enabled: bool, endpoint: str, model: str, keyEnv: str, minConfidence: { type: 'number', minimum: 0, maximum: 1 }, timeoutMs: { type: 'number', minimum: 500, maximum: 30000 } } },
+    inlineCompletion: { type: 'object', properties: { enabled: bool, baseUrl: str, model: str, debounceMs: { type: 'number', minimum: 0 }, api: { enum: ['ollama', 'openai'] } } },
     acp: { type: 'object', properties: { agents: { type: 'object' } } },
   },
 };

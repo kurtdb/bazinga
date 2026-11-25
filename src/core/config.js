@@ -40,10 +40,12 @@ const DEFAULT_CONFIG = {
   agentContainer: { enabled: false }, // run agent runs in a Docker container (see core/container.js)
   agentEnv: { scrub: true, allow: [] }, // agent terminals do not inherit variables that look like credentials
   ollama: { baseUrl: 'http://localhost:11434', keepWarm: true, keepAlive: '15m', unloadOthers: true, noThink: true, proxy: true, restrictTools: true, repair: true, lean: true, testMinutes: 15, maxOutputTokens: 8192 }, // local models: load on launch and re-ping while their terminal is open, so they do not unload after 5 idle minutes
-  // AI ghost-text suggestions as you type, from a local model's fill-in-the-middle endpoint (Ollama's /api/generate). Off by
-  // default (typing would otherwise trigger network calls without asking). Empty baseUrl/model = use the first configured
-  // agent that already points at an Ollama-style server (core/ollama.js localTarget); set either to pick a specific one.
-  inlineCompletion: { enabled: false, baseUrl: '', model: '', debounceMs: 400 },
+  // AI ghost-text suggestions as you type, from a local model's fill-in-the-middle endpoint - Ollama's native
+  // /api/generate by default, or a generic OpenAI-compatible server's /v1/completions (llama.cpp, vLLM, LM
+  // Studio: set api:"openai") when baseUrl/model are set explicitly. Off by default (typing would otherwise
+  // trigger network calls without asking). Empty baseUrl/model = use the first configured agent that already
+  // points at a model server (core/ollama.js localTarget, which also tells Ollama apart from an openai-flagged one).
+  inlineCompletion: { enabled: false, baseUrl: '', model: '', debounceMs: 400, api: 'ollama' },
   skillsMirrors: ['.agents/skills'], // every install is also copied here (Copilot and other agents read .agents/skills, at project and home level)
   folders: { source: [], tests: [] }, // folders marked as source / tests (right-click in the file tree); told to the agents. Project level: .ide/config.json
   foldersFiles: 60,     // how many file paths of the marked folders are listed for the agents (0 = none); more files are summarised per folder

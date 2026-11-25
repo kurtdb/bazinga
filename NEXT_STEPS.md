@@ -17,10 +17,6 @@ is done, delete it rather than leaving a struck-through retrospective in its pla
   its own, the same multi-framework problem JS has, worse).
 
 ## Gradle gates/deps — known, narrower gaps left after closing the earlier Gradle gap
-- **Gradle dependency parsing only recognizes the dominant single-GAV-coordinate string form**
-  (`implementation 'group:artifact:version'`/`implementation("group:artifact:version")`). Map-style
-  dependencies (`group:`/`name:`/`version:`) and version catalogs (`libs.versions.toml`) aren't parsed -
-  same kind of deliberate scope limit as Maven's own `dependencyManagement`/unresolved-`${property}` gaps.
 - **Multi-module Gradle builds aren't independently verified** against a real multi-project fixture - a
   single task name run from the root is expected to scope correctly across subprojects (Gradle's own
   behavior, not something Bazinga arranges), but this hasn't been exercised against a real composite build.
@@ -38,21 +34,22 @@ is done, delete it rather than leaving a struck-through retrospective in its pla
   Ruby and Scala, where no standalone DAP adapter exists at all (PHP's Xdebug speaks DBGp, a different
   protocol - writing a DBGp-to-DAP bridge from scratch was judged too large to do unverified) or no debug
   story was investigated (Scala - sbt's JVM-targeting problem, see the "Run this test" section above).
-- **Rename is LSP-only**: a file with no configured language server has no fallback rename - same gating
-  `textDocument/rename` already uses for every other LSP-backed feature.
 - **"Go to symbol in workspace" (Ctrl+T) has no incremental cross-reference with the LSP "exact usages" lens** -
   the workspace symbol index (tree-sitter/regex, same parser the symbol lenses use) and LSP's own usage-finding
   are separate systems; a rename doesn't refresh the symbol index until the next file-watcher pass.
-- **AI inline completion is Ollama-only** (fill-in-the-middle via `/api/generate`'s `suffix` field) - no generic
-  OpenAI-style FIM endpoint support. Off by default; Settings -> Editor turns it on and picks the model.
 
 ## Semgrep (SQL injection / XSS coverage) — verified, narrower than "p/default" sounds
 - Confirmed empirically (hand-written vulnerable Python/Flask and Node/Express samples) that the configured
   `p/default` ruleset genuinely catches real SQL injection (Flask/SQLAlchemy raw string concatenation) and XSS
   (Express `res.send`/raw-HTML-format) patterns - not just a plausible-sounding ruleset name.
-- The real, narrower gap: a SQL string built via concatenation against a data-access object the ruleset doesn't
-  recognize (e.g. a bespoke `db.query(...)` wrapper, not a named ORM/driver) is missed - the rules match known
-  framework/ORM call shapes, not "any string concatenated into anything called `.query`/`.execute`".
+- The SQL-injection half of this gap is closed: `core/semgrep-rules/generic-sql-concat.yml` (run alongside
+  `p/default` by the Semgrep gate) is a small, generic taint rule (JS/TS, Python, Java) that catches a string
+  built by concatenation/interpolation/formatting reaching any method whose *name* looks like it runs a query
+  - regardless of ORM/driver - verified by hand against real vulnerable and safe (parameterized-query) samples
+  in all three languages, including through an intermediate variable, not just an inline argument.
+- The XSS half is not: a response written via a bespoke wrapper the ruleset doesn't recognize (not
+  Express's own `res.send`/raw-HTML-format shapes) is still missed. Same kind of generic taint rule would
+  close it, just not written yet.
 - `p/security-audit` was considered as a swap and empirically rejected: on the same samples it ran fewer rules
   and found **zero** of the six findings `p/default` catches (an unauthenticated `semgrep scan` gets a reduced,
   non-Pro rule set from that pack specifically) - switching would have been a regression dressed up as a fix.
@@ -79,21 +76,21 @@ is done, delete it rather than leaving a struck-through retrospective in its pla
   'project'`/`'global'` and grouped under a "Global (~, every project on this machine)" divider in the
   dialog. Claude's side (`~/.claude/skills`, `~/.claude/agents`, `~/.claude/settings*.json`,
   `~/.claude/CLAUDE.md`) is verified against this project's own `skills.js` convention and against a
-  real `~/.claude` on a dev machine. Codex's `~/.codex/config.toml`/`hooks.json` and Gemini's
-  `~/.gemini/settings.json` are the tools' documented home-level config locations but weren't checked
-  against a live installation here (neither was present on the machine this was built on). Copilot's
-  global agents (`~/.copilot/agents/*.md`) are verified real; its global MCP file
-  (`~/.copilot/mcp-config.json`, read the same `servers` shape as the project-level `.vscode/mcp.json`)
-  is **unverified** - no such file existed to check on this machine, so the filename and key name are
-  a best guess, not a confirmed source. Claude Code also keeps a *third*, project-scoped-but-personal
-  MCP record per project inside `~/.claude.json` (`projects["<abs path>"].mcpServers`, confirmed on a
-  real `~/.claude.json` - the top level has no flat global `mcpServers` key at all, despite that being
-  the more obvious guess) - deliberately not surfaced here, since it's neither "this project's committed
-  config" nor "applies to every project," and folding it into either scope would misrepresent it.
-- **Codex's project `.codex/config.toml` tiering is third-party-sourced** (blogs, a config-generator
-  site), not confirmed against OpenAI's own documentation - the reader degrades gracefully (skips,
-  doesn't crash) if the file is absent or shaped differently than expected, but the location/precedence
-  itself hasn't been verified against an official source.
+  real `~/.claude` on a dev machine. Codex's `~/.codex/config.toml` location and tiering, and Gemini's
+  `~/.gemini/settings.json` location, are now confirmed against the tools' own official docs
+  (developers.openai.com and geminicli.com respectively) - Codex's `hooks.json` location specifically
+  is still unconfirmed (those docs don't mention it). Copilot's global MCP file
+  (`~/.copilot/mcp-config.json`) location was already right; **its key name was not** - confirmed
+  against GitHub's own docs that it is `mcpServers`, not `servers` (that's `.vscode/mcp.json`'s own key,
+  which the docs say the CLI explicitly does not read), so this was a real bug fixed here, not just an
+  unverified guess. The CLI's actual project-level files, `.mcp.json` and `.github/mcp.json` (also
+  confirmed, also `mcpServers` - or a bare, unwrapped `{name: {...}}` form), are now scanned too;
+  `.vscode/mcp.json` stays, for the separate, real VS Code extension convention. Claude Code also keeps
+  a *third*, project-scoped-but-personal MCP record per project inside `~/.claude.json`
+  (`projects["<abs path>"].mcpServers`, confirmed on a real `~/.claude.json` - the top level has no flat
+  global `mcpServers` key at all, despite that being the more obvious guess) - deliberately not surfaced
+  here, since it's neither "this project's committed config" nor "applies to every project," and folding
+  it into either scope would misrepresent it.
 - **The TOML reader is a narrow hand-rolled subset** (table headers plus simple `key = "value"` /
   `key = [...]` lines), not a general TOML parser - multi-line strings, inline tables, and dotted keys
   are silently skipped rather than guessed at.

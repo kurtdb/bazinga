@@ -251,6 +251,9 @@ contextBridge.exposeInMainWorld('api', {
     onDiagnostics: (cb) => on('lsp:diagnostics', cb),
     onState: (cb) => on('lsp:state', cb),
   },
+  rename: {
+    fallback: (name, newName) => invoke('rename:fallback', name, newName),
+  },
   dap: {
     start: (o) => invoke('dap:start', o),
     setBreakpoints: (o) => invoke('dap:setBreakpoints', o),

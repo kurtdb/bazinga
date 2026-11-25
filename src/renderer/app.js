@@ -1152,6 +1152,26 @@
     }
     return out.length ? { edits: out } : null;
   }
+  /**
+   * Rename fallback for a language with no LSP configured (see LSP_LANGS below): project-wide, whole-word,
+   * case-sensitive text rename - the same "by name only" approximation usages.js already makes and documents
+   * (also matches inside comments, or an unrelated identifier elsewhere that just happens to share the name).
+   * Same error handling as lspRenameAt: a failure is reported as "nothing to rename" rather than surfaced, for
+   * consistency between the two paths.
+   */
+  async function textRenameAt(model, pos, newName) {
+    const w = model.getWordAtPosition(pos);
+    if (!w) return null;
+    const res = await api.rename.fallback(w.word, newName);
+    if (!res || res.error || !res.files || !res.files.length) return null;
+    await Promise.all(res.files.map((f) => ensureModel(f.rel, f.root)));
+    const out = [];
+    for (const f of res.files) {
+      if (!state.models.has(f.rel)) continue; // a file ensureModel could not open is dropped rather than applied half-blind
+      out.push({ resource: fileUri(f.rel), textEdit: { range: state.models.get(f.rel).model.getFullModelRange(), text: f.newText } });
+    }
+    return out.length ? { edits: out } : null;
+  }
   async function lspSignatureAt(model, pos) {
     const rel = lspLive(model); if (!rel) return null;
     const res = await lspAsk(rel, 'signatureHelp', pos);
@@ -1176,6 +1196,11 @@
       monaco.languages.registerCompletionItemProvider(lang, { triggerCharacters: ['.', ':', '>', '"', "'", '/', '@', '#', '<'], provideCompletionItems: (m, p) => lspCompletionsAt(m, p) });
       monaco.languages.registerSignatureHelpProvider(lang, { signatureHelpTriggerCharacters: ['(', ','], provideSignatureHelp: (m, p) => lspSignatureAt(m, p) });
       monaco.languages.registerRenameProvider(lang, { provideRenameEdits: (m, p, newName) => lspRenameAt(m, p, newName) });
+    }
+    // every other language Monaco recognizes gets the text-based fallback (see textRenameAt) instead of nothing
+    for (const lang of monaco.languages.getLanguages().map((l) => l.id)) {
+      if (LSP_LANGS.includes(lang) || lang === 'plaintext') continue;
+      monaco.languages.registerRenameProvider(lang, { provideRenameEdits: (m, p, newName) => textRenameAt(m, p, newName) });
     }
     // go-to-definition into another project file opens it as a tab
     monaco.editor.registerEditorOpener({
@@ -3711,6 +3736,8 @@
     const icOn = el('input', { type: 'checkbox' }); icOn.checked = !!icCur.enabled;
     const icBaseUrl = el('input', { type: 'text', placeholder: 'default: the first agent pointed at an Ollama server', value: icCur.baseUrl || '', spellcheck: 'false' });
     const icModel = el('input', { type: 'text', placeholder: 'default: that agent’s model', value: icCur.model || '', spellcheck: 'false' });
+    const icApi = el('select', null, el('option', { value: 'ollama', text: 'Ollama' }), el('option', { value: 'openai', text: 'OpenAI-compatible (llama.cpp, vLLM, LM Studio)' }));
+    icApi.value = icCur.api === 'openai' ? 'openai' : 'ollama';
     const icDebounce = num(icCur.debounceMs, 400, 100, 3000);
     const agentBox = el('div');
     const drawAgents = () => agentBox.replaceChildren(...agents.map((a, i) => {
@@ -3762,7 +3789,7 @@
       const servers = {};
       for (const [name, input] of Object.entries(lspCmd)) if (input.value.trim()) servers[name] = { ...((lspCur.servers || {})[name] || {}), command: input.value.trim() };
       next.lsp = { ...lspCur, enabled: lspOn.checked, servers };
-      next.inlineCompletion = { enabled: icOn.checked, baseUrl: icBaseUrl.value.trim(), model: icModel.value.trim(), debounceMs: Math.min(3000, Math.max(100, Number(icDebounce.value) || 400)) };
+      next.inlineCompletion = { enabled: icOn.checked, baseUrl: icBaseUrl.value.trim(), model: icModel.value.trim(), debounceMs: Math.min(3000, Math.max(100, Number(icDebounce.value) || 400)), api: icApi.value };
       next.editorFontSize = Math.min(32, Math.max(8, Number(edFont.value) || 13));
       next.terminalFontSize = Math.min(32, Math.max(8, Number(termFont.value) || 13));
       next.monoFont = fontFam.value;
@@ -4046,9 +4073,9 @@
         el('div', { class: 'hint', text: 'Nothing is bundled: install the server (e.g. jdtls for Java, pyright for Python, typescript-language-server for TS/JS, gopls for Go, rust-analyzer for Rust, csharp-ls for C#) and it is found on your PATH. Leave a field empty for the default command.' })),
       aiCompletion: el('div', { class: 'field' }, el('div', { class: 'agent-head', text: 'AI inline completion (optional)' }),
         el('label', { class: 'check' }, icOn, ' Suggest ghost-text completions as you type, from a local model'),
-        el('div', { class: 'line' }, 'Ollama server ', icBaseUrl, ' model ', icModel),
+        el('div', { class: 'line' }, 'Server ', icApi, ' ', icBaseUrl, ' model ', icModel),
         el('div', { class: 'line' }, 'Wait before asking (ms) ', icDebounce),
-        el('div', { class: 'hint', text: 'Ollama only, fill-in-the-middle (codellama/qwen2.5-coder/starcoder-style models give the best results; others still work, just less precisely mid-function). Leave the server/model blank to use the first agent in Settings → Agents that already points at an Ollama server. Tab accepts a suggestion, Esc dismisses it.' })),
+        el('div', { class: 'hint', text: 'Fill-in-the-middle (codellama/qwen2.5-coder/starcoder-style models give the best results; others still work, just less precisely mid-function), over Ollama\'s native endpoint or a generic OpenAI-compatible server\'s /v1/completions (llama.cpp, vLLM, LM Studio). Leave the server/model blank to use the first agent in Settings → Agents that already points at one (its own kind is picked up automatically then; the dropdown above only matters when you set a server here yourself). Tab accepts a suggestion, Esc dismisses it.' })),
       codeLenses: el('div', { class: 'field' }, el('div', { class: 'agent-head', text: 'Above classes and methods' }),
         el('label', { class: 'check' }, lensUsages, ' Show how often the name is used in the project'),
         el('label', { class: 'check' }, lensBlame, ' Show who changed it last (git blame of its lines); click opens the commit'),

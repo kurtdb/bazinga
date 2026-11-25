@@ -110,16 +110,28 @@ test('scanCopilot: project instructions (repo-wide + scoped), agents, .vscode/mc
   assert.strictEqual(byCat['hook:postToolUse'].detail.commands[0], 'impeccable hook');
 });
 
-test('scanCopilot: global (~/.copilot) agents and mcp-config.json are tagged scope: global', () => {
+test('scanCopilot: global (~/.copilot) agents and mcp-config.json are tagged scope: global; the key is "mcpServers", confirmed against GitHub\'s own docs (not "servers" - that\'s .vscode/mcp.json\'s own, CLI-unsupported key)', () => {
   const root = tmpdir();
   const home = tmpdir();
   write(home, '.copilot/agents/triager.agent.md', '---\nname: triager\ndescription: Triages issues, everywhere\n---\nBody.');
-  write(home, '.copilot/mcp-config.json', JSON.stringify({ servers: { remote: { command: 'npx', args: ['remote-mcp'] } } }));
+  write(home, '.copilot/mcp-config.json', JSON.stringify({ mcpServers: { remote: { command: 'npx', args: ['remote-mcp'] } } }));
   const r = ac.scanCopilot(root, home);
   assert.ok(r.items.every((i) => i.scope === 'global'));
   const byCat = Object.fromEntries(r.items.map((i) => [i.category + ':' + i.name, i]));
   assert.strictEqual(byCat['agent:triager'].file, '~/.copilot/agents/triager.agent.md');
   assert.strictEqual(byCat['mcp:remote'].description, 'npx remote-mcp');
+});
+
+test('scanCopilot: project-level .mcp.json and .github/mcp.json (the CLI\'s own files, confirmed against GitHub\'s docs - distinct from .vscode/mcp.json, which the CLI does not read), both the {mcpServers:{...}} wrapper and the bare {name:{...}} form', () => {
+  const root = tmpdir();
+  const home = tmpdir();
+  write(root, '.mcp.json', JSON.stringify({ mcpServers: { wrapped: { command: 'npx', args: ['a'] } } }));
+  write(root, '.github/mcp.json', JSON.stringify({ bare: { command: 'npx', args: ['b'] } }));
+  const r = ac.scanCopilot(root, home);
+  const byCat = Object.fromEntries(r.items.map((i) => [i.category + ':' + i.name, i]));
+  assert.strictEqual(byCat['mcp:wrapped'].file, '.mcp.json');
+  assert.strictEqual(byCat['mcp:bare'].file, '.github/mcp.json');
+  assert.strictEqual(byCat['mcp:bare'].description, 'npx b');
 });
 
 test('scanGemini: project MCP servers and GEMINI.md; absent entirely is "not present"', () => {

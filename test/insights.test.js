@@ -145,6 +145,59 @@ test('Gradle dependencies: single-GAV-coordinate form, Groovy and Kotlin DSL, le
   assert.equal(I.parseGradleDeps('// no dependencies here').length, 0);
 });
 
+test('Gradle dependencies: Groovy map-style (group:/name:/version:), any argument order', () => {
+  const groovy = `
+    dependencies {
+      implementation group: 'org.springframework', name: 'spring-core', version: '5.3.9'
+      testImplementation name: 'junit', version: '4.13.2', group: 'junit'
+      api group: 'no.version', name: 'thing'
+    }`;
+  const deps = I.parseGradleDeps(groovy);
+  assert.equal(deps.length, 3);
+  assert.deepEqual(deps[0], { groupId: 'org.springframework', artifactId: 'spring-core', version: '5.3.9', scope: 'implementation', name: 'org.springframework:spring-core' });
+  assert.deepEqual(deps[1], { groupId: 'junit', artifactId: 'junit', version: '4.13.2', scope: 'testImplementation', name: 'junit:junit' });
+  assert.equal(deps[2].version, '');
+});
+
+test('parseVersionCatalog: [versions] + [libraries] (inline table with module/version.ref, inline table with group/name/version, and the shorthand string form)', () => {
+  const toml = `
+    [versions]
+    jackson = "2.13.0"
+
+    [libraries]
+    jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
+    spring-core = { group = "org.springframework", name = "spring-core", version = "5.3.9" }
+    junit = "junit:junit:4.13.2"
+
+    [bundles]
+    everything = ["jackson-databind", "spring-core"]
+  `;
+  const cat = I.parseVersionCatalog(toml);
+  assert.deepEqual(cat.get('jacksondatabind'), { groupId: 'com.fasterxml.jackson.core', artifactId: 'jackson-databind', version: '2.13.0' });
+  assert.deepEqual(cat.get('springcore'), { groupId: 'org.springframework', artifactId: 'spring-core', version: '5.3.9' });
+  assert.deepEqual(cat.get('junit'), { groupId: 'junit', artifactId: 'junit', version: '4.13.2' });
+  assert.equal(cat.has('everything'), false); // bundles are not dependencies
+});
+
+test('Gradle dependencies: a libs.* accessor resolves against the catalog regardless of which separator the alias used', () => {
+  const cat = I.parseVersionCatalog(`
+    [versions]
+    jackson = "2.13.0"
+    [libraries]
+    jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
+  `);
+  const groovy = `
+    dependencies {
+      implementation(libs.jackson.databind)
+      api libs.jackson.databind
+    }`;
+  const deps = I.parseGradleDeps(groovy, cat);
+  assert.equal(deps.length, 2);
+  assert.deepEqual(deps[0], { groupId: 'com.fasterxml.jackson.core', artifactId: 'jackson-databind', version: '2.13.0', scope: 'implementation', name: 'com.fasterxml.jackson.core:jackson-databind' });
+  assert.equal(deps[1].scope, 'api');
+  assert.equal(I.parseGradleDeps(groovy).length, 0); // no catalog given: the reference is simply skipped, not guessed at
+});
+
 test('summarizeOsv: label defaults to Maven, Gradle call sites pass their own label', () => {
   const hit = { dep: { name: 'a:x' }, id: 'GHSA-1', severity: 'high' };
   assert.match(I.summarizeOsv([hit]).text, /known problems? in Maven dependencies/);

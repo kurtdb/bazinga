@@ -281,3 +281,50 @@ test('complete(): a non-string/missing response never throws, just gives empty t
     assert.equal(res.text, '');
   } finally { srv.close(); }
 });
+
+test('completeOpenAI(): fill-in-the-middle over a generic OpenAI-compatible /v1/completions, prompt and suffix sent as-is', async () => {
+  const calls = [];
+  const srv = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      calls.push({ path: req.url, body: JSON.parse(body) });
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ choices: [{ text: '    return a + b;\n' }] }));
+    });
+  });
+  await new Promise((resolve) => srv.listen(0, '127.0.0.1', resolve));
+  try {
+    const url = `http://127.0.0.1:${srv.address().port}`;
+    const res = await ollama.completeOpenAI(url, { model: 'qwen2.5-coder', prompt: 'function add(a, b) {\n', suffix: '\n}\n' });
+    assert.equal(res.text, '    return a + b;\n');
+    assert.equal(calls[0].path, '/v1/completions');
+    assert.equal(calls[0].body.model, 'qwen2.5-coder');
+    assert.equal(calls[0].body.suffix, '\n}\n');
+    assert.equal(calls[0].body.stream, false);
+  } finally { srv.close(); }
+});
+
+test('completeOpenAI(): a baseUrl already ending in /v1 (a gateway mounted there) hits /completions, not /v1/v1/completions', async () => {
+  const calls = [];
+  const srv = http.createServer((req, res) => {
+    calls.push(req.url);
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ choices: [{ text: 'x' }] }));
+  });
+  await new Promise((resolve) => srv.listen(0, '127.0.0.1', resolve));
+  try {
+    await ollama.completeOpenAI(`http://127.0.0.1:${srv.address().port}/v1`, { model: 'x', prompt: 'a' });
+    assert.equal(calls[0], '/completions');
+  } finally { srv.close(); }
+});
+
+test('completeOpenAI(): no choices in the response never throws, just gives empty text', async () => {
+  const srv = http.createServer((_req, res) => { res.end(JSON.stringify({})); });
+  await new Promise((resolve) => srv.listen(0, '127.0.0.1', resolve));
+  try {
+    const url = `http://127.0.0.1:${srv.address().port}`;
+    const res = await ollama.completeOpenAI(url, { model: 'x', prompt: 'a' });
+    assert.equal(res.text, '');
+  } finally { srv.close(); }
+});

@@ -110,6 +110,26 @@ async function complete(baseUrl, { model, prompt, suffix, numPredict = 128, time
   return { text: typeof res.response === 'string' ? res.response : '' };
 }
 
+/** baseUrl already ends in "/v1" (a gateway mounted there) -> append "/completions"; otherwise append "/v1/completions". */
+function completionsPath(baseUrl) {
+  return /\/v1\/?$/i.test(String(baseUrl || '')) ? '/completions' : '/v1/completions';
+}
+
+/**
+ * Same fill-in-the-middle idea as complete() above, over a generic OpenAI-compatible server's legacy
+ * /v1/completions endpoint instead of Ollama's native one - its `suffix` field is the same FIM convention OpenAI's
+ * own Codex-edit models used, which llama.cpp's/vLLM's/LM Studio's own OpenAI-compatible server also honour. For
+ * a target localTarget() flagged { openai: true }, or inlineCompletion.api: "openai" set explicitly in settings.
+ */
+async function completeOpenAI(baseUrl, { model, prompt, suffix, numPredict = 128, timeoutMs = 6000 } = {}) {
+  const res = await request(baseUrl, 'POST', completionsPath(baseUrl), {
+    model, prompt: String(prompt || ''), suffix: suffix ? String(suffix) : undefined, stream: false,
+    max_tokens: numPredict, temperature: 0.2,
+  }, timeoutMs);
+  const choice = res && Array.isArray(res.choices) && res.choices[0];
+  return { text: choice && typeof choice.text === 'string' ? choice.text : '' };
+}
+
 function serveCommand(platform = process.platform) {
   if (platform === 'win32') return '$env:OLLAMA_CONTEXT_LENGTH=32768; $env:OLLAMA_FLASH_ATTENTION=1; $env:OLLAMA_KV_CACHE_TYPE="q8_0"; ollama serve   (stop the Ollama tray app first)';
   return 'OLLAMA_CONTEXT_LENGTH=32768 OLLAMA_FLASH_ATTENTION=1 OLLAMA_KV_CACHE_TYPE=q8_0 ollama serve   (quit the Ollama menu bar app first)';
@@ -188,4 +208,4 @@ function claudeEnv(model, context, { maxOutput } = {}) {
 
 const contextLabel = (n) => (n ? `${Math.round(n / 1024)}k` : '');
 
-module.exports = { notes, claudeEnv, maxOutputTokens, isClaudeCommand, isModelServerUrl, normalizeBaseUrl, DEFAULT_URL, MIN_CONTEXT, modelOf, localTarget, request, status, warm, complete, problems, serveCommand, sameModel, contextLabel };
+module.exports = { notes, claudeEnv, maxOutputTokens, isClaudeCommand, isModelServerUrl, normalizeBaseUrl, DEFAULT_URL, MIN_CONTEXT, modelOf, localTarget, request, status, warm, complete, completeOpenAI, problems, serveCommand, sameModel, contextLabel };

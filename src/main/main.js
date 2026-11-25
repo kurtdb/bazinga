@@ -6,6 +6,7 @@ const { PtyManager } = require('./pty');
 const G = require('../core/git');
 const { runChecks } = require('../core/checks');
 const { search, replaceInText } = require('../core/search');
+const { renameAcrossFiles } = require('../core/rename');
 const todos = require('../core/todos');
 const restclient = require('../core/restclient');
 const environments = require('../core/environments');
@@ -1745,13 +1746,14 @@ function registerIpc() {
     const cfg = loadConfigSafe(r);
     const ic = withDefaults(cfg, 'inlineCompletion');
     if (!ic.enabled) return { skip: true };
-    let { baseUrl, model } = ic;
+    let { baseUrl, model, api } = ic;
     if (!baseUrl || !model) {
       const found = (cfg.agents || []).map((a) => ollama.localTarget(a)).find((t) => t && t.model);
       if (!found) return { skip: true, reason: 'No agent in Settings points at an Ollama-style model server, and no baseUrl/model is set under inlineCompletion.' };
-      baseUrl = baseUrl || found.baseUrl; model = model || found.model;
+      baseUrl = baseUrl || found.baseUrl; model = model || found.model; api = found.openai ? 'openai' : api;
     }
-    try { return await ollama.complete(baseUrl, { model, prompt: String(prefix || ''), suffix: String(suffix || '') }); } catch (err) { return { error: err.message }; }
+    const complete = api === 'openai' ? ollama.completeOpenAI : ollama.complete;
+    try { return await complete(baseUrl, { model, prompt: String(prefix || ''), suffix: String(suffix || '') }); } catch (err) { return { error: err.message }; }
   }));
   // updates (electron-updater): checks by default, then download on request, then restart to install - never automatic past the check
   let autoUpdater = null;
@@ -1811,6 +1813,20 @@ function registerIpc() {
   ipcMain.on('lsp:close', (_e, rel) => { if (lsp) lsp.close(String(rel)); });
   ipcMain.handle('lsp:request', (_e, rel, kind, pos) => safe(async () => ({ result: await ensureLsp().request(String(rel), String(kind), pos || {}, { includeDeclaration: pos && pos.includeDeclaration, newName: pos && pos.newName }) })));
   ipcMain.handle('lsp:workspaceSymbols', (_e, query) => safe(async () => ({ result: await ensureLsp().workspaceSymbols(String(query || '')) })));
+
+  // rename fallback for a file with no language server (see LSP_LANGS in app.js): a project-wide, whole-word,
+  // case-sensitive text rename across every open folder - the same "by name only" approximation search:replace
+  // and usages.js already make, applied as in-memory edits (like the LSP rename above) rather than writing to
+  // disk directly, so it is reviewable/undoable before saving exactly like an LSP-backed rename is.
+  ipcMain.handle('rename:fallback', (_e, name, newName) => safe(async () => {
+    const perRoot = await Promise.all(roots.map(async (r) => {
+      const files = await G.projectFiles(r);
+      const res = renameAcrossFiles(r, files, String(name || ''), String(newName || ''));
+      return res.error ? res : { files: res.files.map((f) => ({ ...f, root: r })) };
+    }));
+    const failed = perRoot.find((res) => res.error);
+    return failed || { files: perRoot.flatMap((res) => res.files) };
+  }));
 
   // real debugger (breakpoints, step, call stack, variables), via the Debug Adapter Protocol - one session at a
   // time. Python (debugpy.adapter), Go (dlv dap) and Dart (dart debug_adapter) so far, keyed by extension -
@@ -1977,7 +1993,9 @@ function registerIpc() {
       } else {
         const gradleFile = ['build.gradle', 'build.gradle.kts'].find((f) => fs.existsSync(path.join(r, f)));
         if (gradleFile) {
-          const deps = insightsCore.parseGradleDeps(fs.readFileSync(path.join(r, gradleFile), 'utf8'));
+          const catalogFile = path.join(r, 'gradle', 'libs.versions.toml');
+          const catalog = fs.existsSync(catalogFile) ? insightsCore.parseVersionCatalog(fs.readFileSync(catalogFile, 'utf8')) : null;
+          const deps = insightsCore.parseGradleDeps(fs.readFileSync(path.join(r, gradleFile), 'utf8'), catalog);
           out.gradle = { deps, ...(await checkOsv(deps, 'Gradle')) };
         }
       }

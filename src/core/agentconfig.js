@@ -103,6 +103,17 @@ function mcpServersFromJson(json, key, file) {
   }));
 }
 
+/** Copilot CLI's project-level MCP files (.mcp.json, .github/mcp.json - confirmed against GitHub's own docs,
+ *  see scanCopilot below) accept the same {"mcpServers": {...}} wrapper as ~/.copilot/mcp-config.json, or a
+ *  bare {"name": {...}} map with no wrapper at all - tried second, only once the wrapped form comes up empty. */
+function mcpServersFromJsonOrBare(json, file) {
+  const wrapped = mcpServersFromJson(json, 'mcpServers', file);
+  if (wrapped.length || !json || typeof json !== 'object') return wrapped;
+  return Object.entries(json)
+    .filter(([, cfg]) => cfg && typeof cfg === 'object' && (cfg.command || cfg.url || cfg.type))
+    .map(([name, cfg]) => ({ category: 'mcp', name, description: cfg.command ? `${cfg.command} ${(cfg.args || []).join(' ')}`.trim() : '', file, detail: cfg }));
+}
+
 const tag = (its, scope) => its.map((it) => ({ ...it, scope }));
 
 /** Claude's skills/agents/hooks live in the same shape at both levels: `.claude/skills`, `.claude/agents`,
@@ -173,23 +184,34 @@ function scanCopilot(root, home = os.homedir()) {
     const fm = parseFrontmatter(readText(path.join(root, '.github', 'agents', f)) || '');
     items.push({ category: 'agent', name: fm.name || f.replace(/\.md$/i, ''), description: fm.description || '', file: `.github/agents/${f}`, detail: {}, scope: 'project' });
   }
+  // .vscode/mcp.json is VS Code's own built-in MCP convention (the Copilot Chat *extension* reads it, among
+  // other VS Code AI extensions) - kept for that, but confirmed against GitHub's own docs that the standalone
+  // Copilot CLI does NOT read it (its docs call .vscode/mcp.json's "servers" key "unsupported" for the CLI).
   const mcp = readJson(path.join(root, '.vscode', 'mcp.json'));
   if (mcp) items.push(...tag(mcpServersFromJson(mcp, 'servers', '.vscode/mcp.json'), 'project'));
+  // The CLI's own project-level MCP files (confirmed): .mcp.json takes precedence when both exist, but both
+  // are listed here rather than resolving that - same as every other scope in this file, which lists every
+  // real source rather than collapsing to "the one that wins".
+  for (const rel of [['.mcp.json'], ['.github', 'mcp.json']]) {
+    const json = readJson(path.join(root, ...rel));
+    if (json) items.push(...tag(mcpServersFromJsonOrBare(json, rel.join('/')), 'project'));
+  }
   for (const f of listFiles(path.join(root, '.github', 'hooks'), /\.json$/i)) {
     const json = readJson(path.join(root, '.github', 'hooks', f));
     if (json) items.push(...tag(summarizeHooksCopilotStyle(json, `.github/hooks/${f}`), 'project'));
   }
 
   // Global: the Copilot CLI (not the VS Code extension) keeps its own per-user agents at ~/.copilot/agents
-  // (confirmed - same .md shape as the project-level ones) and, per its own docs, MCP servers in
-  // ~/.copilot/mcp-config.json - that file's exact key shape is not independently confirmed here, read
-  // the same way as the project-level .vscode/mcp.json ("servers") as a best effort; see NEXT_STEPS.md.
+  // (confirmed - same .md shape as the project-level ones) and MCP servers in ~/.copilot/mcp-config.json
+  // under a "mcpServers" key (confirmed against GitHub's own docs - NOT "servers", which is .vscode/mcp.json's
+  // own, CLI-unsupported key; this file is the one place in this whole scanner that was wrong, not just
+  // unverified, until this was checked against the real docs).
   for (const f of listFiles(path.join(home, '.copilot', 'agents'), /\.md$/i)) {
     const fm = parseFrontmatter(readText(path.join(home, '.copilot', 'agents', f)) || '');
     items.push({ category: 'agent', name: fm.name || f.replace(/\.agent\.md$|\.md$/i, ''), description: fm.description || '', file: `~/.copilot/agents/${f}`, detail: {}, scope: 'global' });
   }
   const userMcp = readJson(path.join(home, '.copilot', 'mcp-config.json'));
-  if (userMcp) items.push(...tag(mcpServersFromJson(userMcp, 'servers', '~/.copilot/mcp-config.json'), 'global'));
+  if (userMcp) items.push(...tag(mcpServersFromJson(userMcp, 'mcpServers', '~/.copilot/mcp-config.json'), 'global'));
   return { runner: 'copilot', present: items.length > 0, items };
 }
 

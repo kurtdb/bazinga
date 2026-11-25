@@ -187,19 +187,85 @@ function parseMavenDeps(xml) {
   }
   return out;
 }
-/** Dependencies declared in build.gradle/build.gradle.kts as a single GAV coordinate string - by far the
- *  dominant real-world form, in both DSLs: `implementation 'group:artifact:version'` (Groovy, single or double
- *  quotes) or `implementation("group:artifact:version")` (Kotlin). Map-style dependencies (group:/name:/version:)
- *  and version catalogs (libs.versions.toml) are not parsed - scoped out the same way Maven's own
- *  dependencyManagement/unresolved-${property} gaps already are. */
-function parseGradleDeps(text) {
+/** Gradle's version catalog (gradle/libs.versions.toml): the [versions] and [libraries] tables only - a narrow,
+ *  hand-rolled subset matching this project's existing TOML reader (core/agentconfig.js's parseTomlTables), not
+ *  a general TOML parser; [bundles]/[plugins] are not dependencies for vulnerability scanning and are not read.
+ *  A library entry is either the shorthand string form (`alias = "group:artifact:version"`) or an inline table
+ *  (`alias = { module = "group:artifact", version.ref = "key" }` or `{ group = "..", name = "..", version = ".." }`).
+ *  @returns {Map<string, {groupId, artifactId, version}>} keyed by the alias with every `-`/`_`/`.` separator
+ *           stripped and lowercased, so it matches however build.gradle's `libs.*` accessor spells it (Gradle
+ *           itself builds that accessor the same way, from whichever separator the alias happens to use).
+ */
+function parseVersionCatalog(text) {
+  const versions = new Map();
+  const libraries = new Map();
+  const normalize = (k) => k.toLowerCase().replace(/[-_.]/g, '');
+  let section = '';
+  for (const rawLine of String(text || '').split('\n')) {
+    const line = rawLine.replace(/#.*/, '').trim();
+    if (!line) continue;
+    const header = /^\[(\w+)\]$/.exec(line);
+    if (header) { section = header[1]; continue; }
+    const kv = /^([\w.-]+)\s*=\s*(.+)$/.exec(line);
+    if (!kv) continue;
+    const [, key, rawValue] = kv;
+    const value = rawValue.trim();
+    if (section === 'versions') {
+      const m = /^"([^"]*)"$/.exec(value);
+      if (m) versions.set(key, m[1]);
+    } else if (section === 'libraries') {
+      const str = /^"([^"]*)"$/.exec(value);
+      if (str) {
+        const [groupId, artifactId, version] = str[1].split(':');
+        if (groupId && artifactId) libraries.set(normalize(key), { groupId, artifactId, version: version || '' });
+        continue;
+      }
+      const inline = /^\{([\s\S]*)\}$/.exec(value);
+      if (!inline) continue;
+      const body = inline[1];
+      const field = (name) => { const f = new RegExp(`(?:^|[,{])\\s*${name}\\s*=\\s*"([^"]*)"`).exec(body); return f ? f[1] : ''; };
+      let groupId = field('group'); let artifactId = field('name');
+      if (!groupId || !artifactId) { const [g, a] = field('module').split(':'); groupId = groupId || g; artifactId = artifactId || a; }
+      if (!groupId || !artifactId) continue;
+      const versionRef = field('version.ref');
+      libraries.set(normalize(key), { groupId, artifactId, version: versionRef ? (versions.get(versionRef) || '') : field('version') });
+    }
+  }
+  return libraries;
+}
+/** Dependencies declared in build.gradle/build.gradle.kts: the dominant single-GAV-coordinate-string form
+ *  (`implementation 'group:artifact:version'` Groovy, `implementation("group:artifact:version")` Kotlin),
+ *  Groovy's named-argument map-style form (`implementation group: '..', name: '..', version: '..'`, any
+ *  argument order - real-world files use all three forms interchangeably), and a version-catalog reference
+ *  (`implementation(libs.foo.bar)`) resolved against `catalog` (parseVersionCatalog's return value; omit it and
+ *  catalog references are simply skipped, same graceful-degradation as every other optional-input gate here). */
+function parseGradleDeps(text, catalog = null) {
   const configs = 'implementation|api|compileOnly|runtimeOnly|testImplementation|testRuntimeOnly|compile|testCompile';
-  const re = new RegExp(`^\\s*(${configs})\\s*[(]?\\s*['"]([^'"]+)['"]`, 'gm');
+  const src = String(text || '');
   const out = [];
-  for (const m of String(text || '').matchAll(re)) {
+  const re = new RegExp(`^\\s*(${configs})\\s*[(]?\\s*['"]([^'"]+)['"]`, 'gm');
+  for (const m of src.matchAll(re)) {
     const [groupId, artifactId, ...rest] = m[2].split(':');
     if (!groupId || !artifactId) continue;
     out.push({ groupId, artifactId, version: rest.join(':') || '', scope: m[1], name: `${groupId}:${artifactId}` });
+  }
+  const reMap = new RegExp(`^\\s*(${configs})\\s*[(]?\\s*([^\\n]*)$`, 'gm');
+  for (const m of src.matchAll(reMap)) {
+    const rest = m[2];
+    if (!/\bgroup\s*:/.test(rest) || !/\bname\s*:/.test(rest)) continue; // map-style only - any argument order
+    const field = (name) => { const f = new RegExp(`\\b${name}\\s*:\\s*['"]([^'"]*)['"]`).exec(rest); return f ? f[1] : ''; };
+    const groupId = field('group'); const artifactId = field('name');
+    if (!groupId || !artifactId) continue;
+    out.push({ groupId, artifactId, version: field('version'), scope: m[1], name: `${groupId}:${artifactId}` });
+  }
+  if (catalog && catalog.size) {
+    const reCat = new RegExp(`^\\s*(${configs})\\s*[(]?\\s*libs((?:\\.[A-Za-z][\\w]*)+)`, 'gm');
+    for (const m of src.matchAll(reCat)) {
+      const key = m[2].split('.').filter(Boolean).join('').toLowerCase();
+      const lib = catalog.get(key);
+      if (!lib) continue;
+      out.push({ groupId: lib.groupId, artifactId: lib.artifactId, version: lib.version, scope: m[1], name: `${lib.groupId}:${lib.artifactId}` });
+    }
   }
   return out;
 }
@@ -260,5 +326,5 @@ function formatMetric(kind, v) {
 
 module.exports = {
   snapshot, statusLineText, describeLimits, totals, timeByKind, modelHealth, parseCoverage, parseLcov, parseJacoco, parseCobertura, coverageFor, COVERAGE_FILES,
-  sonarUrl, parseSonarGate, parseNpmAudit, parseDependabot, parseMavenDeps, parseGradleDeps, osvBatchBody, parseOsvBatch, parseOsvSeverity, summarizeOsv, parseActuatorHealth, metricValue, formatMetric, METRICS,
+  sonarUrl, parseSonarGate, parseNpmAudit, parseDependabot, parseMavenDeps, parseGradleDeps, parseVersionCatalog, osvBatchBody, parseOsvBatch, parseOsvSeverity, summarizeOsv, parseActuatorHealth, metricValue, formatMetric, METRICS,
 };

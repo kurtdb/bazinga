@@ -1,6 +1,10 @@
 'use strict';
 
+const path = require('node:path');
+
 const CODE = ['*.js', '*.jsx', '*.ts', '*.tsx', '*.mjs', '*.cjs', '*.py', '*.java', '*.go', '*.rs', '*.cs', '*.sh', '*.bash', '*.yml', '*.yaml'];
+// A bundled Semgrep ruleset supplementing p/default's own: see semgrep-rules/generic-sql-concat.yml for why.
+const SEMGREP_EXTRA_RULES = path.join(__dirname, 'semgrep-rules', 'generic-sql-concat.yml');
 
 /**
  * Built-in quality gates. A check is skipped (not failed) when its tool is not installed,
@@ -42,8 +46,13 @@ module.exports = [
     run: 'pyright --outputjson {files}', parser: 'pyright',
   },
   {
+    // p/default alone only recognizes string-building-into-a-query for named ORMs/drivers it has a rule for
+    // (confirmed empirically - see NEXT_STEPS.md); a bespoke db.query()-style wrapper is invisible to it. The
+    // second --config adds a small bundled, framework-agnostic taint rule (JS/TS, Python, Java) that closes
+    // that specific gap - verified the same way (catches the bespoke-wrapper case, not the equivalent
+    // parameterized-query code) against real vulnerable/safe samples.
     name: 'Semgrep', tier: 'slow', match: CODE, requiresBin: 'semgrep',
-    run: 'semgrep scan --config p/default --metrics off --sarif --quiet {files}', parser: 'sarif',
+    run: `semgrep scan --config p/default --config "${SEMGREP_EXTRA_RULES}" --metrics off --sarif --quiet {files}`, parser: 'sarif',
   },
   {
     // Native: no tool needed. Finds new UI components that re-implement a shared one (Button, Modal, Input...), duplicate names, raw <button>.
