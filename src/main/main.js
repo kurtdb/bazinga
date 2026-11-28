@@ -592,9 +592,15 @@ async function checkBudget(id, term) {
     if (!b.exceeded || budgetTold.has(run.id)) return;
     budgetTold.add(run.id);
     fixloop.pause(id);
-    runs.journalEvent(run.root, { kind: 'budget', text: `${b.usedMin} of ${b.limitMin} min used: fix loop stopped` });
+    const reason = `${b.usedMin} of ${b.limitMin} min used: fix loop stopped`;
+    runs.journalEvent(run.root, { kind: 'budget', text: reason });
     notify('agent-idle', `${run.name}: time budget used`, `${b.usedMin} of ${b.limitMin} minutes. The fix loop is stopped; decide whether to continue.`);
     send('run:budget', { id: run.id, name: run.name, usedMin: b.usedMin, limitMin: b.limitMin });
+    // the pause itself (fixloop.pause) is silent to the fix loop's own state machine - without this, nothing durable
+    // ever says why: the notification above is one-shot, and run:budget only drives a status-bar flash. Reuse the
+    // normal fixloop:status 'stop' shape so the run-list chip and the tab-bar icon pick it up exactly like any other
+    // "fix loop gave up" (they already show f.reason) - no new UI plumbing needed, just reaching it.
+    send('fixloop:status', { id, state: 'stop', reason, label: run.name });
   } catch { /* budget is advisory */ }
 }
 
@@ -1289,7 +1295,9 @@ function registerIpc() {
     const { run } = await runs.findRun(base, opts.id);
     const result = await runs.mergeRun(base, opts.id, { message: opts.message, squash: opts.squash !== false });
     await recordOutcome(run, 'merged', { compared: !!opts.compared });
-    if (Array.isArray(opts.overriddenItems) && opts.overriddenItems.length) guardoverrides.recordOverride(userFile('guardoverrides.json'), opts.overriddenItems);
+    if (Array.isArray(opts.overriddenItems) && opts.overriddenItems.length) {
+      guardoverrides.recordOverride(userFile('guardoverrides.json'), opts.overriddenItems, { agent: run.agent || 'agent', kind: scorecard.kindOf(run.task) });
+    }
     runs.journalEvent(run.root, { kind: 'merged', text: `into ${result && result.into}` }).catch(() => {});
     return { result };
   }));
@@ -1299,7 +1307,9 @@ function registerIpc() {
     const cfg = loadConfigSafe(base);
     const eff = require('../core/ciguard').effectivePolicy(base, { mergeGuard: cfg.mergeGuard, protectedPaths: cfg.protectedPaths });
     const store = guardoverrides.load(userFile('guardoverrides.json'));
-    return { suggestions: guardoverrides.suggestions(store, eff.policy), counts: store.counts };
+    const detail = {};
+    for (const id of Object.keys(store.counts)) detail[id] = guardoverrides.detailFor(store, id);
+    return { suggestions: guardoverrides.suggestions(store, eff.policy), counts: store.counts, detail };
   }));
   ipcMain.handle('guardoverrides:dismiss', (_e, ruleId) => safe(() => guardoverrides.dismiss(userFile('guardoverrides.json'), ruleId)));
   ipcMain.handle('guardoverrides:reset', (_e, ruleId) => safe(() => guardoverrides.resetCount(userFile('guardoverrides.json'), ruleId)));
@@ -1499,11 +1509,20 @@ function registerIpc() {
       // guardForRun already computes the exact same guard+scorecard verdict (forced "as if enabled" there, which is
       // moot here since cfg.enabled is already real-true) - reuse it instead of asking the scorecard twice.
       const { verdict: v } = await guardForRun(base, run, { unattended: true });
-      if (!v.autoMergeEligible) { dbg('automerge', `${run.name}: not auto-merged (${v.detail})`); return; }
+      if (!v.autoMergeEligible) {
+        dbg('automerge', `${run.name}: not auto-merged (${v.detail})`);
+        // the debug log and a one-shot notification are easy to miss with several runs sitting in review; this is
+        // the one moment the verdict gets computed for free (guardForRun just ran real gates for it) - persist it
+        // onto the run's own metadata so listRuns() carries it from here on, same mechanism as escalatedTo, with
+        // no extra gate run needed to show it later.
+        await runs.recordMeta(run.root, { autoMergeNote: `Not auto-merged: ${v.detail}` });
+        return;
+      }
       if (cfg.dryRun) {
         runs.journalEvent(run.root, { kind: 'automerge-dryrun', text: `Would auto-merge: ${v.detail}` });
         dbg('automerge', `${run.name}: dry run, not actually merged (${v.detail})`);
         notify('fixloop', `Dry run: “${run.name}” would be auto-merged`, `${v.detail}. Not merged - auto-merge dry run is on.`);
+        await runs.recordMeta(run.root, { autoMergeNote: `Would auto-merge (dry run): ${v.detail}` });
         return;
       }
       const result = await runs.mergeRun(base, run.id, { message: `Auto-merged: ${run.name}`, squash: true });

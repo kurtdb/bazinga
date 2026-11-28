@@ -13,8 +13,12 @@ const CONFIG_REL = path.join('.ide', 'config.json');
 function load(file) {
   try {
     const j = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return { counts: (j && typeof j.counts === 'object' && j.counts) || {}, dismissed: Array.isArray(j.dismissed) ? j.dismissed : [] };
-  } catch { return { counts: {}, dismissed: [] }; }
+    return {
+      counts: (j && typeof j.counts === 'object' && j.counts) || {},
+      dismissed: Array.isArray(j.dismissed) ? j.dismissed : [],
+      detail: (j && typeof j.detail === 'object' && j.detail) || {}, // ruleId -> "agent\0kind" -> count
+    };
+  } catch { return { counts: {}, dismissed: [], detail: {} }; }
 }
 
 function save(file, store) {
@@ -27,11 +31,28 @@ function save(file, store) {
   return store;
 }
 
-/** Call once a merge went ahead over an override: `ruleIds` are the blocking guard item ids ticked past. */
-function recordOverride(file, ruleIds) {
+/**
+ * Call once a merge went ahead over an override: `ruleIds` are the blocking guard item ids ticked past.
+ * `info.agent`/`info.kind`, when given, also tally *who* and *what kind of task* hit this rule - a count by rule
+ * id alone can't tell "one agent repeatedly hitting a miscalibrated rule on one kind of task" apart from "several
+ * unrelated one-offs", which matters for deciding whether the rule itself needs relaxing project-wide.
+ */
+function recordOverride(file, ruleIds, info = {}) {
   const store = load(file);
-  for (const id of ruleIds || []) store.counts[id] = (store.counts[id] || 0) + 1;
+  const key = `${info.agent || 'agent'}\u0000${info.kind || 'other'}`;
+  for (const id of ruleIds || []) {
+    store.counts[id] = (store.counts[id] || 0) + 1;
+    store.detail[id] = store.detail[id] || {};
+    store.detail[id][key] = (store.detail[id][key] || 0) + 1;
+  }
   return save(file, store);
+}
+
+/** detail[ruleId] as a sorted [{agent, kind, count}] list, most-overridden first - for display. */
+function detailFor(store, ruleId) {
+  return Object.entries((store && store.detail && store.detail[ruleId]) || {})
+    .map(([key, count]) => { const [agent, kind] = key.split('\u0000'); return { agent, kind, count }; })
+    .sort((a, b) => b.count - a.count);
 }
 
 function dismiss(file, ruleId) {
@@ -44,6 +65,7 @@ function dismiss(file, ruleId) {
 function resetCount(file, ruleId) {
   const store = load(file);
   delete store.counts[ruleId];
+  delete store.detail[ruleId];
   store.dismissed = store.dismissed.filter((id) => id !== ruleId);
   return save(file, store);
 }
@@ -85,4 +107,4 @@ function suggestions(store, policy, { threshold = THRESHOLD } = {}) {
     .sort((a, b) => b.count - a.count);
 }
 
-module.exports = { THRESHOLD, load, save, recordOverride, dismiss, resetCount, relax, relaxProject, suggestions };
+module.exports = { THRESHOLD, load, save, recordOverride, detailFor, dismiss, resetCount, relax, relaxProject, suggestions };

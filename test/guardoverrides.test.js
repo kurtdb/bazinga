@@ -16,10 +16,10 @@ test('relax: one step down, never tightens', () => {
 });
 
 test('load: a missing or broken file reads as empty', () => {
-  assert.deepEqual(go.load(path.join(os.tmpdir(), 'does-not-exist-bz.json')), { counts: {}, dismissed: [] });
+  assert.deepEqual(go.load(path.join(os.tmpdir(), 'does-not-exist-bz.json')), { counts: {}, dismissed: [], detail: {} });
   const file = tmpFile();
   fs.writeFileSync(file, 'not json');
-  assert.deepEqual(go.load(file), { counts: {}, dismissed: [] });
+  assert.deepEqual(go.load(file), { counts: {}, dismissed: [], detail: {} });
 });
 
 test('recordOverride: counts accumulate per rule id, across calls', () => {
@@ -35,7 +35,20 @@ test('recordOverride: tolerates an empty or missing list', () => {
   const file = tmpFile();
   go.recordOverride(file, []);
   go.recordOverride(file, undefined);
-  assert.deepEqual(go.load(file), { counts: {}, dismissed: [] });
+  assert.deepEqual(go.load(file), { counts: {}, dismissed: [], detail: {} });
+});
+
+test('recordOverride: also tallies by agent and kind of task, so a count can be told apart from unrelated one-offs', () => {
+  const file = tmpFile();
+  go.recordOverride(file, ['scope'], { agent: 'qwen', kind: 'bugfix' });
+  go.recordOverride(file, ['scope'], { agent: 'qwen', kind: 'bugfix' });
+  go.recordOverride(file, ['scope'], { agent: 'Claude', kind: 'docs' });
+  go.recordOverride(file, ['scope']); // no info given: falls back rather than throwing or being dropped
+  const store = go.load(file);
+  assert.equal(store.counts.scope, 4);
+  const detail = go.detailFor(store, 'scope');
+  assert.deepEqual(detail, [{ agent: 'qwen', kind: 'bugfix', count: 2 }, { agent: 'Claude', kind: 'docs', count: 1 }, { agent: 'agent', kind: 'other', count: 1 }]);
+  assert.deepEqual(go.detailFor(store, 'nonexistent'), []);
 });
 
 test('suggestions: only rules overridden at least THRESHOLD times, still "block" in the policy, and not dismissed', () => {
@@ -67,14 +80,15 @@ test('dismiss: persists and is idempotent', () => {
   assert.deepEqual(go.load(file).dismissed, ['scope']);
 });
 
-test('resetCount: clears the count and un-dismisses, so it can resurface', () => {
+test('resetCount: clears the count, its detail breakdown, and un-dismisses, so it can resurface', () => {
   const file = tmpFile();
-  go.recordOverride(file, ['scope', 'scope', 'scope']);
+  go.recordOverride(file, ['scope', 'scope', 'scope'], { agent: 'qwen', kind: 'bugfix' });
   go.dismiss(file, 'scope');
   go.resetCount(file, 'scope');
   const store = go.load(file);
   assert.equal(store.counts.scope, undefined);
   assert.deepEqual(store.dismissed, []);
+  assert.deepEqual(go.detailFor(store, 'scope'), []);
 });
 
 test('resetCount: leaves other rules alone', () => {

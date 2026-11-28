@@ -2833,7 +2833,7 @@
         t.fix && t.fix.state === 'fixing' ? el('span', { class: 'badge', title: 'Fix loop round', text: `${t.fix.round}/${t.fix.maxRounds}` }) : null,
         t.prompt ? el('span', { class: 'badge warnbadge', title: t.prompt.text, text: 'approve?' }) : null,
         t.fix && t.fix.state === 'done' ? ic('check', 'bt-ok') : null,
-        t.fix && (t.fix.state === 'stop' || t.fix.state === 'error') ? ic('triangle-alert', 'bt-err') : null,
+        t.fix && (t.fix.state === 'stop' || t.fix.state === 'error') ? el('span', { title: t.fix.reason || '' }, ic('triangle-alert', 'bt-err')) : null,
         el('span', { class: 'x', onclick: (e) => { e.stopPropagation(); closeTerminal(t.key); } }, ic('x'))));
     }
     bar.replaceChildren(...tabs);
@@ -4914,6 +4914,7 @@
           c.approval ? el('span', { class: 'chip warnchip', title: `${c.approval.workflowName} · step “${c.approval.stepId}” passed its gate and is waiting on you`, text: `waiting ${scTime(Date.now() - c.approval.since)}` })
             : c.state === 'stale' ? el('span', { class: 'chip warnchip', text: 'stale' }) : c.state === 'waiting' ? el('span', { class: 'chip warnchip', text: 'approval' }) : null),
         el('div', { class: 'muted small', text: `${run.agent || 'agent'} · ${run.files} file${run.files === 1 ? '' : 's'}${row && row.pct !== null ? ` · ${Math.round(row.pct * 100)}% context` : ''}${row && row.cost != null ? ` · ~$${row.cost.toFixed(2)}` : ''}` }),
+        run.autoMergeNote ? el('div', { class: 'muted small', title: run.autoMergeNote, text: run.autoMergeNote }) : null,
         row && row.pct !== null ? el('div', { class: `fl-bar lv-${row.level}` }, el('div', { class: 'fl-fill', style: `width:${Math.min(100, Math.round(row.pct * 100))}%` })) : null,
         el('div', { class: 'run-acts' },
           el('button', { class: 'primary', onclick: () => { closeBoard(); reviewRun(run); } }, ic('eye'), 'Review'),
@@ -6929,10 +6930,14 @@
     const overrideCounts = Object.entries((go && go.counts) || {}).sort((a, b) => b[1] - a[1]);
     if (overrideCounts.length) {
       body.push(el('h4', { class: 'sc-kind', text: 'Guard overrides' }),
-        el('div', { class: 'hint', text: 'How many times you have ticked “merge anyway” past each blocker, across every project. Overriding the same one a few times offers to relax it (Settings → Merge guard).' }),
+        el('div', { class: 'hint', text: 'How many times you have ticked “merge anyway” past each blocker, across every project. Overriding the same one a few times offers to relax it (Settings → Merge guard). Hover a count for the agents and kinds of task behind it - one agent hitting it repeatedly on one kind of task is a different problem than several unrelated one-offs.' }),
         el('table', { class: 'sc-table' },
           el('thead', null, el('tr', null, el('th', { text: 'Rule' }), el('th', { text: 'Times overridden' }))),
-          el('tbody', null, ...overrideCounts.map(([id, count]) => el('tr', null, el('td', { text: GUARD_LABELS[id] || id }), el('td', { text: String(count) }))))));
+          el('tbody', null, ...overrideCounts.map(([id, count]) => {
+          const detail = (go && go.detail && go.detail[id]) || [];
+          const title = detail.map((d) => `${d.agent} · ${KIND_LABELS[d.kind] || d.kind}: ${d.count}`).join(', ');
+          return el('tr', null, el('td', { text: GUARD_LABELS[id] || id }), el('td', { text: String(count), title }));
+        }))));
     }
     $('#dialog').replaceChildren(el('h3', { text: 'Scorecard' }),
       el('div', { class: 'hint', text: `Counted from what you did with each run (${(sc && sc.total) || 0} so far). “Alone” = merged without a stronger agent taking over; a “head-to-head” count means this agent beat others on the identical task (best-of), not just whatever task happened to land on it - those are weighted higher in “Best so far”. “Lost” = another run of the same task was kept. “Cost per merge” counts failed attempts too; “?” means the agent reported no cost. Rows with fewer than ${(sc && sc.minRuns) || 3} runs are faded: too few to trust. Hover “Discarded” for why, where you said.` }),
