@@ -34,6 +34,11 @@ test('makeRecord: outcome and escalation decide the result; junk is cleaned', ()
   assert.equal(m({ kind: 'nonsense' }).kind, 'tests');
   assert.equal(m({ fixRounds: -3, activeMs: 'x', files: NaN }).fixRounds, 0);
   assert.equal(m({ agent: 'x'.repeat(500) }).agent.length, 80);
+  assert.equal(m({}).compared, false);
+  assert.equal(m({ compared: true }).compared, true);
+  assert.equal(m({}).reason, '', 'no reason given');
+  assert.equal(m({ reason: 'broken' }).reason, 'broken');
+  assert.equal(m({ reason: 'not-a-real-reason' }).reason, '', 'an unknown reason is dropped, not stored as free text');
 });
 
 test('add/load: records are kept in order, capped, and a broken file reads as empty', () => {
@@ -70,6 +75,20 @@ test('summarize: counts per agent and kind, first-pass only where the fix loop w
   assert.deepEqual(sc.summarize([rec('a', 'tests', 'win', { at: 5 })], { since: 10 }), []);
 });
 
+test('summarize: compared (best-of) runs and discard reasons are tallied separately from the plain counts', () => {
+  const rows = sc.summarize([
+    rec('qwen', 'bugfix', 'win', { compared: true }), rec('qwen', 'bugfix', 'lost', { compared: true }), rec('qwen', 'bugfix', 'win'),
+    rec('qwen', 'bugfix', 'failed', { reason: 'broken' }), rec('qwen', 'bugfix', 'failed', { reason: 'broken' }), rec('qwen', 'bugfix', 'failed', { reason: 'wrong' }), rec('qwen', 'bugfix', 'failed'),
+  ]);
+  const q = rows.find((r) => r.agent === 'qwen' && r.kind === 'bugfix');
+  assert.equal(q.runs, 7); assert.equal(q.win, 2);
+  assert.equal(q.comparedRuns, 2, 'the plain win does not count as compared');
+  assert.equal(q.comparedWin, 1);
+  assert.equal(q.comparedWinRate, 0.5);
+  assert.deepEqual(q.reasons, { broken: 2, wrong: 1 }, 'the reason-less discard is not counted under any key');
+  assert.equal(sc.summarize([rec('a', 'tests', 'win')])[0].comparedWinRate, null, 'no compared evidence at all: null, not 0');
+});
+
 test('recommend: needs enough runs, ranks by working alone, then rounds, then time; says nothing otherwise', () => {
   const many = (agent, kind, wins, fails, extra = {}) => [...Array(wins).fill(0).map(() => rec(agent, kind, 'win', extra)), ...Array(fails).fill(0).map(() => rec(agent, kind, 'failed', extra))];
   const rows = sc.summarize([...many('qwen', 'tests', 4, 1, { local: true }), ...many('Claude', 'tests', 3, 0), ...many('lucky', 'tests', 1, 0)]);
@@ -84,6 +103,19 @@ test('recommend: needs enough runs, ranks by working alone, then rounds, then ti
   assert.equal(sc.recommend(tie, 'bugfix').agent, 'local');
   const fewer = sc.summarize([...many('cloud', 'bugfix', 3, 0, { fixRounds: 0 }), ...many('local', 'bugfix', 3, 0, { fixRounds: 2, local: true })]);
   assert.equal(sc.recommend(fewer, 'bugfix').agent, 'cloud');
+});
+
+test('recommend: a lower plain win rate wins when it is backed by head-to-head results, exactly the task-mix problem compared evidence exists to fix', () => {
+  // "lucky" only ever ran solo (never a best-of): 4 of 5, winRate 0.8 - looks great, but we have no idea if an
+  // easier task mix is why. "scrappy" beat other agents head-to-head all 3 times it was compared, and only
+  // happened to lose its 2 (solo, uncompared) runs: plain winRate 0.6, clearly worse by the old ranking alone.
+  const rows = sc.summarize([
+    ...Array(4).fill(0).map(() => rec('lucky', 'bugfix', 'win')), rec('lucky', 'bugfix', 'failed'),
+    ...Array(3).fill(0).map(() => rec('scrappy', 'bugfix', 'win', { compared: true })), ...Array(2).fill(0).map(() => rec('scrappy', 'bugfix', 'failed')),
+  ]);
+  const lucky = rows.find((r) => r.agent === 'lucky'); const scrappy = rows.find((r) => r.agent === 'scrappy');
+  assert.ok(lucky.winRate > scrappy.winRate, 'the plain win rate still favours lucky - that is the problem being fixed');
+  assert.equal(sc.recommend(rows, 'bugfix').agent, 'scrappy', 'the weighted ranking favours the head-to-head evidence instead');
 });
 
 test('cost per merged run: failed attempts count, local is free, no numbers is unknown (not free)', () => {

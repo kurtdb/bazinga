@@ -523,8 +523,12 @@ async function runGatesAndTests(r, o = {}) {
   } catch { return res; }
 }
 
-/** One line in the scorecard when a run ends: who did the task, what kind of task, and what you did with the result. */
-async function recordOutcome(run, outcome) {
+/**
+ * One line in the scorecard when a run ends: who did the task, what kind of task, and what you did with the result.
+ * `extra.compared` marks a best-of run (the same task went to more than one agent at once - cleaner evidence than
+ * a solo run); `extra.reason` is why a plain discard happened, when given.
+ */
+async function recordOutcome(run, outcome, extra = {}) {
   try {
     const kind = (await jevCore.kindOf(run.task, loadConfigSafe(run.root).jev, { key: jevKey() })).kind; // Jev when switched on and sure, else the keyword rules
     let stats = runstats.normalize(run.stats);
@@ -537,6 +541,7 @@ async function recordOutcome(run, outcome) {
       agent: run.agent || 'agent', model: (target && target.model) || (agent ? ollama.modelOf(agent.command) : ''), local: !!target,
       task: run.task, kind, outcome, escalatedTo: run.escalatedTo || '', fixRounds: stats.fixRounds, fixLoop: !!(withDefaults(cfg, 'fixLoop').enabled), activeMs: stats.activeMs, files: run.files,
       costUsd: stats.costUsd, tokens: stats.tokensIn + stats.tokensOut,
+      compared: !!extra.compared, reason: extra.reason || '',
     });
   } catch { /* the scorecard never blocks a merge or a discard */ }
 }
@@ -1283,7 +1288,7 @@ function registerIpc() {
     const base = requireRoot();
     const { run } = await runs.findRun(base, opts.id);
     const result = await runs.mergeRun(base, opts.id, { message: opts.message, squash: opts.squash !== false });
-    await recordOutcome(run, 'merged');
+    await recordOutcome(run, 'merged', { compared: !!opts.compared });
     if (Array.isArray(opts.overriddenItems) && opts.overriddenItems.length) guardoverrides.recordOverride(userFile('guardoverrides.json'), opts.overriddenItems);
     runs.journalEvent(run.root, { kind: 'merged', text: `into ${result && result.into}` }).catch(() => {});
     return { result };
@@ -1320,10 +1325,11 @@ function registerIpc() {
     guardoverrides.dismiss(userFile('guardoverrides.json'), ruleId);
     return { level: next };
   }));
-  ipcMain.handle('runs:discard', (_e, id, why) => safe(async () => {
+  ipcMain.handle('runs:discard', (_e, id, why, reason) => safe(async () => {
     const base = requireRoot();
     const { run } = await runs.findRun(base, id);
-    if (why !== 'skip') await recordOutcome(run, why === 'lost' ? 'lost' : 'discarded'); // 'skip': a self-check's throw-away run
+    // 'skip': a self-check's throw-away run, never scored. 'lost': the rest of a best-of group - compared by definition.
+    if (why !== 'skip') await recordOutcome(run, why === 'lost' ? 'lost' : 'discarded', { compared: why === 'lost', reason });
     await runs.journalEvent(run.root, { kind: 'discarded' });
     return runs.removeRun(base, id);
   }));

@@ -92,6 +92,8 @@
   // same ids/labels as core/scorecard.js's KINDS/LABELS - kept as a literal here, same as GUARD_LABELS above, since
   // the renderer never requires core modules directly.
   const KIND_LABELS = { tests: 'Tests', bugfix: 'Bug fix', refactor: 'Refactor', feature: 'New feature', docs: 'Docs', review: 'Review / explain', other: 'Other' };
+  // same ids/labels as core/scorecard.js's REASONS/REASON_LABELS - kept as a literal here for the same reason.
+  const DISCARD_REASON_LABELS = { wrong: 'Wrong approach', broken: "Didn't work (build or tests failed)", incomplete: 'Incomplete', style: "Worked, but not how I'd do it", superseded: 'Superseded by a better run', other: 'Other' };
   // mirrors core/keybindings.js's DEFAULT_KEYBINDINGS/normalizeChord/resolve/findConflicts - kept as a literal
   // here, same as GUARD_LABELS/KIND_LABELS above, since the renderer never requires core modules directly.
   // core/keybindings.test.js is the source of truth for this logic; keep the two in sync by hand.
@@ -4860,7 +4862,7 @@
       bestOf.groups = bestOf.groups.filter((g) => g !== group);
       await refreshRuns();
       const fresh = ((state.runs && state.runs.runs) || []).find((r) => r.id === winner.id);
-      if (fresh) mergeRunDialog(fresh);
+      if (fresh) mergeRunDialog(fresh, { compared: true }); // beat the other runs head-to-head on the identical task: cleaner scorecard evidence than a solo win
     };
     $('#dialog').replaceChildren(el('h3', { text: `Results: ${group.name}` }),
       el('label', { class: 'check' }, gates, ' Run the gates on every result (slower, much better ranking)'),
@@ -6707,7 +6709,7 @@
         i.files && i.files.length ? el('div', { class: 'muted small', text: `${i.files.slice(0, 5).join(', ')}${i.files.length > 5 ? `, +${i.files.length - 5} more` : ''}` }) : null)));
   }
 
-  async function mergeRunDialog(run) {
+  async function mergeRunDialog(run, { compared = false } = {}) {
     const viewing = !!(state.runs && state.runs.current === run.root);
     const msg = el('input', { type: 'text', value: run.name, spellcheck: 'false' });
     const squash = el('input', { type: 'checkbox' }); squash.checked = true;
@@ -6726,7 +6728,7 @@
       if (viewing && !(await switchRoot(state.runs.main.root))) return;
       setStatus('Merging…');
       const overriddenItems = override.checked && guard ? guard.items.filter((i) => i.level === 'block').map((i) => i.id) : [];
-      const res = await api.runs.merge({ id: run.id, message: msg.value, squash: squash.checked, overriddenItems });
+      const res = await api.runs.merge({ id: run.id, message: msg.value, squash: squash.checked, overriddenItems, compared });
       if (res.error) { window.alert(res.error); setStatus('Merge failed.'); await refreshRuns(); return; }
       for (const t of state.terms.values()) if (t.runId === run.id && t.id !== null && !t.exited) api.pty.kill(t.id);
       await renderTree(); await refreshChanges(); await refreshRuns(); await loadProject();
@@ -6828,11 +6830,30 @@
     $('#modal').classList.remove('hidden');
   }
 
+  /** Why a run is being thrown away - optional, but it's the one thing the scorecard couldn't tell apart before (every
+   * discard looked the same). Resolves to a reason string ('' for "rather not say"), or null if cancelled outright. */
+  function pickDiscardReason(run) {
+    return new Promise((resolve) => {
+      const close = (v) => { $('#modal').classList.add('hidden'); resolve(v); };
+      const sel = el('select', { id: 'discard-reason' },
+        el('option', { value: '', text: "Rather not say" }),
+        ...Object.entries(DISCARD_REASON_LABELS).map(([v, text]) => el('option', { value: v, text })));
+      $('#dialog').replaceChildren(
+        el('h3', { text: `Discard “${run.name}”?` }),
+        el('div', { class: 'hint', text: `The worktree and the branch ${run.branch} are deleted, including everything the agent did.` }),
+        el('div', { class: 'field' }, el('label', { text: 'Why (optional - helps the scorecard tell discards apart)' }), sel),
+        el('div', { class: 'actions' }, el('button', { onclick: () => close(null) }, ic('x'), 'Cancel'),
+          el('button', { class: 'danger primary', onclick: () => close(sel.value) }, ic('trash-2'), 'Discard')));
+      $('#modal').classList.remove('hidden');
+    });
+  }
+
   async function discardRun(run) {
-    if (!window.confirm(`Discard “${run.name}”?\n\nThe worktree and the branch ${run.branch} are deleted, including everything the agent did.`)) return;
+    const reason = await pickDiscardReason(run);
+    if (reason === null) return;
     if (state.runs && state.runs.current === run.root && !(await switchRoot(state.runs.main.root))) return;
     for (const t of state.terms.values()) if (t.runId === run.id && t.id !== null && !t.exited) api.pty.kill(t.id);
-    const res = await api.runs.discard(run.id);
+    const res = await api.runs.discard(run.id, undefined, reason);
     if (res.error) { window.alert(res.error); return; }
     await refreshRuns();
     setStatus(`Discarded ${run.branch}.`);
@@ -6876,7 +6897,10 @@
           el('thead', null, el('tr', null, ...['Agent', 'Runs', 'Alone', 'Needed help', 'Lost', 'Discarded', 'Fix loop', 'Typical time', 'Cost per merge'].map((h) => el('th', { text: h })))),
           el('tbody', null, ...rows.map((r) => el('tr', { class: r.enough ? '' : 'faded', title: r.enough ? '' : `Fewer than ${sc.minRuns} runs: an anecdote, not a pattern` },
             el('td', null, r.agent, r.local ? el('span', { class: 'chip', text: 'local' }) : ''),
-            el('td', { text: String(r.runs) }), el('td', { text: `${r.win} (${Math.round(r.winRate * 100)}%)` }), el('td', { text: String(r.helped) }), el('td', { text: String(r.lost) }), el('td', { text: String(r.failed) }),
+            el('td', { text: String(r.runs) }),
+            el('td', { text: `${r.win} (${Math.round(r.winRate * 100)}%)${r.comparedRuns ? ` · ${r.comparedWin}/${r.comparedRuns} head-to-head` : ''}`, title: r.comparedRuns ? 'Head-to-head: this many of those wins beat other agents on the identical task (best-of) - weighted higher when picking a “best so far”.' : '' }),
+            el('td', { text: String(r.helped) }), el('td', { text: String(r.lost) }),
+            el('td', { text: String(r.failed), title: Object.keys(r.reasons || {}).length ? Object.entries(r.reasons).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${DISCARD_REASON_LABELS[k] || k}: ${v}`).join(', ') : '' }),
             el('td', { text: r.loopRuns ? `${r.firstPass}/${r.loopRuns} clean first time${r.avgRounds ? ` · ${r.avgRounds.toFixed(1)} rounds` : ''}` : '–' }),
             el('td', { text: scTime(r.medianMs) }),
             el('td', { text: scCost(r.costPerMerged), title: r.local ? 'Runs on your own machine' : 'Everything this agent cost for this kind of task, failed attempts included, divided by the merged runs. From the agent’s own telemetry.' }))))));
@@ -6892,7 +6916,7 @@
           el('tbody', null, ...overrideCounts.map(([id, count]) => el('tr', null, el('td', { text: GUARD_LABELS[id] || id }), el('td', { text: String(count) }))))));
     }
     $('#dialog').replaceChildren(el('h3', { text: 'Scorecard' }),
-      el('div', { class: 'hint', text: `Counted from what you did with each run (${(sc && sc.total) || 0} so far). “Alone” = merged without a stronger agent taking over. “Lost” = another run of the same task was kept. “Cost per merge” counts failed attempts too; “?” means the agent reported no cost. Rows with fewer than ${(sc && sc.minRuns) || 3} runs are faded: too few to trust.` }),
+      el('div', { class: 'hint', text: `Counted from what you did with each run (${(sc && sc.total) || 0} so far). “Alone” = merged without a stronger agent taking over; a “head-to-head” count means this agent beat others on the identical task (best-of), not just whatever task happened to land on it - those are weighted higher in “Best so far”. “Lost” = another run of the same task was kept. “Cost per merge” counts failed attempts too; “?” means the agent reported no cost. Rows with fewer than ${(sc && sc.minRuns) || 3} runs are faded: too few to trust. Hover “Discarded” for why, where you said.` }),
       el('div', { class: 'sc-body' }, ...body),
       el('div', { class: 'actions' },
         sc && sc.total ? el('button', { class: 'danger', onclick: async () => { if (window.confirm('Forget the whole scorecard? This cannot be undone.')) { await api.scorecard.clear(); openScorecard(); } } }, ic('trash-2'), 'Clear history…') : '',

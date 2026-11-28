@@ -80,7 +80,7 @@ contextBridge.exposeInMainWorld('api', {
     create: (opts) => invoke('runs:create', opts),
     prepareReview: (id) => invoke('runs:prepareReview', id),
     merge: (opts) => invoke('runs:merge', opts),
-    discard: (id, why) => invoke('runs:discard', id, why),
+    discard: (id, why, reason) => invoke('runs:discard', id, why, reason),
     guard: (opts) => invoke('runs:guard', opts),
     journal: (id) => invoke('runs:journal', id),
     replay: (id) => invoke('runs:replay', id),

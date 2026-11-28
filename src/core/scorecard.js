@@ -13,8 +13,15 @@ const path = require('node:path');
 
 const KINDS = ['tests', 'bugfix', 'refactor', 'feature', 'docs', 'review', 'other'];
 const LABELS = { tests: 'Tests', bugfix: 'Bug fix', refactor: 'Refactor', feature: 'New feature', docs: 'Docs', review: 'Review / explain', other: 'Other' };
+const REASONS = ['wrong', 'broken', 'incomplete', 'style', 'superseded', 'other'];
+const REASON_LABELS = { wrong: 'Wrong approach', broken: "Didn't work (build or tests failed)", incomplete: 'Incomplete', style: "Worked, but not how I'd do it", superseded: 'Superseded by a better run', other: 'Other' };
 const MAX_RECORDS = 500;
 const MIN_RUNS = 3; // below this a number is an anecdote
+// a "compared" run (best-of: the same task given to several agents at once) tells you who is actually better at this
+// kind of task; a plain solo run only tells you who got lucky with which tasks ended up on their desk. Count a
+// compared run's result this many times as much as a solo run's when ranking agents, instead of ignoring solo
+// runs entirely (there usually aren't enough compared ones alone to say anything).
+const COMPARED_WEIGHT = 3;
 
 // first match wins, so the more specific kinds come first
 const RULES = [
@@ -54,6 +61,8 @@ function makeRecord(o = {}) {
     files: num(o.files),
     costUsd: o.local ? 0 : num(o.costUsd),
     tokens: num(o.tokens),
+    compared: !!o.compared, // part of a best-of group: this task was given to more than one agent at once
+    reason: REASONS.includes(o.reason) ? o.reason : '', // only meaningful for a plain discard; '' means not given
   };
 }
 
@@ -85,7 +94,7 @@ function summarize(records, { since = 0 } = {}) {
   for (const r of records || []) {
     if (since && r.at < since) continue;
     const key = `${r.agent}\u0000${r.kind}`;
-    if (!cells.has(key)) cells.set(key, { agent: r.agent, kind: r.kind, local: !!r.local, runs: 0, win: 0, helped: 0, lost: 0, failed: 0, firstPass: 0, loopRuns: 0, rounds: [], times: [], last: 0, cost: 0, costRuns: 0, tokens: 0 });
+    if (!cells.has(key)) cells.set(key, { agent: r.agent, kind: r.kind, local: !!r.local, runs: 0, win: 0, helped: 0, lost: 0, failed: 0, firstPass: 0, loopRuns: 0, rounds: [], times: [], last: 0, cost: 0, costRuns: 0, tokens: 0, comparedRuns: 0, comparedWin: 0, reasons: {} });
     const c = cells.get(key);
     c.runs++; c[r.result === 'win' || r.result === 'helped' || r.result === 'lost' || r.result === 'failed' ? r.result : 'failed']++;
     c.local = !!r.local;
@@ -94,6 +103,8 @@ function summarize(records, { since = 0 } = {}) {
     if (r.costUsd > 0) { c.cost += r.costUsd; c.costRuns++; }
     c.tokens += r.tokens || 0;
     c.last = Math.max(c.last, r.at || 0);
+    if (r.compared) { c.comparedRuns++; if (r.result === 'win') c.comparedWin++; }
+    if (r.reason) c.reasons[r.reason] = (c.reasons[r.reason] || 0) + 1;
   }
   return [...cells.values()].map((c) => ({
     agent: c.agent, kind: c.kind, local: c.local, runs: c.runs, win: c.win, helped: c.helped, lost: c.lost, failed: c.failed,
@@ -104,6 +115,10 @@ function summarize(records, { since = 0 } = {}) {
     costUsd: c.cost, tokens: c.tokens,
     // what one merged result cost, failed attempts included. Local models are free; a cloud agent without numbers is unknown (null), not free.
     costPerMerged: c.local ? 0 : (c.costRuns && (c.win + c.helped) ? c.cost / (c.win + c.helped) : null),
+    // head-to-head only: this task was also given to other agents at the same time, so the result isn't confounded by task mix.
+    comparedRuns: c.comparedRuns, comparedWin: c.comparedWin,
+    comparedWinRate: c.comparedRuns ? c.comparedWin / c.comparedRuns : null,
+    reasons: c.reasons, // why a plain discard happened, by REASONS key, where given
   })).sort((a, b) => KINDS.indexOf(a.kind) - KINDS.indexOf(b.kind) || b.winRate - a.winRate || b.runs - a.runs);
 }
 
@@ -115,9 +130,17 @@ function summarize(records, { since = 0 } = {}) {
 function recommend(rows, kind, { minRuns = MIN_RUNS } = {}) {
   const pool = (rows || []).filter((r) => r.kind === kind && r.runs >= minRuns);
   if (!pool.length) return null;
-  const rank = [...pool].sort((a, b) => b.winRate - a.winRate || (a.avgRounds === null ? 9 : a.avgRounds) - (b.avgRounds === null ? 9 : b.avgRounds) || (a.medianMs || 9e12) - (b.medianMs || 9e12) || (b.local ? 1 : 0) - (a.local ? 1 : 0));
+  // compared (best-of) evidence counts COMPARED_WEIGHT times as much as a solo run's: it compares agents on the
+  // identical task, so it can't be explained away by "they just got the easier tasks". Falls back to the plain
+  // win rate when there is no compared evidence at all (most of today's history).
+  const weighted = (r) => {
+    const wins = r.win + (COMPARED_WEIGHT - 1) * r.comparedWin;
+    const runs = r.runs + (COMPARED_WEIGHT - 1) * r.comparedRuns;
+    return runs ? wins / runs : 0;
+  };
+  const rank = [...pool].sort((a, b) => weighted(b) - weighted(a) || (a.avgRounds === null ? 9 : a.avgRounds) - (b.avgRounds === null ? 9 : b.avgRounds) || (a.medianMs || 9e12) - (b.medianMs || 9e12) || (b.local ? 1 : 0) - (a.local ? 1 : 0));
   const best = rank[0];
-  const cell = `${best.win} of ${best.runs} merged without help`;
+  const cell = `${best.win} of ${best.runs} merged without help${best.comparedRuns ? `, ${best.comparedWin} of ${best.comparedRuns} head-to-head` : ''}`;
   const second = rank[1];
   return { agent: best.agent, cell: best, runnerUp: second || null, text: `${best.agent}: ${cell}${second ? ` (next: ${second.agent}, ${second.win} of ${second.runs})` : ''}` };
 }
@@ -129,4 +152,4 @@ function formatCost(v) {
   return v < 0.01 ? '<$0.01' : `$${v.toFixed(v < 10 ? 2 : 1)}`;
 }
 
-module.exports = { formatCost, KINDS, LABELS, MIN_RUNS, MAX_RECORDS, kindOf, makeRecord, load, add, summarize, recommend };
+module.exports = { formatCost, KINDS, LABELS, REASONS, REASON_LABELS, COMPARED_WEIGHT, MIN_RUNS, MAX_RECORDS, kindOf, makeRecord, load, add, summarize, recommend };
