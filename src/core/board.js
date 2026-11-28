@@ -17,21 +17,30 @@
     return best;
   }
 
-  function columnOf(state) {
+  /** needsApproval: a workflow step on this run already passed its gate and is waiting on you - that always means "needs you", whatever its terminal is doing (often nothing: the agent's turn is long over). */
+  function columnOf(state, needsApproval) {
+    if (needsApproval) return 'needs';
     if (state === 'running') return 'running';
     if (state === 'waiting' || state === 'stale' || state === 'idle') return 'needs';
     return 'review'; // exited, or no terminal any more: the work is there to look at
   }
 
-  function build(runs, rows) {
+  /** approvals: Map<runId, { since }> - since = when Bazinga started checking the step now awaiting your approval (ms epoch). */
+  function build(runs, rows, approvals) {
     const cols = { running: [], needs: [], review: [] };
     for (const run of runs || []) {
       const state = stateOfRun(run, rows);
       const row = (rows || []).find((r) => r.runId === run.id && r.state === state) || null;
-      cols[columnOf(state)].push({ run, state, row });
+      const approval = (approvals && approvals.get ? approvals.get(run.id) : null) || null;
+      cols[columnOf(state, !!approval)].push({ run, state, row, approval });
     }
     const urgency = (c) => WORST[c.state] ?? 5;
-    cols.needs.sort((a, b) => urgency(a) - urgency(b));
+    // an approval checkpoint outranks a plain state (nothing left to compute, just you); among those, longest waiting first.
+    cols.needs.sort((a, b) => {
+      if (!!a.approval !== !!b.approval) return a.approval ? -1 : 1;
+      if (a.approval && b.approval) return a.approval.since - b.approval.since;
+      return urgency(a) - urgency(b);
+    });
     cols.review.sort((a, b) => (b.run.files || 0) - (a.run.files || 0));
     return cols;
   }

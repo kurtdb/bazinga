@@ -66,6 +66,17 @@ test('board: running / needs you / review, the most urgent terminal decides, bac
   assert.strictEqual(Board.columnOf('exited'), 'review'); assert.strictEqual(Board.columnOf('waiting'), 'needs'); assert.strictEqual(Board.columnOf('running'), 'running');
 });
 
+test('board: a workflow step awaiting approval always needs you, even with its terminal exited or running, longest wait first', () => {
+  assert.strictEqual(Board.columnOf('exited', true), 'needs', 'an approval checkpoint outranks "ready to review" on a finished terminal');
+  assert.strictEqual(Board.columnOf('running', true), 'needs', 'and outranks "running" on a terminal that is busy with something else');
+  const runs = [{ id: 'r1', name: 'one', files: 1 }, { id: 'r2', name: 'two', files: 1 }, { id: 'r3', name: 'three', files: 1 }];
+  const rows = [{ runId: 'r1', state: 'exited' }, { runId: 'r3', state: 'waiting' }];
+  const approvals = new Map([['r1', { since: 1000 }], ['r2', { since: 500 }]]); // r2 waited longest; r3 is a plain "waiting" (asks for permission), not an approval
+  const cols = Board.build(runs, rows, approvals);
+  assert.deepStrictEqual(cols.needs.map((c) => c.run.id), ['r2', 'r1', 'r3'], 'approvals first (longest wait first), then plain states');
+  assert.deepStrictEqual(Board.build(runs, rows).needs.map((c) => c.run.id), ['r3'], 'with no approvals map at all, behaves exactly as before');
+});
+
 test('fleet: a running subagent keeps the parent from being called stale, and the rows carry the run id and the subagents', () => {
   const now = 9_000_000;
   const quiet = { key: 'k', runId: 'r1', startedAt: now - 20 * 60000, lastData: now - 15 * 60000, context: 8192 };

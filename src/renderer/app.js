@@ -4905,12 +4905,14 @@
     if (!host || !boardUi.open) return;
     const runs = (state.runs && state.runs.runs) || [];
     const rows = (fleetUi.view && fleetUi.view.rows) || [];
-    const cols = BazingaBoard.build(runs, rows);
+    const cols = BazingaBoard.build(runs, rows, wfApprovalsByRun());
     const backlog = BazingaBoard.backlog(boardUi.items, runs);
     const card = (c) => {
       const run = c.run; const row = c.row;
       return el('div', { class: `bd-card st-${c.state || 'exited'}`, title: run.task || run.name },
-        el('div', { class: 'run-title' }, el('span', { class: 'name', text: run.name }), c.state === 'stale' ? el('span', { class: 'chip warnchip', text: 'stale' }) : c.state === 'waiting' ? el('span', { class: 'chip warnchip', text: 'approval' }) : null),
+        el('div', { class: 'run-title' }, el('span', { class: 'name', text: run.name }),
+          c.approval ? el('span', { class: 'chip warnchip', title: `${c.approval.workflowName} · step “${c.approval.stepId}” passed its gate and is waiting on you`, text: `waiting ${scTime(Date.now() - c.approval.since)}` })
+            : c.state === 'stale' ? el('span', { class: 'chip warnchip', text: 'stale' }) : c.state === 'waiting' ? el('span', { class: 'chip warnchip', text: 'approval' }) : null),
         el('div', { class: 'muted small', text: `${run.agent || 'agent'} · ${run.files} file${run.files === 1 ? '' : 's'}${row && row.pct !== null ? ` · ${Math.round(row.pct * 100)}% context` : ''}${row && row.cost != null ? ` · ~$${row.cost.toFixed(2)}` : ''}` }),
         row && row.pct !== null ? el('div', { class: `fl-bar lv-${row.level}` }, el('div', { class: 'fl-fill', style: `width:${Math.min(100, Math.round(row.pct * 100))}%` })) : null,
         el('div', { class: 'run-acts' },
@@ -5732,6 +5734,23 @@
   // ---------------------------------------------------------------- workflows: chained agent steps (core/workflow.js)
   state.workflows = new Map();
   const wfStepStatus = (st, id) => (st.steps[id] && st.steps[id].status) || 'waiting';
+  /** Map<runId, { since }> of every run whose workflow step is right now awaiting your approval - since = when Bazinga
+   * started checking that step (its gate already passed; nothing left to compute, just you). Feeds the Board's "needs
+   * you" column, so a workflow checkpoint shows up there even though its own terminal is usually long idle or exited. */
+  function wfApprovalsByRun() {
+    const map = new Map();
+    for (const st of state.workflows.values()) {
+      for (const step of st.workflow.steps) {
+        if (wfStepStatus(st, step.id) !== 'awaiting-approval') continue;
+        const info = st.steps[step.id] || {};
+        if (!info.runId) continue;
+        const since = info.quietAt || Date.now();
+        const prev = map.get(info.runId);
+        if (!prev || since < prev.since) map.set(info.runId, { since, workflowName: st.name, stepId: step.id });
+      }
+    }
+    return map;
+  }
   const wfApprovalDefault = () => { const o = state.project && state.project.oversight; return !!(o && (o.level === 'guided' || o.level === 'stepwise')); };
   async function wfPersist(st) { await api.workflow.save(st); renderWorkflows(); }
   async function loadWorkflows() {
