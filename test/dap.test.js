@@ -88,6 +88,28 @@ test('stop() is safe to call when nothing was started, and twice in a row', asyn
   assert.equal(s.state, 'idle');
 });
 
+test('a deliberate stop() never emits a synthetic "terminated" event (its own process exit afterwards is expected, not a crash); an unexpected close does, with a real reason', async () => {
+  const stopped = new DapSession();
+  const stoppedEvents = [];
+  stopped.on('event', (e, body) => stoppedEvents.push([e, body]));
+  await stopped.start({ adapter: fakeAdapter, program: '/fake/a.py', cwd: __dirname });
+  assert.equal(stopped.state, 'running');
+  await stopped.stop();
+  assert.equal(stopped.state, 'idle');
+  await new Promise((r) => setTimeout(r, 200)); // give the adapter's own (expected) process exit time to arrive
+  assert.ok(!stoppedEvents.some(([e]) => e === 'terminated'), 'stop() already decided the outcome; the delayed process exit must not relabel it as "terminated"');
+
+  const crashed = new DapSession();
+  const crashedEvents = [];
+  crashed.on('event', (e, body) => crashedEvents.push([e, body]));
+  await crashed.start({ adapter: fakeAdapter, program: '/fake/a.py', cwd: __dirname });
+  crashed.client.kill(); // the adapter process dying on its own - not through stop()
+  const ev = await waitFor(() => crashedEvents.find(([e]) => e === 'terminated'));
+  assert.ok(ev, 'an unexpected close must still surface as terminated');
+  assert.ok(ev[1].reason, 'and carry a real reason, not an empty body');
+  await crashed.stop();
+});
+
 test('an adapter that is not installed is reported, not hung', async () => {
   const s = new DapSession();
   await assert.rejects(() => s.start({ adapter: { command: 'definitely-not-a-real-debug-adapter-xyz', args: [], launchConfig: () => ({}) }, program: '/fake/a.py', cwd: __dirname }), /not installed|ENOENT|not running/);

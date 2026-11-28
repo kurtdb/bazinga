@@ -189,12 +189,14 @@ class DapSession extends EventEmitter {
     this.client = null;
     this.state = 'idle'; // idle | starting | running | stopped (at a breakpoint/step) | terminated
     this.capabilities = {};
+    this._stopping = false; // true while stop() is deliberately tearing this session down - see client.on('close', ...) below
   }
 
   /** adapter: { transport: 'stdio'|'tcp', command, args, launchConfig(program, opts) } - see pythonAdapter()/goAdapter() above, or a fake for tests. */
   async start({ adapter, program, cwd, opts = {} }) {
     if (this.client && !this.client.closed) throw new Error('A debug session is already running. Stop it first.');
     this.state = 'starting';
+    this._stopping = false;
     const client = adapter.transport === 'tcp'
       ? await this._startTcp(adapter, cwd)
       : this._startStdio(adapter, cwd);
@@ -210,7 +212,10 @@ class DapSession extends EventEmitter {
       }
       this.emit('event', event, body);
     });
-    client.on('close', (reason) => { if (this.state !== 'terminated') { this.state = 'terminated'; this.emit('event', 'terminated', { reason }); } });
+    // a deliberate stop() already decides the session's final state itself (idle) - without the _stopping check, this
+    // still-pending listener would see the resulting process exit moments later and flip it back to "terminated" with
+    // a reason that reads like a crash, even though the program may still have been running when Stop was clicked.
+    client.on('close', (reason) => { if (this.state !== 'terminated' && !this._stopping) { this.state = 'terminated'; this.emit('event', 'terminated', { reason }); } });
     try {
       this.capabilities = await client.request('initialize', { adapterID: 'bazinga', linesStartAt1: true, columnsStartAt1: true, pathFormat: 'path', supportsRunInTerminalRequest: false });
       const launchDone = client.request('launch', adapter.launchConfig(program, opts));
@@ -281,6 +286,7 @@ class DapSession extends EventEmitter {
 
   async stop() {
     if (!this.client || this.client.closed) { this.state = 'idle'; return; }
+    this._stopping = true;
     try { await this.client.request('disconnect', { terminateDebuggee: true }, 3000); } catch { /* going away regardless */ }
     this.client.kill();
     this.state = 'idle';

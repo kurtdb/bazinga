@@ -43,9 +43,24 @@ test('findSkills / install / list / remove with provenance', async () => {
     assert.strictEqual(list.length, 1);
     assert.strictEqual(list[0].source, 'local');
     assert.strictEqual(list[0].provenance.commit, f.commit);
+    assert.deepStrictEqual(list[0].findingsAtInstall, []); // no findings were passed - not missing, recorded as clean
     assert.ok(sk.removeSkill(target, 'pdf-tools'));
     assert.deepStrictEqual(sk.listInstalled(target), []);
     assert.throws(() => sk.removeSkill(target, '../x'), /Invalid/);
+  } finally { fs.rmSync(f.tmp, { recursive: true, force: true }); }
+});
+
+test('install: findings seen at install time are recorded, not discarded once you install anyway', async () => {
+  const src = repo({ 'x/SKILL.md': '---\nname: flagged\n---' });
+  const f = await sk.fetchSource({ url: `file://${src}` }, { allowLocal: true });
+  try {
+    const skill = sk.findSkills(f.checkout).find((s) => s.name === 'flagged');
+    const target = path.join(tmpdir(), '.claude', 'skills');
+    const findings = [{ file: 'SKILL.md', line: 3, severity: 'warn', rule: 'fake', message: 'looked suspicious' }];
+    sk.installSkill(f.checkout, skill, target, { source: { label: 'local' }, findings });
+    const installed = sk.listInstalled(target).find((s) => s.name === 'flagged');
+    assert.deepStrictEqual(installed.findingsAtInstall, findings);
+    assert.deepStrictEqual(installed.provenance.findingsAtInstall, findings);
   } finally { fs.rmSync(f.tmp, { recursive: true, force: true }); }
 });
 

@@ -580,6 +580,7 @@ function setupFixLoop(onDone) {
 }
 
 const budgetTold = new Set();
+const budgetWarned = new Set();
 /** Tell the user once when a run has used its time budget; the fix loop stops for that terminal. */
 async function checkBudget(id, term) {
   try {
@@ -589,6 +590,14 @@ async function checkBudget(id, term) {
     const run = list.find((r) => term.root === r.root || term.root.startsWith(r.root + path.sep));
     if (!run) return;
     const b = budgetCore.check(run.stats, minutes);
+    // budgetCore.check already computes this (80%+ used, not yet exceeded) - the one chance to say "almost out,
+    // want to raise it?" before the fix loop is forced to stop instead of just after. One notification, not a
+    // pause: unlike the exceeded path below, nothing here needs to interrupt the fix loop.
+    if (b.nearing && !budgetWarned.has(run.id)) {
+      budgetWarned.add(run.id);
+      runs.journalEvent(run.root, { kind: 'budget', text: `${b.usedMin} of ${b.limitMin} min used: approaching the time budget` });
+      notify('agent-idle', `${run.name}: approaching its time budget`, `${b.usedMin} of ${b.limitMin} minutes used. The fix loop stops once it's used up, unless you raise the budget first.`);
+    }
     if (!b.exceeded || budgetTold.has(run.id)) return;
     budgetTold.add(run.id);
     fixloop.pause(id);
@@ -1250,7 +1259,11 @@ function registerIpc() {
     for (const name of opts.names || []) {
       const k = found.find((x) => x.name === name);
       if (!k) continue;
-      installed.push(skillsCore.installEverywhere(c.checkout, k, targets, { replace: !!opts.replace, source: { label: c.parsed.label, url: c.parsed.url, branch: c.parsed.branch || '', commit: c.commit } }).name);
+      // re-scan rather than trust the findings from the earlier skills:fetch call - same "don't trust a stale
+      // scan" reasoning as skills:update's re-fetch - and record them, so a flag seen now isn't lost the moment
+      // you decide to install anyway.
+      const findings = skillscan.scanSkillFiles(path.join(c.checkout, k.dir), k.files);
+      installed.push(skillsCore.installEverywhere(c.checkout, k, targets, { replace: !!opts.replace, source: { label: c.parsed.label, url: c.parsed.url, branch: c.parsed.branch || '', commit: c.commit }, findings }).name);
     }
     dropCheckout(opts.token);
     if (opts.level === 'project') refreshSkillIndex();
@@ -1282,7 +1295,7 @@ function registerIpc() {
     if (got.commit === prov.commit) { dropCheckout(token); return { unchanged: true }; }
     const findings = skillscan.scanSkillFiles(path.join(got.checkout, k.dir), k.files);
     if (findings.length && !opts.force) return { findings, token, from: prov.commit, to: got.commit };
-    skillsCore.installEverywhere(got.checkout, { ...k, name: opts.name }, skillDirs(opts.level), { replace: true, source: { label: prov.label, url: prov.url, branch: prov.branch, commit: got.commit } });
+    skillsCore.installEverywhere(got.checkout, { ...k, name: opts.name }, skillDirs(opts.level), { replace: true, source: { label: prov.label, url: prov.url, branch: prov.branch, commit: got.commit }, findings });
     dropCheckout(token);
     if (opts.level === 'project') refreshSkillIndex();
     return { updated: true, from: prov.commit, to: got.commit };

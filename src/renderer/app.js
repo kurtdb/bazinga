@@ -2494,7 +2494,7 @@
   // their own toolchains, not installed here). Other languages keep the existing "Debug" lens (Settings → a
   // Debug lens), which starts the test waiting for your own IDE's debugger to attach instead - the right fit
   // for compiled languages (C#/F#/Rust/...), which need a build step before anything is launchable.
-  state.debugger = { open: false, status: 'idle', rel: null, breakpoints: new Map(), threadId: null, frames: [], currentFrameId: null, scopes: new Map(), variables: new Map(), expanded: new Set(), output: [] };
+  state.debugger = { open: false, status: 'idle', rel: null, breakpoints: new Map(), threadId: null, frames: [], currentFrameId: null, scopes: new Map(), variables: new Map(), expanded: new Set(), output: [], reason: null };
   const canRealDebug = (rel) => /\.(py|go|dart)$/i.test(String(rel || ''));
   const bpSet = (rel) => { let s = state.debugger.breakpoints.get(rel); if (!s) { s = new Set(); state.debugger.breakpoints.set(rel, s); } return s; };
   const bpDecoIds = new Map(); // rel -> decoration ids, so a repaint replaces rather than piles up
@@ -2730,7 +2730,7 @@
   async function startDebugging(rel) {
     if (!canRealDebug(rel)) { setStatus('Debugging is wired up for Python, Go and Dart right now.'); return; }
     if (state.debugger.status !== 'idle' && state.debugger.status !== 'terminated') await stopDebugging();
-    state.debugger.rel = rel; state.debugger.status = 'starting'; state.debugger.open = true; state.debugger.output = [];
+    state.debugger.rel = rel; state.debugger.status = 'starting'; state.debugger.open = true; state.debugger.output = []; state.debugger.reason = null;
     showBottom('debugger');
     const started = await api.dap.start({ rel });
     if (started.error) { setStatus(started.error); state.debugger.status = 'idle'; renderDebuggerPanel(); return; }
@@ -2792,7 +2792,7 @@
           el('div', { class: 'sk-head' }, ic('layers'), el('span', { text: 'Call stack' })),
           ...(d.frames.length ? d.frames.map((f) => el('div', { class: `dbgr-frame${f.id === d.currentFrameId ? ' sel' : ''}`, onclick: () => focusFrame(f) },
             el('b', { text: f.name }), el('span', { class: 'muted', text: f.source && f.source.path ? ` ${(absToRel(f.source.path) || f.source.path)}:${f.line}` : '' })))
-            : [el('div', { class: 'muted', text: stopped ? 'No frames.' : running ? 'Running…' : d.status === 'terminated' ? 'Finished.' : 'Not running.' })])),
+            : [el('div', { class: 'muted', text: stopped ? 'No frames.' : running ? 'Running…' : d.status === 'terminated' ? (d.reason ? `Terminated: ${d.reason}.` : 'Finished.') : 'Not running.' })])),
         el('div', { class: 'dbgr-col' },
           el('div', { class: 'sk-head' }, ic('variable'), el('span', { text: 'Variables' })),
           ...(scopesHere.length ? scopesHere.flatMap((s) => [el('div', { class: 'dbgr-scope', text: s.name }), ...varRows(s.variablesReference, 0)]) : [el('div', { class: 'muted', text: 'Stop at a breakpoint to see variables.' })])),
@@ -2804,7 +2804,10 @@
     const d = state.debugger;
     if (event === 'stopped') { d.status = 'stopped'; d.threadId = body.threadId; refreshStack(); return; }
     if (event === 'continued') { d.status = 'running'; clearCurrentLine(); renderDebuggerPanel(); return; }
-    if (event === 'terminated') { d.status = 'terminated'; d.frames = []; d.currentFrameId = null; clearCurrentLine(); renderDebuggerPanel(); return; }
+    // a clean finish has no `body` worth showing; an unexpected close (the adapter process died, its pipe closed)
+    // carries a real reason (dap.js's DapClient: `terminated` from a `close` event, not the adapter's own message) -
+    // without this, the panel says the same generic "Finished." whether the program ran to completion or crashed out.
+    if (event === 'terminated') { d.status = 'terminated'; d.frames = []; d.currentFrameId = null; d.reason = (body && body.reason) || null; clearCurrentLine(); renderDebuggerPanel(); return; }
     if (event === 'output' && body && typeof body.output === 'string') { d.output.push(body.output); if (d.output.length > 400) d.output.splice(0, d.output.length - 400); renderDebuggerPanel(); }
   }
 
@@ -5394,7 +5397,13 @@
           s.description ? el('div', { class: 'skill-desc', text: s.description }) : null,
           el('div', { class: 'skill-badges' },
             s.source ? skBadge(`${s.source}${s.provenance && s.provenance.commit ? ` @ ${s.provenance.commit.slice(0, 7)}` : ''}`, 'info', 'git-branch')
-              : skBadge('added by hand', 'ghost', 'folder'))),
+              : skBadge('added by hand', 'ghost', 'folder'),
+            (s.findingsAtInstall || []).length ? skBadge(
+              `${s.findingsAtInstall.length} finding${s.findingsAtInstall.length === 1 ? '' : 's'} at install`,
+              s.findingsAtInstall.some((f) => f.severity === 'error') ? 'danger' : 'warnchip',
+              'triangle-alert',
+              `This skill scanned with ${s.findingsAtInstall.length} finding${s.findingsAtInstall.length === 1 ? '' : 's'} when it was installed, and was installed anyway:\n\n${s.findingsAtInstall.map((f) => `${f.file}:${f.line} — ${f.message}`).join('\n')}`,
+            ) : null)),
         el('div', { class: 'skill-actions' },
           isGit ? el('button', { title: 'Fetch the source again and replace this skill when it changed', onclick: async () => {
             setStatus(`Updating ${s.name}…`);

@@ -104,7 +104,7 @@ async function fetchSource(parsed, { allowLocal = false } = {}) {
 function dirSize(files, dir) { return files.reduce((a, f) => a + fs.statSync(path.join(dir, f)).size, 0); }
 
 /** Copy one skill folder to `<targetRoot>/<name>`. Symlinks are skipped; refuses to replace unless `replace`. */
-function installSkill(checkout, skill, targetRoot, { replace = false, source = {} } = {}) {
+function installSkill(checkout, skill, targetRoot, { replace = false, source = {}, findings = [] } = {}) {
   const name = slug(skill.name);
   if (!name) throw new Error('The skill has no usable name.');
   const src = path.resolve(checkout, skill.dir);
@@ -122,7 +122,10 @@ function installSkill(checkout, skill, targetRoot, { replace = false, source = {
     fs.mkdirSync(path.dirname(to), { recursive: true });
     fs.copyFileSync(path.join(src, f), to);
   }
-  fs.writeFileSync(path.join(dest, PROVENANCE), JSON.stringify({ ...source, skillDir: skill.dir, installed: new Date().toISOString() }, null, 2));
+  // the scan that warned about this skill (if any) happens once, at fetch/update time, right before a caller
+  // decides to install anyway - without recording it here, that warning is gone for good the moment this
+  // provenance file is written, and there is no way to later see what was accepted.
+  fs.writeFileSync(path.join(dest, PROVENANCE), JSON.stringify({ ...source, skillDir: skill.dir, installed: new Date().toISOString(), findingsAtInstall: findings || [] }, null, 2));
   return { name, dest };
 }
 
@@ -137,7 +140,7 @@ function listInstalled(targetRoot) {
     const meta = parseSkillMd(fs.readFileSync(md, 'utf8'));
     let prov = null;
     try { prov = JSON.parse(fs.readFileSync(path.join(targetRoot, e.name, PROVENANCE), 'utf8')); } catch { /* hand-made skill */ }
-    out.push({ name: e.name, description: meta.description, source: prov ? prov.label || prov.url : null, provenance: prov });
+    out.push({ name: e.name, description: meta.description, source: prov ? prov.label || prov.url : null, provenance: prov, findingsAtInstall: (prov && prov.findingsAtInstall) || [] });
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
